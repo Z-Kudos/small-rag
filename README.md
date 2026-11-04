@@ -1,6 +1,6 @@
 # rag-mcp-server
 
-基于 Spring AI 的 RAG 知识库 MCP 服务器：通过 MCP（Streamable HTTP）向其他 Agent 暴露 `rag_query` 与 `rag_ingest` 两个工具。
+基于 Spring AI 的**纯文本** RAG 知识库 MCP 服务器：通过 MCP（Streamable HTTP）暴露 `rag_ingest`、`rag_search`、`rag_query` 三个工具，向量库使用 **Qdrant**。
 
 ## 版本矩阵
 
@@ -10,35 +10,63 @@
 | Spring Boot | 4.2.0-RC1 | 4.2.0 GA 尚未发布（截至 2026-11-04） |
 | Spring Cloud | 2026.0.0-RC1 | 2026.0.0 GA 尚未发布，与 Boot 4.2.0-RC1 对应 |
 | Spring AI | 2.0.2 | Maven Central 稳定版 |
+| Qdrant | 1.x | gRPC 端口 6334 |
 | MCP 传输 | Streamable HTTP | `spring.ai.mcp.server.protocol=STREAMABLE` |
 
-> 原始需求中的 `spring-boot-starter-parent:4.2.0` 与 `spring-cloud-dependencies:2026.0.0` 在 Maven 仓库中尚不存在，因此使用对应的 RC1；两个版本均从
-> `https://repo.spring.io/milestone` 解析，已在 `pom.xml` 中配置。
+> 原始需求中的 `spring-boot-starter-parent:4.2.0` 与 `spring-cloud-dependencies:2026.0.0` 在 Maven 仓库中尚不存在，因此使用对应的 RC1；两者均从 `https://repo.spring.io/milestone` 解析，已在 `pom.xml` 配置。
+
+## 前置依赖
+
+- JDK 25、Maven 3.9+
+- Qdrant（默认 `localhost:6334`，gRPC）
+- OpenAI 兼容的 Embedding + Chat 服务（官方 OpenAI、Ollama、vLLM、DashScope 等）
+
+启动 Qdrant：
+
+```bash
+podman run -d --name rag-qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant
+# 或 docker run -d --name rag-qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant
+```
+
+若 Qdrant 启用了鉴权，设置 `QDRANT_API_KEY`。
 
 ## 构建与启动
 
 ```bash
-# 构建（跳过测试）
 mvn clean package -DskipTests
 
-# 启动
+export OPENAI_API_KEY=sk-...          # 或任意 OpenAI 兼容服务的 key
+export OPENAI_BASE_URL=https://api.openai.com   # 可换成 http://localhost:11434/v1 等
 mvn spring-boot:run
 ```
 
 默认端口 `8080`，MCP 端点为 `http://localhost:8080/mcp`。
 
-配置真实的模型密钥后，检索与生成才会真正调用模型：
+未配置真实密钥时服务仍可启动；空知识库查询会短路，不会调用 Embedding 或 Chat 模型。
 
-```bash
-export OPENAI_API_KEY=sk-...
-export OPENAI_CHAT_MODEL=gpt-4o-mini            # 可选
-export OPENAI_EMBEDDING_MODEL=text-embedding-3-small  # 可选
-mvn spring-boot:run
-```
+## 配置
 
-未配置密钥时服务仍可启动；此时对空知识库调用 `rag_query` 会返回“未检索到相关内容”，不会抛出异常。
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `QDRANT_HOST` | `localhost` | Qdrant 地址 |
+| `QDRANT_PORT` | `6334` | gRPC 端口（不是 6333） |
+| `QDRANT_API_KEY` | 空 | Qdrant API Key |
+| `QDRANT_COLLECTION` | `rag_mcp_text` | 集合名，不存在时启动自动创建 |
+| `QDRANT_DIMENSION` | `1536` | 必须与 Embedding 模型输出维度一致 |
+| `OPENAI_API_KEY` | `demo-key` | Embedding / Chat 密钥 |
+| `OPENAI_BASE_URL` | `https://api.openai.com` | OpenAI 兼容端点 |
+| `OPENAI_CHAT_MODEL` | `gpt-4o-mini` | 对话模型 |
+| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | 嵌入模型 |
 
-## MCP 使用
+⚠️ 切换 Embedding 模型后必须同步修改 `QDRANT_DIMENSION` 并重建集合；启动期会校验已存在集合的维度，不一致直接 fail-fast。
+
+## MCP 工具
+
+| 工具 | 用途 |
+|---|---|
+| `rag_ingest(text, metadata)` | 纯文本按 800/100 分块写入 Qdrant，返回 `documentId`、`chunkCount` |
+| `rag_search(query, topK)` | 仅检索，返回命中分块、相似度、来源元数据 |
+| `rag_query(query, topK)` | 检索 + 生成，返回基于知识库的回答 |
 
 ### MCP Inspector
 
@@ -46,11 +74,11 @@ mvn spring-boot:run
 npx @modelcontextprotocol/inspector
 ```
 
-在界面中选择 **Streamable HTTP**，URL 填 `http://localhost:8080/mcp`，连接后即可看到 `rag_query`、`rag_ingest`。
+选择 **Streamable HTTP**，URL 填 `http://localhost:8080/mcp`。
 
 ### curl 调用
 
-先初始化并拿到 `Mcp-Session-Id`（响应头）：
+初始化并拿到 `Mcp-Session-Id`：
 
 ```bash
 curl -i -s http://localhost:8080/mcp \
@@ -64,21 +92,21 @@ curl -i -s http://localhost:8080/mcp \
 ```bash
 SESSION=<上一步响应头中的值>
 
-# 列出工具
-curl -s http://localhost:8080/mcp \
-  -H "Mcp-Session-Id: $SESSION" \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-
 # 入库
 curl -s http://localhost:8080/mcp \
   -H "Mcp-Session-Id: $SESSION" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rag_ingest","arguments":{"text":"Spring AI 提供 MCP Server 与 RAG 能力。","metadata":{"source":"demo"}}}}'
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rag_ingest","arguments":{"text":"Spring AI 提供 MCP Server 与 RAG 能力。","metadata":{"source":"demo"}}}}'
 
-# 查询
+# 检索
+curl -s http://localhost:8080/mcp \
+  -H "Mcp-Session-Id: $SESSION" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rag_search","arguments":{"query":"Spring AI 提供什么能力？","topK":3}}}'
+
+# 问答
 curl -s http://localhost:8080/mcp \
   -H "Mcp-Session-Id: $SESSION" \
   -H 'Content-Type: application/json' \
@@ -86,41 +114,24 @@ curl -s http://localhost:8080/mcp \
   -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"rag_query","arguments":{"query":"Spring AI 提供什么能力？","topK":3}}}'
 ```
 
-> 入库与检索会调用 Embedding 模型，需要有效的 `OPENAI_API_KEY`。
+## RAG 设计
+
+- **分块**：800 字符 / 100 字符重叠（`rag.chunk-size`、`rag.chunk-overlap`），与 whale 默认策略一致。
+- **相似度阈值**：`rag.min-score=0.35`，低于阈值的片段直接丢弃。
+- **上下文预算**：单片段最多 1200 字符，总预算 12000 字符，超出按相似度优先截断。
+- **空库短路**：检索前用 Qdrant `count` 判断是否为空，避免无意义的 Embedding / LLM 调用。
+- **集合初始化**：Qdrant 不可用时只告警、不阻断启动（fail-soft）；集合已存在但维度不一致时 fail-fast。
+- **错误收敛**：MCP 工具把运行期异常收敛为 `{"error": "..."}` JSON，不向客户端抛协议层异常。
 
 ## 架构
 
 ```
-mcp/       RagMcpTools：@McpTool 暴露 rag_query / rag_ingest
-rag/       RagService：检索 -> 拼装 Prompt -> ChatClient 生成
-store/     InMemoryVectorStore：默认进程内 VectorStore 实现
-config/    VectorStore / ChatClient / MCP Server / RagProperties 配置
+mcp/       RagMcpTools：rag_ingest / rag_search / rag_query
+rag/       RagService（检索→增强→生成）、TextChunker、KnowledgeBaseProbe
+config/    QdrantConfig、ChatClientConfig、McpServerConfig、RagProperties、QdrantProperties
 ```
 
-- `VectorStore` 与 `EmbeddingModel` 均按 Spring AI 接口注入，可替换实现。
-- 默认使用进程内向量存储，保证 `mvn spring-boot:run` 无需 Redis / Milvus。
-
-### 切换到 Redis 向量存储
-
-1. 删除 `application.yml` 中的 `spring.autoconfigure.exclude`（当前排除了 `RedisVectorStoreAutoConfiguration`）。
-2. 设置 `rag.vector-store=redis`。
-3. 配置连接：
-
-```yaml
-spring:
-  data:
-    redis:
-      host: localhost
-      port: 6379
-  ai:
-    vectorstore:
-      redis:
-        index: rag-index
-        prefix: "rag:"
-        initialize-schema: true
-```
-
-Redis 需启用 RediSearch 模块（Redis Stack 或 Redis 8+）。
+`VectorStore` 与 `EmbeddingModel` 均按 Spring AI 接口注入。
 
 ## 测试
 
@@ -128,7 +139,10 @@ Redis 需启用 RediSearch 模块（Redis Stack 或 Redis 8+）。
 mvn test
 ```
 
+单测不依赖 Qdrant / 模型密钥；端到端验证需先启动 Qdrant 并配置 Embedding / Chat 服务。
+
 ## 与原始需求的差异
 
 - `spring-ai-starter-model-embedding` 在 Spring AI 2.0.2 中不存在；Embedding 由具体模型 starter 提供，这里使用 `spring-ai-starter-model-openai`（同时提供 ChatModel）。
 - 原始需求锁定 Boot `4.2.0` / Cloud `2026.0.0`，但二者 GA 尚未发布，按规范回退到 RC1 并使用 Spring Milestone 仓库。
+- 向量库按最新要求改为 Qdrant，仅保留纯文本 RAG（不含 Tika / OCR / 图谱 / 混合检索）。

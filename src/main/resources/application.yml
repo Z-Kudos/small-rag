@@ -6,7 +6,7 @@ spring:
     name: rag-mcp-server
   ai:
     openai:
-      # 未配置真实密钥时服务仍可启动；空知识库检索不会调用模型。
+      # 未配置真实密钥时服务仍可启动；空知识库查询会短路，不会调用模型。
       api-key: ${OPENAI_API_KEY:demo-key}
       base-url: ${OPENAI_BASE_URL:https://api.openai.com}
       chat:
@@ -22,18 +22,30 @@ spring:
         version: 1.0.0
         protocol: STREAMABLE
         instructions: |
-          基于知识库的 RAG 服务。
-          使用 rag_ingest 将文本写入知识库，使用 rag_query 进行检索增强问答。
+          基于纯文本知识库的 RAG 服务。
+          使用 rag_ingest 将文本写入知识库，使用 rag_search 查看命中分块，
+          使用 rag_query 进行检索增强问答。
           知识库为空时 rag_query 会返回“未检索到相关内容”。
-        streamable-http:
-          mcp-endpoint: /mcp
-  # 默认使用进程内向量存储，关闭 Redis 自动配置以便无依赖启动。
-  # 切换 Redis 时删除下面的 exclude，并设置 rag.vector-store=redis。
-  autoconfigure:
-    exclude:
-      - org.springframework.ai.vectorstore.redis.autoconfigure.RedisVectorStoreAutoConfiguration
 
 rag:
-  vector-store: memory
   default-top-k: 4
   max-top-k: 20
+  # 相似度阈值：低于该值的片段直接丢弃（0~1，Cosine）
+  min-score: 0.35
+  # 纯文本分块：800 字 / 100 字重叠（与 whale 的默认策略一致）
+  chunk-size: 800
+  chunk-overlap: 100
+  # 拼入 prompt 的上下文预算
+  max-context-chars: 12000
+  max-chunk-chars: 1200
+  empty-context-answer: 未检索到相关内容。请先通过 rag_ingest 向知识库写入文本，或换一个查询词重试。
+  qdrant:
+    host: ${QDRANT_HOST:localhost}
+    # gRPC 端口（REST 是 6333）
+    port: ${QDRANT_PORT:6334}
+    api-key: ${QDRANT_API_KEY:}
+    collection-name: ${QDRANT_COLLECTION:rag_mcp_text}
+    use-tls: ${QDRANT_USE_TLS:false}
+    # 必须与 Embedding 模型输出维度一致；text-embedding-3-small = 1536
+    dimension: ${QDRANT_DIMENSION:1536}
+    init-timeout-ms: 5000

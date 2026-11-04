@@ -1,6 +1,6 @@
 # AGENTS.md — rag-mcp-server
 
-本项目目标：单模块 Spring Boot 服务 `rag-mcp-server`，通过 MCP（Streamable HTTP）向其他 Agent 暴露 RAG 知识库能力。目录可能还是空的——若尚未初始化，第一个任务就是按下述基线 bootstrap，全程中文注释可选、但版本与依赖坐标不可更改。
+本项目：单模块 Spring Boot 服务 `rag-mcp-server`，通过 MCP（Streamable HTTP）暴露**纯文本** RAG 能力；向量库固定使用 **Qdrant**，不引入 Tika/OCR/图谱/混合检索。
 
 ## 版本基线（严格锁定）
 
@@ -17,17 +17,22 @@
 ## 依赖与构建
 
 - parent 用 `spring-boot-starter-parent`；`spring-cloud-dependencies` 与 `spring-ai-bom` 均以 `import` 方式引入。
-- Starter 清单：`spring-ai-starter-mcp-server-webmvc`、`spring-ai-starter-model-openai`（**2.0.2 不存在 `spring-ai-starter-model-embedding`**，Embedding 由具体模型 starter 提供）、`spring-ai-starter-vector-store-redis`（默认在 `application.yml` 排除其自动配置，用内存实现启动）、`spring-boot-starter-web`、`org.projectlombok:lombok`（optional）。
+- Starter 清单：`spring-ai-starter-mcp-server-webmvc`、`spring-ai-starter-model-openai`（**2.0.2 不存在 `spring-ai-starter-model-embedding`**，Embedding 由具体模型 starter 提供）、`spring-ai-starter-vector-store-qdrant`、`spring-boot-starter-web`、`org.projectlombok:lombok`（optional）。
 - **不要**同时引入 STDIO 的 `spring-ai-starter-mcp-server` 和 webmvc starter——自动配置冲突。只用 webmvc + `protocol=STREAMABLE`。
 - **JDK 23+ 默认不自动发现注解处理器**：必须设置 `<maven.compiler.proc>full</maven.compiler.proc>`，否则 Lombok 的 `@Slf4j`/getter 全部“找不到符号”。
 - 验证命令：`mvn clean package -DskipTests`；单测用 `mvn test`。
 
 ## 架构分层
 
-- `mcp` 包：`RagMcpTools` 暴露 `rag_query(query, topK)` 和 `rag_ingest(text, metadata)`。该类**不是** `@Component`，由 `McpServerConfig` 显式注册为 Bean。工具方法必须写 Javadoc——Spring AI 注解扫描把它作为工具描述发给客户端。
-- `rag` 包：`RagService` 体现完整链路：query → `VectorStore` 相似度检索 → 拼入 Prompt → `ChatClient` 生成。Embedding 模型与 VectorStore 一律按接口注入，不硬编码实现。
-- `store` 包：`InMemoryVectorStore` 是默认实现。**空知识库必须在调用 Embedding 之前直接返回空列表**，否则无密钥时 `rag_query` 会抛异常而不是返回友好提示。
-- `config` 包：`VectorStoreConfig`、`ChatClientConfig`、`McpServerConfig`、`RagProperties`。
+- `mcp` 包：`RagMcpTools` 暴露 `rag_query`、`rag_search`、`rag_ingest`。该类**不是** `@Component`，由 `McpServerConfig` 显式注册为 Bean。工具方法必须写 Javadoc——Spring AI 注解扫描把它作为工具描述发给客户端。
+- `rag` 包：`RagService` 体现完整链路：query → `VectorStore` 相似度检索 → 拼入 Prompt → `ChatClient` 生成；`TextChunker` 负责 800/100 定长滑窗分块；`KnowledgeBaseProbe` 负责空库短路。
+- `config` 包：`QdrantConfig`（QdrantClient / QdrantVectorStore / 集合初始化 / 探活）、`ChatClientConfig`、`McpServerConfig`、`RagProperties`、`QdrantProperties`。
+- **Qdrant 关键约束**：
+  - gRPC 端口是 `6334`（REST 才是 6333）。
+  - `QdrantVectorStore` 要求 `Document` 的 id 是 **UUID**（内部 `UUID.fromString`）；不要把业务 id 设为 Document id，业务 id 放 metadata 的 `doc_id`。
+  - `QdrantVectorStore.doSimilaritySearch` 会**先调用 Embedding 再查库**；空库必须先用 `KnowledgeBaseProbe`（Qdrant `count`）短路，否则无模型密钥时 `rag_query` 会抛异常而不是返回友好提示。
+  - 集合初始化 fail-soft（Qdrant 不可用只告警、不阻断启动）；集合已存在但维度与 `rag.qdrant.dimension` 不一致时 fail-fast。
+  - `rag.qdrant.dimension` 必须与 Embedding 模型输出维度一致（text-embedding-3-small = 1536）。
 - `McpSyncServerCustomizer` 是单例扩展点且已被 WebMVC 传输的自动配置占用；**不要再定义自己的 customizer**，否则启动报 “required a single bean, but 2 were found”。instructions 等配置走 `spring.ai.mcp.server.*`。
 - `application.yml` 必须：`spring.ai.mcp.server.protocol=STREAMABLE`、`name=rag-mcp-server`、`version=1.0.0`。MCP 端点默认 `/mcp`。
 
@@ -46,7 +51,8 @@
 
 ## 验收标准
 
-1. `mvn clean package -DskipTests` 成功。
-2. 启动后 `/mcp` 可用，MCP Inspector 能列出 `rag_query`。
-3. 空知识库下 `rag_query` 返回"未检索到相关内容"类提示，而不是异常堆栈。
-4. README 步骤可复现，`git log` 至少一条 Conventional Commits。
+1. `mvn clean package -DskipTests` 成功；`mvn test` 无外部依赖可跑（Mockito 覆盖空库短路/分块）。
+2. 启动后 `/mcp` 可用，MCP Inspector 能列出 `rag_query`、`rag_search`、`rag_ingest`。
+3. 空知识库下 `rag_query` 返回"未检索到相关内容"类提示，而不是异常堆栈（依赖 Qdrant count 短路）。
+4. 端到端（入库→检索→生成）需要 Qdrant + OpenAI 兼容的 Embedding/Chat 服务。
+5. README 步骤可复现，`git log` 至少一条 Conventional Commits。

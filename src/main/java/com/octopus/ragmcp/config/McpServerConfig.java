@@ -4,6 +4,7 @@ import com.octopus.ragmcp.mcp.RagMcpTools;
 import com.octopus.ragmcp.rag.RagService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * MCP Server 显式配置：集中注册暴露给 Agent 的工具。
@@ -17,7 +18,7 @@ import org.springframework.context.annotation.Configuration;
 public class McpServerConfig {
 
     @Bean
-    public RagMcpTools ragMcpTools(RagService ragService) {
-        return new RagMcpTools(ragService);
+    public RagMcpTools ragMcpTools(RagService ragService, ObjectMapper objectMapper) {
+        return new RagMcpTools(ragService, objectMapper);
     }
 }
