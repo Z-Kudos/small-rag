@@ -25,8 +25,10 @@
 ## 架构分层
 
 - `mcp` 包：`RagMcpTools` 暴露 `rag_query`、`rag_search`、`rag_ingest`。该类**不是** `@Component`，由 `McpServerConfig` 显式注册为 Bean。工具方法必须写 Javadoc——Spring AI 注解扫描把它作为工具描述发给客户端。
-- `rag` 包：`RagService` 体现完整链路：query → `VectorStore` 相似度检索 → 拼入 Prompt → `ChatClient` 生成；`TextChunker` 负责 800/100 定长滑窗分块；`KnowledgeBaseProbe` 负责空库短路。
-- `config` 包：`QdrantConfig`（QdrantClient / QdrantVectorStore / 集合初始化 / 探活）、`ChatClientConfig`、`McpServerConfig`、`RagProperties`、`QdrantProperties`。
+- `rag` 包：`RagService` 只做“分块入库 + 向量检索 + 上下文拼装”，**不调用 Chat/生成模型**；`TextChunker` 负责 800/100 定长滑窗分块；`KnowledgeBaseProbe` 负责空库短路。
+- `config` 包：`QdrantConfig`（QdrantClient / QdrantVectorStore / 集合初始化 / 探活）、`McpServerConfig`、`RagProperties`、`QdrantProperties`。
+- **只使用向量模型**：`spring.ai.model.chat=none`；不要新增 `ChatClient` / `ChatModel` 依赖或 Bean。`rag_query` 返回增强上下文，生成由调用方 Agent 完成。
+- **Embedding 通过环境变量配置**：`EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`（分别回退 `OPENAI_*`）。新增配置时保持这一入口。
 - **Qdrant 关键约束**：
   - gRPC 端口是 `6334`（REST 才是 6333）。
   - `QdrantVectorStore` 要求 `Document` 的 id 是 **UUID**（内部 `UUID.fromString`）；不要把业务 id 设为 Document id，业务 id 放 metadata 的 `doc_id`。
@@ -54,5 +56,5 @@
 1. `mvn clean package -DskipTests` 成功；`mvn test` 无外部依赖可跑（Mockito 覆盖空库短路/分块）。
 2. 启动后 `/mcp` 可用，MCP Inspector 能列出 `rag_query`、`rag_search`、`rag_ingest`。
 3. 空知识库下 `rag_query` 返回"未检索到相关内容"类提示，而不是异常堆栈（依赖 Qdrant count 短路）。
-4. 端到端（入库→检索→生成）需要 Qdrant + OpenAI 兼容的 Embedding/Chat 服务。
+4. 端到端（入库→检索）需要 Qdrant + OpenAI 兼容的 Embedding 服务；不需要 Chat/生成模型。
 5. README 步骤可复现，`git log` 至少一条 Conventional Commits。

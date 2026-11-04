@@ -16,6 +16,9 @@ import java.util.Map;
 /**
  * 向 MCP 客户端暴露的纯文本 RAG 工具。
  *
+ * <p>只依赖向量（Embedding）模型，不调用 Chat / 生成模型；{@code rag_query} 返回
+ * 检索增强上下文，由调用方 Agent 自行生成回答。
+ *
  * <p>方法上的 Javadoc 与 {@code @McpTool} 描述会作为工具说明提供给 Agent。
  * 所有运行期故障都收敛为 {@code {"error": "..."}} JSON，避免客户端收到协议层异常。
  */
@@ -27,16 +30,16 @@ public class RagMcpTools {
     private final ObjectMapper objectMapper;
 
     /**
-     * 基于知识库检索并生成回答。
+     * 检索知识库并返回增强上下文（不调用生成模型）。
      *
      * @param query 自然语言查询
-     * @param topK  参与生成的参考片段数量，缺省使用服务端默认值
-     * @return 基于知识库的增强回答；知识库为空时返回“未检索到相关内容”
+     * @param topK  返回的参考片段数量，缺省使用服务端默认值
+     * @return 带编号、来源与相似度的上下文；知识库为空时返回“未检索到相关内容”
      */
-    @McpTool(name = "rag_query", description = "基于知识库检索并生成回答；知识库为空时返回未检索到相关内容")
+    @McpTool(name = "rag_query", description = "检索知识库并返回带来源的增强上下文；不调用生成模型，空库返回未检索到相关内容")
     public String ragQuery(
             @McpToolParam(description = "自然语言查询", required = true) String query,
-            @McpToolParam(description = "参与生成的参考片段数量，缺省为 4", required = false) Integer topK) {
+            @McpToolParam(description = "返回的参考片段数量，缺省为 4", required = false) Integer topK) {
         log.debug("MCP rag_query 调用，query={}, topK={}", query, topK);
         return ragService.query(query, topK);
     }

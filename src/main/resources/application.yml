@@ -5,26 +5,26 @@ spring:
   application:
     name: rag-mcp-server
   ai:
+    # 仅使用向量（Embedding）模型，不装配 Chat / 生成模型
+    model:
+      chat: none
+      embedding: openai
     openai:
-      # 未配置真实密钥时服务仍可启动；空知识库查询会短路，不会调用模型。
-      api-key: ${OPENAI_API_KEY:demo-key}
-      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
-      chat:
-        options:
-          model: ${OPENAI_CHAT_MODEL:gpt-4o-mini}
-          temperature: 0.2
+      # Embedding 服务：支持通过环境变量切换模型 / 端点 / 密钥
+      api-key: ${EMBEDDING_API_KEY:${OPENAI_API_KEY:demo-key}}
+      base-url: ${EMBEDDING_BASE_URL:${OPENAI_BASE_URL:https://api.openai.com}}
       embedding:
         options:
-          model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
+          model: ${EMBEDDING_MODEL:${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}}
     mcp:
       server:
         name: rag-mcp-server
         version: 1.0.0
         protocol: STREAMABLE
         instructions: |
-          基于纯文本知识库的 RAG 服务。
+          基于纯文本知识库的 RAG 检索服务（不调用生成模型）。
           使用 rag_ingest 将文本写入知识库，使用 rag_search 查看命中分块，
-          使用 rag_query 进行检索增强问答。
+          使用 rag_query 获取带来源与相似度的增强上下文。
           知识库为空时 rag_query 会返回“未检索到相关内容”。
 
 rag:
@@ -35,7 +35,7 @@ rag:
   # 纯文本分块：800 字 / 100 字重叠（与 whale 的默认策略一致）
   chunk-size: 800
   chunk-overlap: 100
-  # 拼入 prompt 的上下文预算
+  # 返回上下文预算
   max-context-chars: 12000
   max-chunk-chars: 1200
   empty-context-answer: 未检索到相关内容。请先通过 rag_ingest 向知识库写入文本，或换一个查询词重试。
@@ -47,5 +47,5 @@ rag:
     collection-name: ${QDRANT_COLLECTION:rag_mcp_text}
     use-tls: ${QDRANT_USE_TLS:false}
     # 必须与 Embedding 模型输出维度一致；text-embedding-3-small = 1536
-    dimension: ${QDRANT_DIMENSION:1536}
+    dimension: ${EMBEDDING_DIMENSION:${QDRANT_DIMENSION:1536}}
     init-timeout-ms: 5000

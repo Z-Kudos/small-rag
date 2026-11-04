@@ -3,7 +3,6 @@ package com.octopus.ragmcp.rag;
 import com.octopus.ragmcp.config.RagProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -13,51 +12,37 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
 /**
- * RAG 核心服务：检索（Qdrant / VectorStore）→ 增强（拼装 Prompt）→ 生成（ChatClient）。
+ * RAG 检索服务：分块入库 + 向量检索 + 上下文拼装。
  *
- * <p>设计参考 whale 的 RagUtil：分块入库、相似度过滤、上下文预算、空上下文短路。
- * 只处理纯文本，不涉及 Tika / OCR / 图谱。
+ * <p>本项目只使用向量（Embedding）模型，不依赖 Chat / 生成模型。
+ * {@code rag_query} 返回的是检索增强后的上下文，由调用方 Agent 自行生成回答。
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class RagService {
 
-    private static final String SYSTEM_PROMPT = """
-            你是一个严谨的知识库问答助手。只能依据用户消息中的“参考资料”回答问题。
-            如果参考资料不足以回答，请明确说明“知识库中没有足够信息”，禁止编造。
-            使用中文回答，并尽量标注参考片段序号。
-            """;
-
-    private static final String USER_TEMPLATE = """
-            参考资料：
-            {context}
-
-            问题：{question}
-            """;
-
     private final VectorStore vectorStore;
-    private final ChatClient chatClient;
     private final RagProperties properties;
     private final KnowledgeBaseProbe knowledgeBaseProbe;
 
     /**
-     * 检索知识库并生成增强回答。
+     * 检索知识库并返回增强上下文（不调用生成模型）。
      *
      * @param query 自然语言查询
      * @param topK  检索片段数量，null 或非正数时使用默认值
-     * @return 基于知识库的回答；知识库为空时返回固定提示，不调用模型
+     * @return 带编号、来源与相似度的上下文；空知识库/无命中时返回固定提示
      */
     public String query(String query, Integer topK) {
         if (query == null || query.isBlank()) {
             return "查询内容不能为空。";
         }
 
-        // 空知识库/无命中都应短路，避免为注定无结果的检索调用 Embedding 模型
         List<Document> documents;
         try {
             documents = search(query, topK);
@@ -70,24 +55,7 @@ public class RagService {
             log.debug("知识库未命中，query={}", query);
             return properties.getEmptyContextAnswer();
         }
-
-        String context = buildContext(documents);
-        try {
-            String answer = chatClient.prompt()
-                    .system(SYSTEM_PROMPT)
-                    .user(user -> user.text(USER_TEMPLATE)
-                            .param("context", context)
-                            .param("question", query))
-                    .call()
-                    .content();
-            if (answer == null || answer.isBlank()) {
-                return "模型未返回有效回答，请稍后重试。";
-            }
-            return answer;
-        } catch (Exception e) {
-            log.warn("回答生成失败: query={}, 原因={}", query, e.toString());
-            return "回答生成失败，请确认 Chat 模型配置可用：" + rootMessage(e);
-        }
+        return buildContext(documents);
     }
 
     /**
@@ -101,6 +69,7 @@ public class RagService {
         if (query == null || query.isBlank()) {
             return List.of();
         }
+        // QdrantVectorStore 会先调用 Embedding 再查库；空库先短路，避免无意义的模型调用
         if (knowledgeBaseProbe.isEmpty()) {
             return List.of();
         }
@@ -162,7 +131,16 @@ public class RagService {
             if (context.length() + text.length() > maxContextChars) {
                 break;
             }
-            context.append('[').append(index++).append("] ").append(text).append('\n');
+
+            context.append('[').append(index++).append(']');
+            Object source = document.getMetadata().get("source");
+            if (source != null && !String.valueOf(source).isBlank()) {
+                context.append(" source=").append(source);
+            }
+            if (document.getScore() != null) {
+                context.append(String.format(Locale.ROOT, " score=%.3f", document.getScore()));
+            }
+            context.append(' ').append(text).append('\n');
         }
         return context.toString();
     }
