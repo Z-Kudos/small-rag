@@ -29,6 +29,8 @@
 - `config` 包：`QdrantConfig`（QdrantClient / QdrantVectorStore / 集合初始化 / 探活）、`McpServerConfig`、`RagProperties`、`QdrantProperties`。
 - **只使用向量模型**：`spring.ai.model.chat=none`；不要新增 `ChatClient` / `ChatModel` 依赖或 Bean。`rag_query` 返回增强上下文，生成由调用方 Agent 完成。
 - **Embedding 通过环境变量配置**：`EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`（分别回退 `OPENAI_*`）。新增配置时保持这一入口。
+- **base-url 必须含 `/v1`**：Spring AI 2.x 使用官方 OpenAI SDK，请求路径是 `/embeddings`；默认 `https://api.openai.com/v1`，Ollama 用 `http://localhost:11434/v1`。
+- 当前 starter 只支持 OpenAI 兼容的 HTTP Embedding 服务；**不支持 JVM 内 ONNX/transformers 本地模型**（需要另加 `spring-ai-starter-model-transformers`）。
 - **Qdrant 关键约束**：
   - gRPC 端口是 `6334`（REST 才是 6333）。
   - `QdrantVectorStore` 要求 `Document` 的 id 是 **UUID**（内部 `UUID.fromString`）；不要把业务 id 设为 Document id，业务 id 放 metadata 的 `doc_id`。

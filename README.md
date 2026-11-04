@@ -39,7 +39,7 @@ mvn clean package -DskipTests
 
 # 向量模型全部通过环境变量配置
 export EMBEDDING_API_KEY=sk-...
-export EMBEDDING_BASE_URL=https://api.openai.com   # 可换成 http://localhost:11434/v1 等
+export EMBEDDING_BASE_URL=https://api.openai.com/v1   # 可换成 http://localhost:11434/v1 等（必须含 /v1）
 export EMBEDDING_MODEL=text-embedding-3-small
 export EMBEDDING_DIMENSION=1536
 
@@ -53,7 +53,7 @@ mvn spring-boot:run
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `EMBEDDING_API_KEY` | 回退 `OPENAI_API_KEY`，再回退 `demo-key` | Embedding 服务密钥 |
-| `EMBEDDING_BASE_URL` | 回退 `OPENAI_BASE_URL`，再回退官方地址 | OpenAI 兼容端点 |
+| `EMBEDDING_BASE_URL` | 回退 `OPENAI_BASE_URL`，再回退 `https://api.openai.com/v1` | OpenAI 兼容端点（**必须含 `/v1`**） |
 | `EMBEDDING_MODEL` | 回退 `OPENAI_EMBEDDING_MODEL`，再回退 `text-embedding-3-small` | 向量模型名 |
 | `EMBEDDING_DIMENSION` | 回退 `QDRANT_DIMENSION`，再回退 `1536` | 向量维度，必须与模型一致 |
 | `QDRANT_HOST` | `localhost` | Qdrant 地址 |
@@ -63,6 +63,27 @@ mvn spring-boot:run
 | `QDRANT_USE_TLS` | `false` | Qdrant 是否启用 TLS |
 
 ⚠️ 切换 Embedding 模型后必须同步修改 `EMBEDDING_DIMENSION` 并重建集合；启动期会校验已存在集合的维度，不一致直接 fail-fast。
+
+### 本地向量模型
+
+当前实现使用 `spring-ai-starter-model-openai`，只要求目标是一个 **OpenAI 兼容的 HTTP 端点**，因此：
+
+- ✅ **支持**本地部署的 OpenAI 兼容服务：Ollama、vLLM、LM Studio、Xinference、LocalAI 等。
+- ❌ **不支持**在 JVM 进程内直接加载 ONNX / transformers 模型（那需要改用 `spring-ai-starter-model-transformers` 或 langchain4j 本地模型）。
+
+Ollama 示例：
+
+```bash
+ollama pull bge-m3
+
+export EMBEDDING_BASE_URL=http://localhost:11434/v1
+export EMBEDDING_API_KEY=ollama          # Ollama 不校验，但客户端要求非空
+export EMBEDDING_MODEL=bge-m3
+export EMBEDDING_DIMENSION=1024          # bge-m3 = 1024
+export QDRANT_COLLECTION=rag_mcp_text_bge_m3
+```
+
+常见本地模型维度：`nomic-embed-text` = 768，`bge-m3` = 1024，`qwen3-embedding:0.6b` = 1024。换模型时建议同时换 `QDRANT_COLLECTION`，避免与旧维度集合冲突。
 
 ## MCP 工具
 
