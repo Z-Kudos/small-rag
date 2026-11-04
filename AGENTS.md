@@ -1,0 +1,52 @@
+# AGENTS.md — rag-mcp-server
+
+本项目目标：单模块 Spring Boot 服务 `rag-mcp-server`，通过 MCP（Streamable HTTP）向其他 Agent 暴露 RAG 知识库能力。目录可能还是空的——若尚未初始化，第一个任务就是按下述基线 bootstrap，全程中文注释可选、但版本与依赖坐标不可更改。
+
+## 版本基线（严格锁定）
+
+| 组件 | 版本 |
+|---|---|
+| JDK | 25（`maven.compiler.release=25`） |
+| Spring Boot | 4.2.0 |
+| Spring Cloud | 2026.0.0（Paddington） |
+| Spring AI | 2.0.2 |
+
+- **解析现状（2026-11 验证）**：Boot 4.2.0 只有 RC1/RC2，Spring Cloud 2026.0.0 只有 RC1——GA 尚未发布。实际可解析组合：`4.2.0-RC1` + `2026.0.0-RC1`，且必须在 pom 或 settings.xml 加 `https://repo.spring.io/milestone`，并在 README 注明用了 RC。禁止降级到 Boot 3.x / Cloud 2025.x 来"修复"解析失败。
+- Spring AI 2.0.2 是 Maven Central 稳定版，不需要 milestone 仓库。
+
+## 依赖与构建
+
+- parent 用 `spring-boot-starter-parent`；`spring-cloud-dependencies` 与 `spring-ai-bom` 均以 `import` 方式引入。
+- Starter 清单：`spring-ai-starter-mcp-server-webmvc`、`spring-ai-starter-model-openai`（**2.0.2 不存在 `spring-ai-starter-model-embedding`**，Embedding 由具体模型 starter 提供）、`spring-ai-starter-vector-store-redis`（默认在 `application.yml` 排除其自动配置，用内存实现启动）、`spring-boot-starter-web`、`org.projectlombok:lombok`（optional）。
+- **不要**同时引入 STDIO 的 `spring-ai-starter-mcp-server` 和 webmvc starter——自动配置冲突。只用 webmvc + `protocol=STREAMABLE`。
+- **JDK 23+ 默认不自动发现注解处理器**：必须设置 `<maven.compiler.proc>full</maven.compiler.proc>`，否则 Lombok 的 `@Slf4j`/getter 全部“找不到符号”。
+- 验证命令：`mvn clean package -DskipTests`；单测用 `mvn test`。
+
+## 架构分层
+
+- `mcp` 包：`RagMcpTools` 暴露 `rag_query(query, topK)` 和 `rag_ingest(text, metadata)`。该类**不是** `@Component`，由 `McpServerConfig` 显式注册为 Bean。工具方法必须写 Javadoc——Spring AI 注解扫描把它作为工具描述发给客户端。
+- `rag` 包：`RagService` 体现完整链路：query → `VectorStore` 相似度检索 → 拼入 Prompt → `ChatClient` 生成。Embedding 模型与 VectorStore 一律按接口注入，不硬编码实现。
+- `store` 包：`InMemoryVectorStore` 是默认实现。**空知识库必须在调用 Embedding 之前直接返回空列表**，否则无密钥时 `rag_query` 会抛异常而不是返回友好提示。
+- `config` 包：`VectorStoreConfig`、`ChatClientConfig`、`McpServerConfig`、`RagProperties`。
+- `McpSyncServerCustomizer` 是单例扩展点且已被 WebMVC 传输的自动配置占用；**不要再定义自己的 customizer**，否则启动报 “required a single bean, but 2 were found”。instructions 等配置走 `spring.ai.mcp.server.*`。
+- `application.yml` 必须：`spring.ai.mcp.server.protocol=STREAMABLE`、`name=rag-mcp-server`、`version=1.0.0`。MCP 端点默认 `/mcp`。
+
+## 代码约束
+
+- Lombok：DTO 用 `@Data`/`@Builder`/`@NoArgsConstructor`/`@AllArgsConstructor`，Service 用 `@RequiredArgsConstructor` 构造注入（禁止 `@Autowired` 字段注入），日志用 `@Slf4j`。
+- **Spring Boot 4 已迁移 Jackson 3**：import 一律 `tools.jackson.*`，`com.fasterxml.jackson.*` 编译直接失败。
+- 暂不开启 AOT/Native Image（JDK 25 AOT cache 留待后续）。
+
+## Git 与文档
+
+- `git init` 主分支 `main`；`.gitignore` 至少覆盖 `target/`、`.idea/`、`*.iml`、`.vscode/`、`*.log`、`.env`、`data/`。
+- 提交信息用 Conventional Commits。首次提交固定为：
+  `chore: bootstrap rag-mcp-server with JDK 25 + Spring Cloud 2026.0.0 + Spring AI 2.0.2`
+- `README.md` 必须含：版本矩阵、启动命令（`mvn spring-boot:run`）、`/mcp` 端点说明、入库示例、RC/milestone 回退说明。
+
+## 验收标准
+
+1. `mvn clean package -DskipTests` 成功。
+2. 启动后 `/mcp` 可用，MCP Inspector 能列出 `rag_query`。
+3. 空知识库下 `rag_query` 返回"未检索到相关内容"类提示，而不是异常堆栈。
+4. README 步骤可复现，`git log` 至少一条 Conventional Commits。

@@ -1,0 +1,39 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: rag-mcp-server
+  ai:
+    openai:
+      # 未配置真实密钥时服务仍可启动；空知识库检索不会调用模型。
+      api-key: ${OPENAI_API_KEY:demo-key}
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+      chat:
+        options:
+          model: ${OPENAI_CHAT_MODEL:gpt-4o-mini}
+          temperature: 0.2
+      embedding:
+        options:
+          model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
+    mcp:
+      server:
+        name: rag-mcp-server
+        version: 1.0.0
+        protocol: STREAMABLE
+        instructions: |
+          基于知识库的 RAG 服务。
+          使用 rag_ingest 将文本写入知识库，使用 rag_query 进行检索增强问答。
+          知识库为空时 rag_query 会返回“未检索到相关内容”。
+        streamable-http:
+          mcp-endpoint: /mcp
+  # 默认使用进程内向量存储，关闭 Redis 自动配置以便无依赖启动。
+  # 切换 Redis 时删除下面的 exclude，并设置 rag.vector-store=redis。
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.vectorstore.redis.autoconfigure.RedisVectorStoreAutoConfiguration
+
+rag:
+  vector-store: memory
+  default-top-k: 4
+  max-top-k: 20
