@@ -1,4 +1,4 @@
-package com.octopus.ragmcp.config;
+package com.smallrag.ragmcp.config;
 
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -19,7 +19,7 @@ public class QdrantProperties {
 
     private String apiKey = "";
 
-    private String collectionName = "rag_mcp_text";
+    private String collectionName = "small_rag_text";
 
     private boolean useTls = false;
 

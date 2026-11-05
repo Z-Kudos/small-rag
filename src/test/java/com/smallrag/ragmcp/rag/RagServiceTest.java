@@ -1,6 +1,6 @@
-package com.octopus.ragmcp.rag;
+package com.smallrag.ragmcp.rag;
 
-import com.octopus.ragmcp.config.RagProperties;
+import com.smallrag.ragmcp.config.RagProperties;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.document.Document;

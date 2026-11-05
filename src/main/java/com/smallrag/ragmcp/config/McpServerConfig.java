@@ -1,7 +1,7 @@
-package com.octopus.ragmcp.config;
+package com.smallrag.ragmcp.config;
 
-import com.octopus.ragmcp.mcp.RagMcpTools;
-import com.octopus.ragmcp.rag.RagService;
+import com.smallrag.ragmcp.mcp.RagMcpTools;
+import com.smallrag.ragmcp.rag.RagService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.ObjectMapper;

@@ -1,4 +1,4 @@
-package com.octopus.ragmcp.rag;
+package com.smallrag.ragmcp.rag;
 
 import org.junit.jupiter.api.Test;
 

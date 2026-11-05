@@ -1,4 +1,4 @@
-# rag-mcp-server
+# small-rag
 
 基于 Spring AI 的**纯文本 RAG 检索**服务器：通过 MCP（Streamable HTTP）暴露 `rag_ingest`、`rag_search`、`rag_query`，向量库使用 **Qdrant**。
 
@@ -59,7 +59,7 @@ mvn spring-boot:run
 | `QDRANT_HOST` | `localhost` | Qdrant 地址 |
 | `QDRANT_PORT` | `6334` | gRPC 端口（不是 6333） |
 | `QDRANT_API_KEY` | 空 | Qdrant API Key |
-| `QDRANT_COLLECTION` | `rag_mcp_text` | 集合名，不存在时启动自动创建 |
+| `QDRANT_COLLECTION` | `small_rag_text` | 集合名，不存在时启动自动创建 |
 | `QDRANT_USE_TLS` | `false` | Qdrant 是否启用 TLS |
 
 ⚠️ 切换 Embedding 模型后必须同步修改 `EMBEDDING_DIMENSION` 并重建集合；启动期会校验已存在集合的维度，不一致直接 fail-fast。
@@ -80,7 +80,7 @@ export EMBEDDING_BASE_URL=http://localhost:11434/v1
 export EMBEDDING_API_KEY=ollama          # Ollama 不校验，但客户端要求非空
 export EMBEDDING_MODEL=bge-m3
 export EMBEDDING_DIMENSION=1024          # bge-m3 = 1024
-export QDRANT_COLLECTION=rag_mcp_text_bge_m3
+export QDRANT_COLLECTION=small_rag_text_bge_m3
 ```
 
 常见本地模型维度：`nomic-embed-text` = 768，`bge-m3` = 1024，`qwen3-embedding:0.6b` = 1024。换模型时建议同时换 `QDRANT_COLLECTION`，避免与旧维度集合冲突。

@@ -1,4 +1,4 @@
-package com.octopus.ragmcp.rag;
+package com.smallrag.ragmcp.rag;
 
 import java.util.ArrayList;
 import java.util.List;

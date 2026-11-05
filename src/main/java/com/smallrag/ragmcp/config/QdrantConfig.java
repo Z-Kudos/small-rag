@@ -1,6 +1,6 @@
-package com.octopus.ragmcp.config;
+package com.smallrag.ragmcp.config;
 
-import com.octopus.ragmcp.rag.KnowledgeBaseProbe;
+import com.smallrag.ragmcp.rag.KnowledgeBaseProbe;
 import io.qdrant.client.QdrantClient;
 import io.qdrant.client.QdrantGrpcClient;
 import io.qdrant.client.grpc.Collections.CollectionInfo;

@@ -1,6 +1,6 @@
-# AGENTS.md — rag-mcp-server
+# AGENTS.md — small-rag
 
-本项目：单模块 Spring Boot 服务 `rag-mcp-server`，通过 MCP（Streamable HTTP）暴露**纯文本** RAG 能力；向量库固定使用 **Qdrant**，不引入 Tika/OCR/图谱/混合检索。
+本项目：单模块 Spring Boot 服务 `small-rag`，通过 MCP（Streamable HTTP）暴露**纯文本** RAG 能力；向量库固定使用 **Qdrant**，不引入 Tika/OCR/图谱/混合检索。
 
 ## 版本基线（严格锁定）
 
@@ -38,7 +38,7 @@
   - 集合初始化 fail-soft（Qdrant 不可用只告警、不阻断启动）；集合已存在但维度与 `rag.qdrant.dimension` 不一致时 fail-fast。
   - `rag.qdrant.dimension` 必须与 Embedding 模型输出维度一致（text-embedding-3-small = 1536）。
 - `McpSyncServerCustomizer` 是单例扩展点且已被 WebMVC 传输的自动配置占用；**不要再定义自己的 customizer**，否则启动报 “required a single bean, but 2 were found”。instructions 等配置走 `spring.ai.mcp.server.*`。
-- `application.yml` 必须：`spring.ai.mcp.server.protocol=STREAMABLE`、`name=rag-mcp-server`、`version=1.0.0`。MCP 端点默认 `/mcp`。
+- `application.yml` 必须：`spring.ai.mcp.server.protocol=STREAMABLE`、`name=small-rag`、`version=1.0.0`。MCP 端点默认 `/mcp`。
 
 ## 代码约束
 
@@ -50,7 +50,7 @@
 
 - `git init` 主分支 `main`；`.gitignore` 至少覆盖 `target/`、`.idea/`、`*.iml`、`.vscode/`、`*.log`、`.env`、`data/`。
 - 提交信息用 Conventional Commits。首次提交固定为：
-  `chore: bootstrap rag-mcp-server with JDK 25 + Spring Cloud 2026.0.0 + Spring AI 2.0.2`
+  `chore: bootstrap small-rag with JDK 25 + Spring Cloud 2026.0.0 + Spring AI 2.0.2`
 - `README.md` 必须含：版本矩阵、启动命令（`mvn spring-boot:run`）、`/mcp` 端点说明、入库示例、RC/milestone 回退说明。
 
 ## 验收标准

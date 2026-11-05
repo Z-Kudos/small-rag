@@ -1,12 +1,12 @@
-package com.octopus.ragmcp;
+package com.smallrag.ragmcp;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class RagMcpServerApplication {
+public class SmallRagApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(RagMcpServerApplication.class, args);
+        SpringApplication.run(SmallRagApplication.class, args);
     }
 }

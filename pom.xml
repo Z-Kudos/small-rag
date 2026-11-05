@@ -11,11 +11,11 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.octopus</groupId>
-    <artifactId>rag-mcp-server</artifactId>
+    <groupId>com.smallrag</groupId>
+    <artifactId>small-rag</artifactId>
     <version>1.0.0</version>
-    <name>rag-mcp-server</name>
-    <description>RAG knowledge base exposed as an MCP server</description>
+    <name>small-rag</name>
+    <description>Small pure-text RAG knowledge base exposed as an MCP server</description>
 
     <properties>
         <java.version>25</java.version>

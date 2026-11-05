@@ -1,6 +1,6 @@
-package com.octopus.ragmcp.mcp;
+package com.smallrag.ragmcp.mcp;
 
-import com.octopus.ragmcp.rag.RagService;
+import com.smallrag.ragmcp.rag.RagService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;

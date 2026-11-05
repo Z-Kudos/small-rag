@@ -1,4 +1,4 @@
-package com.octopus.ragmcp.config;
+package com.smallrag.ragmcp.config;
 
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;

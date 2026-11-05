@@ -3,7 +3,7 @@ server:
 
 spring:
   application:
-    name: rag-mcp-server
+    name: small-rag
   ai:
     # 仅使用向量（Embedding）模型，不装配 Chat / 生成模型
     model:
@@ -18,7 +18,7 @@ spring:
           model: ${EMBEDDING_MODEL:${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}}
     mcp:
       server:
-        name: rag-mcp-server
+        name: small-rag
         version: 1.0.0
         protocol: STREAMABLE
         instructions: |
@@ -44,7 +44,7 @@ rag:
     # gRPC 端口（REST 是 6333）
     port: ${QDRANT_PORT:6334}
     api-key: ${QDRANT_API_KEY:}
-    collection-name: ${QDRANT_COLLECTION:rag_mcp_text}
+    collection-name: ${QDRANT_COLLECTION:small_rag_text}
     use-tls: ${QDRANT_USE_TLS:false}
     # 必须与 Embedding 模型输出维度一致；text-embedding-3-small = 1536
     dimension: ${EMBEDDING_DIMENSION:${QDRANT_DIMENSION:1536}}
