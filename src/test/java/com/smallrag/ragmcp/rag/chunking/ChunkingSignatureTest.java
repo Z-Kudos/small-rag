@@ -1,4 +1,4 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.chunking;
 
 import com.smallrag.ragmcp.config.RagProperties;
 import org.junit.jupiter.api.Test;
@@ -63,7 +63,8 @@ class ChunkingSignatureTest {
     @Test
     void changingMarkdownHeadingSeparatorChangesSignature() {
         RagProperties properties = new RagProperties();
-        properties.getChunking().setStrategy(ChunkingStrategy.MARKDOWN);
+        // semantic 混合化后同样受标题分隔符影响
+        properties.getChunking().setStrategy(ChunkingStrategy.SEMANTIC);
         String before = ChunkingSignature.of(properties);
 
         properties.getChunking().getMarkdown().setHeadingSeparator(" / ");

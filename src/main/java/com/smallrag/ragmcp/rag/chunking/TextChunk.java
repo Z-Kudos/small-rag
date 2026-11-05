@@ -1,4 +1,4 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.chunking;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -7,7 +7,7 @@ import java.util.Map;
  * 切分后的文本片段及其附加元数据。
  *
  * @param text     片段正文
- * @param metadata 切分器附加的元数据（如 parent_id、parent_text），可为空
+ * @param metadata 切分器附加的元数据（如 parent_id、heading_path），可为空
  *
  * @author zjk
  */

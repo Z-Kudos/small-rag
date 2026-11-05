@@ -49,17 +49,19 @@ public class RagMcpTools {
     /**
      * 仅做向量检索，返回命中分块及其相似度，供需要自行控制 prompt 的 Agent 使用。
      *
-     * @param query 自然语言查询
-     * @param topK  返回片段数量，缺省使用服务端默认值
+     * @param query  自然语言查询
+     * @param topK   返回片段数量，缺省使用服务端默认值
+     * @param expand Parent-Child 策略下是否展开为去重后的父块结果
      * @return 包含 query、hitCount、hits 的 JSON
      */
-    @McpTool(name = "rag_search", description = "对知识库做语义检索，返回命中分块（含相似度、来源元数据）")
+    @McpTool(name = "rag_search", description = "对知识库做语义检索，返回命中分块（含相似度、来源元数据）；Parent-Child 策略下默认按父块去重返回")
     public String ragSearch(
             @McpToolParam(description = "自然语言查询", required = true) String query,
-            @McpToolParam(description = "返回片段数量，缺省为 4", required = false) Integer topK) {
-        log.debug("MCP rag_search 调用，query={}, topK={}", query, topK);
+            @McpToolParam(description = "返回片段数量，缺省为 4", required = false) Integer topK,
+            @McpToolParam(description = "Parent-Child 策略下是否展开为去重后的父块，缺省 true；传 false 返回原始子块命中", required = false) Boolean expand) {
+        log.debug("MCP rag_search 调用，query={}, topK={}, expand={}", query, topK, expand);
         try {
-            List<Document> documents = ragService.search(query, topK);
+            List<Document> documents = ragService.search(query, topK, !Boolean.FALSE.equals(expand));
             List<Map<String, Object>> hits = new ArrayList<>(documents.size());
             for (Document document : documents) {
                 Map<String, Object> hit = new LinkedHashMap<>();

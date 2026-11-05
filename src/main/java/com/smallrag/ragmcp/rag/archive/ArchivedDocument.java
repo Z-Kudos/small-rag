@@ -1,4 +1,4 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.archive;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;

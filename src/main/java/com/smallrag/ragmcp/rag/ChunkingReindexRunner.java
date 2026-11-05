@@ -1,6 +1,9 @@
 package com.smallrag.ragmcp.rag;
 
 import com.smallrag.ragmcp.config.QdrantProperties;
+import com.smallrag.ragmcp.rag.archive.ArchivedDocument;
+import com.smallrag.ragmcp.rag.archive.DocumentArchive;
+import com.smallrag.ragmcp.rag.chunking.ChunkingSignature;
 import com.smallrag.ragmcp.config.RagProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

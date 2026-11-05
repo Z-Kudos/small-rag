@@ -18,7 +18,7 @@ spring:
     mcp:
       server:
         name: small-rag
-        version: 1.0.0
+        version: 0.0.2
         protocol: STREAMABLE
         instructions: |
           基于纯文本知识库的 RAG 检索服务（不调用生成模型）。
@@ -32,6 +32,8 @@ rag:
   archive-dir: ${SMALL_RAG_ARCHIVE_DIR:./data/documents}
   default-top-k: 4
   max-top-k: 20
+  # MMR 多样性权重 λ（0 < λ < 1 启用，1 = 纯相关排序），默认 0.7
+  mmr-lambda: ${MMR_LAMBDA:0.7}
   # 相似度阈值：低于该值的片段直接丢弃（0~1，Cosine）
   min-score: 0.35
   # 固定/递归/Markdown 切分的目标块大小；语义切分的默认上限也回落到这里
@@ -41,7 +43,7 @@ rag:
   max-context-chars: 12000
   max-chunk-chars: 1200
   empty-context-answer: 未检索到相关内容。请先通过 rag_ingest 向知识库写入文本，或换一个查询词重试。
-  # 切分策略：fixed | recursive | markdown | semantic | parent-child（默认 parent-child）
+  # 切分策略：fixed | recursive | semantic | parent-child（默认 parent-child）
   # 启动时检测切分配置签名，对已归档文档自动重切；未归档历史数据需重新入库
   chunking:
     strategy: ${CHUNK_STRATEGY:parent-child}
@@ -68,8 +70,10 @@ rag:
         - ", "
         - " "
     semantic:
-      # 相邻句子余弦相似度低于该值时断开
+      # 文本块向量与当前块质心的余弦相似度低于该值时断开（breakpoint-percentile > 0 时忽略）
       similarity-threshold: ${SEMANTIC_SIMILARITY_THRESHOLD:0.75}
+      # 断点分位数（0~1）：> 0 时取相邻文本块相似度的该分位数作断点，默认 0 使用绝对阈值
+      breakpoint-percentile: ${SEMANTIC_BREAKPOINT_PERCENTILE:0}
       # 未达到该长度时优先继续合并，避免语义碎块
       min-chunk-chars: ${SEMANTIC_MIN_CHUNK_CHARS:200}
       # <= 0 时回落到 rag.chunk-size
@@ -78,7 +82,8 @@ rag:
     parent-child:
       # 父块用于提供上下文，子块写入向量库并参与检索
       parent-size: ${PARENT_CHUNK_SIZE:2000}
-      parent-overlap: ${PARENT_CHUNK_OVERLAP:200}
+      # 父块重叠默认 0：子块不跨父块边界，父块重叠只会造成内容重复命中
+      parent-overlap: ${PARENT_CHUNK_OVERLAP:0}
       child-size: ${CHILD_CHUNK_SIZE:400}
       child-overlap: ${CHILD_CHUNK_OVERLAP:50}
   qdrant:

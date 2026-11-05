@@ -5,3 +5,4 @@ target/
 *.log
 .env
 data/
+.workbuddy/

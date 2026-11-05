@@ -1,4 +1,4 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.chunking;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -8,7 +8,8 @@ import java.util.List;
  *
  * <p>按分隔符列表的优先级依次尝试：先用最粗的边界（段落），再把仍然超长的片段
  * 交给下一级分隔符（换行、句号、逗号……），最后才按字符数硬切。相比固定长度切分，
- * 它更不容易把一个完整句子或段落从中间截断。
+ * 它更不容易把一个完整句子或段落从中间截断。长度按 {@link TextWeights}
+ * 全宽字符当量计量。
  *
  * @author zjk
  */
@@ -19,7 +20,7 @@ public final class RecursiveTextChunker {
 
     /**
      * @param text       原文
-     * @param size       目标分块大小（字符）
+     * @param size       目标分块大小（全宽字符当量）
      * @param overlap    相邻分块重叠（字符）
      * @param separators 分隔符优先级列表，从粗到细
      * @return 按原文顺序排列的分块；空文本返回空列表
@@ -36,7 +37,7 @@ public final class RecursiveTextChunker {
         }
 
         String normalized = text.strip();
-        if (normalized.length() <= effectiveSize) {
+        if (TextWeights.weight(normalized) <= effectiveSize) {
             return List.of(normalized);
         }
 
@@ -49,7 +50,7 @@ public final class RecursiveTextChunker {
      * 递归拆分：命中分隔符就按它拆，超长片段继续用更细的分隔符拆。
      */
     private static List<String> splitHierarchical(String text, List<String> separators, int size) {
-        if (text.length() <= size) {
+        if (TextWeights.weight(text) <= size) {
             return List.of(text);
         }
 
@@ -67,7 +68,7 @@ public final class RecursiveTextChunker {
             List<String> result = new ArrayList<>();
             List<String> remaining = separators.subList(i + 1, separators.size());
             for (String part : parts) {
-                if (part.length() > size) {
+                if (TextWeights.weight(part) > size) {
                     result.addAll(splitHierarchical(part, remaining, size));
                 } else {
                     result.add(part);
@@ -104,17 +105,20 @@ public final class RecursiveTextChunker {
     private static List<String> merge(List<String> pieces, int size, int overlap) {
         List<String> merged = new ArrayList<>();
         StringBuilder current = new StringBuilder();
+        double currentWeight = 0d;
 
         for (String rawPiece : pieces) {
             String piece = rawPiece == null ? "" : rawPiece;
             if (piece.isBlank()) {
                 continue;
             }
-            if (piece.length() > size) {
+            double pieceWeight = TextWeights.weight(piece);
+            if (pieceWeight > size) {
                 // 理论上 splitHierarchical 已保证不超限，这里兜底避免单块越界
                 if (!current.isEmpty()) {
                     merged.add(current.toString());
                     current = new StringBuilder();
+                    currentWeight = 0d;
                 }
                 merged.addAll(TextChunker.chunk(piece, size, overlap));
                 continue;
@@ -122,11 +126,13 @@ public final class RecursiveTextChunker {
 
             if (current.isEmpty()) {
                 current.append(piece);
+                currentWeight = pieceWeight;
                 continue;
             }
 
-            if (current.length() + piece.length() <= size) {
+            if (currentWeight + pieceWeight <= size) {
                 current.append(piece);
+                currentWeight += pieceWeight;
                 continue;
             }
 
@@ -135,10 +141,11 @@ public final class RecursiveTextChunker {
                     ? current.substring(Math.max(0, current.length() - overlap))
                     : "";
             String next = tail + piece;
-            if (next.length() > size) {
-                next = next.substring(next.length() - size);
+            if (TextWeights.weight(next) > size) {
+                next = next.substring(TextWeights.fitCharsBefore(next, next.length(), size));
             }
             current = new StringBuilder(next);
+            currentWeight = TextWeights.weight(next);
         }
 
         if (!current.isEmpty()) {

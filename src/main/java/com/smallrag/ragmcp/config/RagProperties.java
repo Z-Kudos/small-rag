@@ -1,6 +1,6 @@
 package com.smallrag.ragmcp.config;
 
-import com.smallrag.ragmcp.rag.ChunkingStrategy;
+import com.smallrag.ragmcp.rag.chunking.ChunkingStrategy;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -32,6 +32,13 @@ public class RagProperties {
      * 相似度阈值（0~1，Qdrant Cosine）。低于该值的片段直接丢弃。
      */
     private double minScore = 0.35d;
+
+    /**
+     * MMR（最大边际相关）多样性权重 λ（0 < λ < 1 时启用）：候选按
+     * {@code λ·score − (1−λ)·与已选结果的最大相似度} 迭代选取，在相关性与
+     * 多样性之间折中。1 = 纯相关排序（关闭 MMR）。默认 0.7。
+     */
+    private double mmrLambda = 0.7d;
 
     /**
      * 固定长度/递归切分的目标块大小，同时作为语义切分的默认上限。
@@ -116,9 +123,16 @@ public class RagProperties {
     public static class Semantic {
 
         /**
-         * 相邻句子合并阈值：余弦相似度低于该值时断开。
+         * 文本块向量与当前块质心的合并阈值：余弦相似度低于该值时断开。
          */
         private double similarityThreshold = 0.75d;
+
+        /**
+         * 断点分位数（0~1）。大于 0 时忽略绝对阈值：取节内相邻文本块相似度的
+         * 该分位数作为断点阈值（如 0.2 表示在相似度最低的 20% 边界处断开），
+         * 对语言与模型的分布差异更鲁棒。默认 0，使用绝对阈值。
+         */
+        private double breakpointPercentile = 0d;
 
         /**
          * 目标最小块大小：未达到该长度时，即使相似度偏低也继续合并，避免碎块。
@@ -149,8 +163,11 @@ public class RagProperties {
 
         /**
          * 父块之间的重叠字符数。
+         *
+         * <p>默认 0：子块不会跨父块边界切分，父块重叠只会让相邻父块内容
+         * 重复、边界附近子块被重复嵌入，检索时产生重复命中。
          */
-        private int parentOverlap = 200;
+        private int parentOverlap = 0;
 
         /**
          * 子块大小，实际写入向量库并参与检索。

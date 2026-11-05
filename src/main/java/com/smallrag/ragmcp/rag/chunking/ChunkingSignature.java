@@ -1,4 +1,4 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.chunking;
 
 import com.smallrag.ragmcp.config.RagProperties;
 
@@ -19,7 +19,14 @@ import java.util.List;
  */
 public final class ChunkingSignature {
 
-    private static final String VERSION = "v2";
+    /**
+     * 签名版本与项目版本同步。演进历史：v2→v3（子块前置 heading_path、
+     * 语义切分改为段落感知 + 质心比较）→v4（移除 markdown 独立策略、semantic
+     * 混合化）→v5→0.0.1（长度度量改为全宽字符当量、semantic 新增
+     * breakpoint-percentile）→0.0.2（父块改为独立 point 存储，子块不再携带
+     * parent_text）。版本号变化时旧归档会自动重切。
+     */
+    private static final String VERSION = "v0.0.2";
 
     private ChunkingSignature() {
     }
@@ -67,10 +74,8 @@ public final class ChunkingSignature {
             case SEMANTIC -> value
                     .append("|max=").append(semanticMaxChars(properties))
                     .append("|min=").append(chunking.getSemantic().getMinChunkChars())
-                    .append("|threshold=").append(chunking.getSemantic().getSimilarityThreshold());
-            case MARKDOWN -> value
-                    .append("|size=").append(properties.getChunkSize())
-                    .append("|overlap=").append(properties.getChunkOverlap())
+                    .append("|threshold=").append(chunking.getSemantic().getSimilarityThreshold())
+                    .append("|breakpoint-percentile=").append(chunking.getSemantic().getBreakpointPercentile())
                     .append("|heading-separator=").append(safeHeadingSeparator(chunking));
             case PARENT_CHILD -> value
                     .append("|parent=").append(chunking.getParentChild().getParentSize())

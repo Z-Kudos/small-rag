@@ -1,6 +1,7 @@
 package com.smallrag.ragmcp.config;
 
 import com.smallrag.ragmcp.rag.KnowledgeBaseProbe;
+import com.smallrag.ragmcp.rag.RagService;
 import io.qdrant.client.QdrantClient;
 import io.qdrant.client.QdrantGrpcClient;
 import io.qdrant.client.grpc.Collections.CollectionInfo;
@@ -61,7 +62,7 @@ public class QdrantConfig {
         // 避免 Qdrant 不可用时 Bean 初始化阶段直接抛异常阻断启动。
         return QdrantVectorStore.builder(qdrantClient, embeddingModel)
                 .collectionName(properties.getCollectionName())
-                .contentFieldName("content")
+                .contentFieldName(RagService.CONTENT_FIELD)
                 .initializeSchema(false)
                 .build();
     }

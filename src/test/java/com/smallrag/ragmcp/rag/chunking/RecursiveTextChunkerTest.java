@@ -1,4 +1,4 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.chunking;
 
 import org.junit.jupiter.api.Test;
 
@@ -20,22 +20,22 @@ class RecursiveTextChunkerTest {
         List<String> chunks = RecursiveTextChunker.chunk(text, 18, 3, SEPARATORS);
 
         assertThat(chunks).isNotEmpty();
-        assertThat(chunks).allSatisfy(chunk -> assertThat(chunk.length()).isLessThanOrEqualTo(18));
+        assertThat(chunks).allSatisfy(chunk -> assertThat(TextWeights.weight(chunk)).isLessThanOrEqualTo(18));
         assertThat(String.join("", chunks)).contains("第一段第一句").contains("第三段内容");
     }
 
     @Test
     void fallsBackToHardSplitWhenNoSeparatorMatches() {
-        List<String> chunks = RecursiveTextChunker.chunk("a".repeat(200), 50, 5, List.of("\n\n", "。"));
+        List<String> chunks = RecursiveTextChunker.chunk("a".repeat(400), 50, 5, List.of("\n\n", "。"));
 
         assertThat(chunks).hasSizeGreaterThan(1);
-        assertThat(chunks).allSatisfy(chunk -> assertThat(chunk.length()).isLessThanOrEqualTo(50));
+        assertThat(chunks).allSatisfy(chunk -> assertThat(TextWeights.weight(chunk)).isLessThanOrEqualTo(50));
     }
 
     @Test
     void keepsSpacesWhenSplittingEnglishText() {
         List<String> chunks = RecursiveTextChunker.chunk(
-                "alpha beta gamma delta epsilon zeta eta theta", 20, 5, List.of(" "));
+                "alpha beta gamma delta epsilon zeta eta theta", 5, 5, List.of(" "));
 
         assertThat(chunks).isNotEmpty();
         assertThat(chunks.get(0)).contains("alpha beta");

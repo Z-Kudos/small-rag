@@ -1,4 +1,4 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.archive;
 
 import com.smallrag.ragmcp.config.RagProperties;
 import org.junit.jupiter.api.Test;

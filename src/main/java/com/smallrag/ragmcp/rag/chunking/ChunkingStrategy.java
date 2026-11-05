@@ -1,11 +1,12 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.chunking;
 
 /**
  * 文本切分策略。
  *
  * <p>通过 {@code rag.chunking.strategy} 选择。已归档文档在切换策略并重启后
  * 会自动重切；未归档的历史数据不会，需重新入库。默认策略为
- * {@link #PARENT_CHILD}，并在父子块内部使用 {@link #MARKDOWN} 的结构化切分。
+ * {@link #PARENT_CHILD}。Markdown 结构切分（MarkdownChunker）是内部引擎，
+ * 由 SEMANTIC 与 PARENT_CHILD 共用，不作为独立策略暴露。
  *
  * @author zjk
  */
@@ -23,15 +24,9 @@ public enum ChunkingStrategy {
     RECURSIVE,
 
     /**
-     * Markdown / Obsidian 感知切分：按标题分节，保护 fenced code、表格、
-     * 引用/标注块等结构，并记录标题路径。适合标准 Markdown 与
-     * Obsidian 兼容语法（frontmatter、wikilink、callout 等）。
-     */
-    MARKDOWN,
-
-    /**
-     * 语义切分：先按句子拆分，再根据相邻句子的 Embedding 相似度合并，
-     * 在语义发生转折处断开。入库时会额外调用一次 Embedding 模型。
+     * 语义切分：先按 Markdown 标题分节，节内文本块与累积质心比较相似度，
+     * 在语义转折处断开；代码/表格等受保护块独立成块，超长文本块回落到
+     * 句子级切分。入库时会额外调用一次 Embedding 模型。
      */
     SEMANTIC,
 

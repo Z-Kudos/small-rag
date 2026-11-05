@@ -1,6 +1,6 @@
 package com.smallrag.ragmcp.config;
 
-import com.smallrag.ragmcp.rag.ChunkingStrategy;
+import com.smallrag.ragmcp.rag.chunking.ChunkingStrategy;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
