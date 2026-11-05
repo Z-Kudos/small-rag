@@ -15,6 +15,8 @@ import java.util.regex.Pattern;
  *
  * <p>刻意不做字符级重叠：语义边界通常比固定重叠更准确，强行重叠会把
  * 上一主题的尾巴带进下一块，反而稀释检索信号。
+ *
+ * @author zjk
  */
 public final class SemanticTextChunker {
 

@@ -5,6 +5,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * Qdrant 连接与集合配置，对应 {@code rag.qdrant.*}。
+ *
+ * @author zjk
  */
 @Data
 @ConfigurationProperties(prefix = "rag.qdrant")

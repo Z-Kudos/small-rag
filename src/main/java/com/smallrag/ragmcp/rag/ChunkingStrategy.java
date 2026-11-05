@@ -6,6 +6,8 @@ package com.smallrag.ragmcp.rag;
  * <p>通过 {@code rag.chunking.strategy} 选择，修改策略不会自动重切历史数据：
  * 已入库的向量仍按原策略保留，切换后建议使用新的 {@code QDRANT_COLLECTION}
  * 或重新入库，避免同一集合混用不同切分方式。
+ *
+ * @author zjk
  */
 public enum ChunkingStrategy {
 

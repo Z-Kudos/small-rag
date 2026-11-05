@@ -22,8 +22,9 @@ spring:
         protocol: STREAMABLE
         instructions: |
           基于纯文本知识库的 RAG 检索服务（不调用生成模型）。
-          使用 rag_ingest 将文本写入知识库，使用 rag_search 查看命中分块，
-          使用 rag_query 获取带来源与相似度的增强上下文。
+          使用 rag_ingest 新增文档、rag_update 更新、rag_delete 删除、rag_list 查看归档。
+          使用 rag_search 查看命中分块，使用 rag_query 获取带来源与相似度的增强上下文。
+          rag_reindex 可手动重建单篇或全部归档文档；rag_rebuild 需 confirm=true 才会全量重建。
           知识库为空时 rag_query 会返回“未检索到相关内容”。
 
 rag:
@@ -40,10 +41,10 @@ rag:
   max-context-chars: 12000
   max-chunk-chars: 1200
   empty-context-answer: 未检索到相关内容。请先通过 rag_ingest 向知识库写入文本，或换一个查询词重试。
-  # 切分策略：fixed | recursive | semantic | parent-child
+  # 切分策略：fixed | recursive | semantic | parent-child（默认 parent-child）
   # 启动时检测切分配置签名，对已归档文档自动重切；未归档历史数据需重新入库
   chunking:
-    strategy: ${CHUNK_STRATEGY:fixed}
+    strategy: ${CHUNK_STRATEGY:parent-child}
     # 启动时检测切分配置签名，发现变化后自动重切已归档文档
     auto-rechunk: ${CHUNK_AUTO_RECHUNK:true}
     recursive:

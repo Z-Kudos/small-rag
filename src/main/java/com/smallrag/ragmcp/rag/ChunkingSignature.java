@@ -14,6 +14,8 @@ import java.util.List;
  * <p>原始文档归档时记录该签名；应用启动时对比当前签名与归档签名，
  * 不一致就说明切分策略/参数变了，需要自动重切。刻意不包含
  * {@code semantic.batch-size} 这类只影响性能、不影响结果的参数。
+ *
+ * @author zjk
  */
 public final class ChunkingSignature {
 
@@ -48,7 +50,7 @@ public final class ChunkingSignature {
     private static String canonical(RagProperties properties, String collectionName) {
         RagProperties.Chunking chunking = properties.getChunking();
         ChunkingStrategy strategy = chunking.getStrategy() == null
-                ? ChunkingStrategy.FIXED
+                ? ChunkingStrategy.PARENT_CHILD
                 : chunking.getStrategy();
 
         StringBuilder value = new StringBuilder(VERSION)

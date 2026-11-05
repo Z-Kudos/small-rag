@@ -5,6 +5,9 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * @author zjk
+ */
 class ChunkingSignatureTest {
 
     @Test
@@ -19,6 +22,7 @@ class ChunkingSignatureTest {
     @Test
     void changingStrategyOrSizeChangesSignature() {
         RagProperties properties = new RagProperties();
+        properties.getChunking().setStrategy(ChunkingStrategy.FIXED);
         String fixed = ChunkingSignature.of(properties);
 
         properties.setChunkSize(400);
@@ -32,6 +36,7 @@ class ChunkingSignatureTest {
     @Test
     void irrelevantParametersDoNotChangeSignature() {
         RagProperties properties = new RagProperties();
+        properties.getChunking().setStrategy(ChunkingStrategy.FIXED);
         String before = ChunkingSignature.of(properties);
 
         properties.getChunking().getSemantic().setSimilarityThreshold(0.1);
@@ -39,6 +44,12 @@ class ChunkingSignatureTest {
         properties.getChunking().getParentChild().setParentSize(999);
 
         assertThat(ChunkingSignature.of(properties)).isEqualTo(before);
+    }
+
+    @Test
+    void defaultStrategyIsParentChild() {
+        assertThat(new RagProperties().getChunking().getStrategy())
+                .isEqualTo(ChunkingStrategy.PARENT_CHILD);
     }
 
     @Test

@@ -17,6 +17,8 @@ import java.util.Map;
  *
  * <p>所有策略最终都输出“可写入向量库的片段列表”；Parent-Child 只写入子块，
  * 父块正文保存在子块元数据 {@code parent_text} 中，检索命中后再展开。
+ *
+ * @author zjk
  */
 @Service
 @RequiredArgsConstructor
@@ -52,11 +54,11 @@ public class ChunkingService {
     }
 
     /**
-     * 当前配置的切分策略，空值回落到 FIXED。
+     * 当前配置的切分策略，空值回落到 PARENT_CHILD。
      */
     public ChunkingStrategy strategy() {
         ChunkingStrategy strategy = properties.getChunking().getStrategy();
-        return strategy == null ? ChunkingStrategy.FIXED : strategy;
+        return strategy == null ? ChunkingStrategy.PARENT_CHILD : strategy;
     }
 
     private List<TextChunk> fixed(String text) {

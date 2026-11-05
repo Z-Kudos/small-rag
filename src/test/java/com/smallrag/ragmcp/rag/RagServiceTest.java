@@ -12,6 +12,7 @@ import org.springframework.ai.vectorstore.filter.Filter;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,10 +25,14 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+/**
+ * @author zjk
+ */
 class RagServiceTest {
 
     private static ChunkingService chunkingService(RagProperties properties) {
@@ -82,6 +87,7 @@ class RagServiceTest {
     void ingestSplitsPureTextIntoOverlappingChunks() {
         VectorStore vectorStore = mock(VectorStore.class);
         RagProperties properties = new RagProperties();
+        properties.getChunking().setStrategy(ChunkingStrategy.FIXED);
         RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false, chunkingService(properties), mock(DocumentArchive.class));
 
         @SuppressWarnings("unchecked")
@@ -190,5 +196,108 @@ class RagServiceTest {
         var ordered = inOrder(vectorStore);
         ordered.verify(vectorStore).delete(any(Filter.Expression.class));
         ordered.verify(vectorStore).add(anyList());
+    }
+
+    @Test
+    void updateUsesArchivedMetadataAndReindexes() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        DocumentArchive archive = mock(DocumentArchive.class);
+        String documentId = UUID.randomUUID().toString();
+        when(archive.isEnabled()).thenReturn(true);
+        when(archive.find(documentId)).thenReturn(Optional.of(new ArchivedDocument(
+                documentId, "旧文本", Map.of("source", "handbook"), "old-signature", "t1")));
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), archive);
+
+        RagService.IngestResult result = service.update(documentId, "新的完整文本", null);
+
+        verify(archive).save(documentId, "新的完整文本", Map.of("source", "handbook"), null);
+        verify(vectorStore).delete(any(Filter.Expression.class));
+        verify(vectorStore).add(anyList());
+        verify(archive).markIndexed(eq(documentId), anyString());
+        assertThat(result.chunkCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void deleteRemovesChunksAndArchive() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        DocumentArchive archive = mock(DocumentArchive.class);
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), archive);
+        String documentId = UUID.randomUUID().toString();
+
+        service.delete(documentId);
+
+        verify(vectorStore).delete(any(Filter.Expression.class));
+        verify(archive).delete(documentId);
+    }
+
+    @Test
+    void reindexAllRebuildsEveryArchivedDocument() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        DocumentArchive archive = mock(DocumentArchive.class);
+        when(archive.isEnabled()).thenReturn(true);
+
+        ArchivedDocument first = new ArchivedDocument(
+                UUID.randomUUID().toString(), "第一篇文章", Map.of("source", "a"), "sig", "t1");
+        ArchivedDocument second = new ArchivedDocument(
+                UUID.randomUUID().toString(), "第二篇文章", Map.of("source", "b"), "sig", "t2");
+        when(archive.listAll()).thenReturn(List.of(first, second));
+
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), archive);
+
+        RagService.RebuildResult result = service.reindexAll();
+
+        assertThat(result.total()).isEqualTo(2);
+        assertThat(result.succeeded()).isEqualTo(2);
+        assertThat(result.failed()).isZero();
+        assertThat(result.aborted()).isFalse();
+        verify(vectorStore, times(2)).add(anyList());
+        verify(archive, times(2)).markIndexed(anyString(), anyString());
+    }
+
+    @Test
+    void rebuildRefusesEmptyArchive() {
+        RagProperties properties = new RagProperties();
+        DocumentArchive archive = mock(DocumentArchive.class);
+        when(archive.isEnabled()).thenReturn(true);
+        when(archive.listAll()).thenReturn(List.of());
+
+        RagService service = new RagService(mock(VectorStore.class), properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), archive);
+
+        assertThatThrownBy(service::rebuild)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("拒绝清空");
+    }
+
+    @Test
+    void listDocumentsPaginates() {
+        RagProperties properties = new RagProperties();
+        DocumentArchive archive = mock(DocumentArchive.class);
+        when(archive.isEnabled()).thenReturn(true);
+        String firstId = UUID.randomUUID().toString();
+        String secondId = UUID.randomUUID().toString();
+        String thirdId = UUID.randomUUID().toString();
+        when(archive.listAll()).thenReturn(List.of(
+                new ArchivedDocument(firstId, "a", Map.of(), "sig", "t1"),
+                new ArchivedDocument(secondId, "bb", Map.of(), "sig", "t2"),
+                new ArchivedDocument(thirdId, "ccc", Map.of(), "sig", "t3")));
+
+        RagService service = new RagService(mock(VectorStore.class), properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), archive);
+
+        RagService.DocumentPage page = service.listDocuments(2, 1);
+
+        assertThat(page.total()).isEqualTo(3);
+        assertThat(page.offset()).isEqualTo(1);
+        assertThat(page.limit()).isEqualTo(2);
+        assertThat(page.documents()).hasSize(2);
+        assertThat(page.documents().get(0).documentId()).isEqualTo(secondId);
+        assertThat(page.documents().get(0).textLength()).isEqualTo(2);
     }
 }

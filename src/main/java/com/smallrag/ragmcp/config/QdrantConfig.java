@@ -31,6 +31,8 @@ import java.util.concurrent.TimeUnit;
  *   <li>集合已存在但维度与配置不一致时 fail-fast——这是配置错误，
  *       带病启动只会让所有写入在运行期失败且难以定位。</li>
  * </ul>
+ *
+ * @author zjk
  */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties({RagProperties.class, QdrantProperties.class})

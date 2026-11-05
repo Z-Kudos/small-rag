@@ -27,8 +27,8 @@ services:
       # true：启动时等待 Ollama 并确保 EMBEDDING_MODEL 已拉取
       SMALL_RAG_ENSURE_OLLAMA_MODEL: ${SMALL_RAG_ENSURE_OLLAMA_MODEL:-true}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:--1}
-      # 切分策略：fixed | recursive | semantic | parent-child
-      CHUNK_STRATEGY: ${CHUNK_STRATEGY:-fixed}
+      # 切分策略：fixed | recursive | semantic | parent-child（默认 parent-child）
+      CHUNK_STRATEGY: ${CHUNK_STRATEGY:-parent-child}
       CHUNK_SIZE: ${CHUNK_SIZE:-800}
       CHUNK_OVERLAP: ${CHUNK_OVERLAP:-100}
       CHUNK_AUTO_RECHUNK: ${CHUNK_AUTO_RECHUNK:-true}

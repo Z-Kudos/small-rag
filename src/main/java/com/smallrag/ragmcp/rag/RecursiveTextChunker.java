@@ -9,6 +9,8 @@ import java.util.List;
  * <p>按分隔符列表的优先级依次尝试：先用最粗的边界（段落），再把仍然超长的片段
  * 交给下一级分隔符（换行、句号、逗号……），最后才按字符数硬切。相比固定长度切分，
  * 它更不容易把一个完整句子或段落从中间截断。
+ *
+ * @author zjk
  */
 public final class RecursiveTextChunker {
 

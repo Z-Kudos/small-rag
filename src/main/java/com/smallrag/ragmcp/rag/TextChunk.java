@@ -8,6 +8,8 @@ import java.util.Map;
  *
  * @param text     片段正文
  * @param metadata 切分器附加的元数据（如 parent_id、parent_text），可为空
+ *
+ * @author zjk
  */
 public record TextChunk(String text, Map<String, Object> metadata) {
 

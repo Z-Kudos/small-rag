@@ -21,6 +21,8 @@ import java.util.Map;
  *
  * <p>方法上的 Javadoc 与 {@code @McpTool} 描述会作为工具说明提供给 Agent。
  * 所有运行期故障都收敛为 {@code {"error": "..."}} JSON，避免客户端收到协议层异常。
+ *
+ * @author zjk
  */
 @RequiredArgsConstructor
 @Slf4j
@@ -85,24 +87,133 @@ public class RagMcpTools {
      * @param metadata 文档元数据，例如 source、title
      * @return 包含 documentId、chunkCount 与 parentCount 的 JSON
      */
-    @McpTool(name = "rag_ingest", description = "将纯文本按配置的切分策略写入知识库，可附带 source/title 等元数据")
+    @McpTool(name = "rag_ingest", description = "新增文档：按配置的切分策略写入知识库并归档原文，可附带 source/title 等元数据")
     public String ragIngest(
             @McpToolParam(description = "要入库的文本", required = true) String text,
             @McpToolParam(description = "文档元数据键值对，可为空", required = false) Map<String, String> metadata) {
         log.debug("MCP rag_ingest 调用，textLength={}", text == null ? 0 : text.length());
         try {
-            RagService.IngestResult result = ragService.ingest(text, metadata);
-            Map<String, Object> data = new LinkedHashMap<>();
-            data.put("documentId", result.documentId());
-            data.put("chunkCount", result.chunkCount());
-            data.put("parentCount", result.parentCount());
-            return objectMapper.writeValueAsString(data);
+            return ingestResult(ragService.ingest(text, metadata));
         } catch (IllegalArgumentException e) {
             return error(e.getMessage());
         } catch (Exception e) {
             log.warn("MCP rag_ingest 失败: 原因={}", e.toString());
             return error("入库失败: " + rootMessage(e));
         }
+    }
+
+    /**
+     * 更新已归档文档的文本与元数据，并立即按当前切分策略重建向量。
+     *
+     * @param documentId 文档 id（UUID）
+     * @param text       新的完整文本
+     * @param metadata   新元数据；不传时保留原元数据
+     * @return 更新后的 documentId、chunkCount、parentCount
+     */
+    @McpTool(name = "rag_update", description = "更新已归档文档的文本或元数据，并立即按当前策略重建该文档的向量")
+    public String ragUpdate(
+            @McpToolParam(description = "文档 id（UUID）", required = true) String documentId,
+            @McpToolParam(description = "新的完整文本", required = true) String text,
+            @McpToolParam(description = "新元数据；不传则保留原元数据", required = false) Map<String, String> metadata) {
+        log.debug("MCP rag_update 调用，documentId={}, textLength={}", documentId, text == null ? 0 : text.length());
+        try {
+            return ingestResult(ragService.update(documentId, text, metadata));
+        } catch (Exception e) {
+            log.warn("MCP rag_update 失败: documentId={}, 原因={}", documentId, e.toString());
+            return error("更新失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 删除文档的全部向量和原文归档。
+     *
+     * @param documentId 文档 id（UUID）
+     * @return 删除结果
+     */
+    @McpTool(name = "rag_delete", description = "按 documentId 删除文档的全部向量和原文归档")
+    public String ragDelete(
+            @McpToolParam(description = "文档 id（UUID）", required = true) String documentId) {
+        log.debug("MCP rag_delete 调用，documentId={}", documentId);
+        try {
+            ragService.delete(documentId);
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("documentId", documentId);
+            data.put("deleted", true);
+            return objectMapper.writeValueAsString(data);
+        } catch (Exception e) {
+            log.warn("MCP rag_delete 失败: documentId={}, 原因={}", documentId, e.toString());
+            return error("删除失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 分页列出已归档文档。
+     *
+     * @param limit  每页数量，默认 20，最大 100
+     * @param offset 偏移量，默认 0
+     * @return 文档摘要分页 JSON
+     */
+    @McpTool(name = "rag_list", description = "分页列出已归档文档的 id、元数据、切分签名和文本长度")
+    public String ragList(
+            @McpToolParam(description = "每页数量，默认 20，最大 100", required = false) Integer limit,
+            @McpToolParam(description = "偏移量，默认 0", required = false) Integer offset) {
+        log.debug("MCP rag_list 调用，limit={}, offset={}", limit, offset);
+        try {
+            return objectMapper.writeValueAsString(ragService.listDocuments(limit, offset));
+        } catch (Exception e) {
+            log.warn("MCP rag_list 失败: 原因={}", e.toString());
+            return error("查询失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 手动重建向量：指定 documentId 时重建单篇，不传时重建全部归档文档。
+     *
+     * @param documentId 文档 id；为空表示全部
+     * @return 单篇返回片段数，全部返回重建统计
+     */
+    @McpTool(name = "rag_reindex", description = "手动重建向量：传 documentId 重建单篇，不传则重建全部已归档文档")
+    public String ragReindex(
+            @McpToolParam(description = "文档 id（UUID）；为空表示重建全部", required = false) String documentId) {
+        log.debug("MCP rag_reindex 调用，documentId={}", documentId);
+        try {
+            if (documentId == null || documentId.isBlank()) {
+                return objectMapper.writeValueAsString(ragService.reindexAll());
+            }
+            return ingestResult(ragService.reindexDocument(documentId));
+        } catch (Exception e) {
+            log.warn("MCP rag_reindex 失败: documentId={}, 原因={}", documentId, e.toString());
+            return error("重建失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 全量重建：清空当前集合中由本服务写入的片段，再按归档重建全部文档。
+     *
+     * @param confirm 必须为 true，防止误清空知识库
+     * @return 重建统计
+     */
+    @McpTool(name = "rag_rebuild", description = "全量重建：清空当前集合中由 small-rag 写入的片段后按归档重建；必须 confirm=true")
+    public String ragRebuild(
+            @McpToolParam(description = "必须显式传 true，防止误清空知识库", required = true) Boolean confirm) {
+        log.debug("MCP rag_rebuild 调用，confirm={}", confirm);
+        if (!Boolean.TRUE.equals(confirm)) {
+            return error("必须传 confirm=true 才能执行全量重建");
+        }
+        try {
+            return objectMapper.writeValueAsString(ragService.rebuild());
+        } catch (Exception e) {
+            log.warn("MCP rag_rebuild 失败: 原因={}", e.toString());
+            return error("全量重建失败: " + rootMessage(e));
+        }
+    }
+
+    private String ingestResult(RagService.IngestResult result) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("documentId", result.documentId());
+        data.put("chunkCount", result.chunkCount());
+        data.put("parentCount", result.parentCount());
+        return objectMapper.writeValueAsString(data);
     }
 
     private String error(String message) {

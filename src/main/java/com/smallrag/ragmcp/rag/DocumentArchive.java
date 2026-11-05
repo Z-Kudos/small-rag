@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -25,6 +26,8 @@ import java.util.UUID;
  * 归档只服务于自动重切：Qdrant 仍然是唯一的向量库，归档不参与检索。
  *
  * <p>目录不可写时降级为禁用（只告警，不阻断入库），此时自动重切不可用。
+ *
+ * @author zjk
  */
 @Component
 @Slf4j
@@ -96,6 +99,25 @@ public class DocumentArchive {
         }
         documents.sort(Comparator.comparing(ArchivedDocument::documentId));
         return documents;
+    }
+
+    /**
+     * 按文档 id 读取归档记录。
+     */
+    public synchronized Optional<ArchivedDocument> find(String documentId) {
+        if (!enabled) {
+            return Optional.empty();
+        }
+        Path path = fileFor(documentId);
+        if (!Files.isRegularFile(path)) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(objectMapper.readValue(path, ArchivedDocument.class));
+        } catch (Exception e) {
+            log.warn("读取归档文档失败: docId={}, 原因={}", documentId, e.toString());
+            return Optional.empty();
+        }
     }
 
     /**

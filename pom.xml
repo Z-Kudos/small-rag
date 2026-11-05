@@ -17,6 +17,12 @@
     <name>small-rag</name>
     <description>Small pure-text RAG knowledge base exposed as an MCP server</description>
 
+    <developers>
+        <developer>
+            <name>zjk</name>
+        </developer>
+    </developers>
+
     <properties>
         <java.version>25</java.version>
         <maven.compiler.release>25</maven.compiler.release>

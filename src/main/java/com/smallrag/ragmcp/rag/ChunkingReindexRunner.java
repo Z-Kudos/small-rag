@@ -18,6 +18,8 @@ import java.util.List;
  * <p>Qdrant 里只有分块，没有原文，无法从旧分块反推出可靠原文；因此自动重切
  * 依赖 {@link DocumentArchive}。归档不可用或单篇重切失败时只告警，
  * 保留旧向量并让下次启动继续重试，不阻断应用启动。
+ *
+ * @author zjk
  */
 @Component
 @RequiredArgsConstructor

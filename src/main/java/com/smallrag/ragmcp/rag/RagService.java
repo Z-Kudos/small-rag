@@ -23,11 +23,15 @@ import java.util.UUID;
  *
  * <p>本项目只使用向量（Embedding）模型，不依赖 Chat / 生成模型。
  * {@code rag_query} 返回的是检索增强后的上下文，由调用方 Agent 自行生成回答。
+ *
+ * @author zjk
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class RagService {
+
+    private static final int MAX_CONSECUTIVE_FAILURES = 3;
 
     private final VectorStore vectorStore;
     private final RagProperties properties;
@@ -106,19 +110,13 @@ public class RagService {
         requireText(text);
 
         String documentId = UUID.randomUUID().toString();
-        String signature = ChunkingSignature.of(properties, qdrantProperties.getCollectionName());
 
         // 先归档原文（签名先留空），入库失败则回滚；成功后再标记签名。
         // 若进程在“归档后、入库前”崩溃，下次启动会因为签名为空而自动补齐索引。
         documentArchive.save(documentId, text, metadata, null);
         try {
             IngestResult result = index(documentId, text, metadata);
-            try {
-                documentArchive.markIndexed(documentId, signature);
-            } catch (RuntimeException e) {
-                log.warn("归档签名更新失败，将在下次启动重新切分: docId={}, 原因={}",
-                        documentId, e.toString());
-            }
+            markIndexedQuietly(documentId);
             return result;
         } catch (RuntimeException e) {
             documentArchive.delete(documentId);
@@ -138,9 +136,7 @@ public class RagService {
      * @return 重切后的片段数
      */
     public IngestResult reindex(String documentId, String text, Map<String, String> metadata) {
-        if (documentId == null || documentId.isBlank()) {
-            throw new IllegalArgumentException("documentId 不能为空");
-        }
+        requireDocumentId(documentId);
         requireText(text);
 
         ChunkingService.ChunkingResult chunked = chunkingService.chunk(text, documentId);
@@ -150,6 +146,167 @@ public class RagService {
         log.info("文档已重切: docId={}, strategy={}, chunks={}",
                 documentId, chunkingService.strategy(), documents.size());
         return new IngestResult(documentId, documents.size(), chunked.parentCount());
+    }
+
+    /**
+     * 更新已归档文档：metadata 为 null 时保留原元数据；更新后立即重建向量。
+     *
+     * @param documentId 文档 id
+     * @param text       新的完整文本
+     * @param metadata   新元数据；为 null 时沿用原元数据
+     * @return 更新后的片段数
+     */
+    public IngestResult update(String documentId, String text, Map<String, String> metadata) {
+        requireDocumentId(documentId);
+        requireText(text);
+        requireArchiveEnabled();
+
+        ArchivedDocument existing = documentArchive.find(documentId)
+                .orElseThrow(() -> new IllegalArgumentException("归档文档不存在: " + documentId));
+        Map<String, String> effectiveMetadata = metadata != null ? metadata : existing.metadata();
+
+        // 先写归档（签名置空），重切失败时下次启动会按新原文重试
+        documentArchive.save(documentId, text, effectiveMetadata, null);
+        IngestResult result = reindex(documentId, text, effectiveMetadata);
+        markIndexedQuietly(documentId);
+        log.info("文档已更新: docId={}, chunks={}", documentId, result.chunkCount());
+        return result;
+    }
+
+    /**
+     * 删除文档的全部向量与原文归档。
+     */
+    public void delete(String documentId) {
+        requireDocumentId(documentId);
+        vectorStore.delete(new FilterExpressionBuilder().eq("doc_id", documentId).build());
+        documentArchive.delete(documentId);
+        log.info("文档已删除: docId={}", documentId);
+    }
+
+    /**
+     * 手动重建单篇已归档文档的向量。
+     */
+    public IngestResult reindexDocument(String documentId) {
+        requireDocumentId(documentId);
+        requireArchiveEnabled();
+        ArchivedDocument document = documentArchive.find(documentId)
+                .orElseThrow(() -> new IllegalArgumentException("归档文档不存在: " + documentId));
+
+        IngestResult result = reindex(documentId, document.text(), document.metadata());
+        markIndexedQuietly(documentId);
+        return result;
+    }
+
+    /**
+     * 手动重建全部已归档文档的向量；不会清理归档之外的残留片段。
+     */
+    public RebuildResult reindexAll() {
+        requireArchiveEnabled();
+        return reindexArchived(false);
+    }
+
+    /**
+     * 全量重建：先清空当前集合中由 small-rag 写入的片段，再按归档重建全部文档。
+     *
+     * <p>没有归档文档时拒绝执行，避免误清空知识库。
+     */
+    public RebuildResult rebuild() {
+        requireArchiveEnabled();
+        return reindexArchived(true);
+    }
+
+    /**
+     * 分页列出已归档文档，供管理端查看。
+     */
+    public DocumentPage listDocuments(Integer limit, Integer offset) {
+        requireArchiveEnabled();
+        int safeLimit = (limit == null || limit <= 0) ? 20 : Math.min(limit, 100);
+        int safeOffset = (offset == null || offset < 0) ? 0 : offset;
+
+        List<ArchivedDocument> all = documentArchive.listAll();
+        List<DocumentSummary> documents = all.stream()
+                .skip(safeOffset)
+                .limit(safeLimit)
+                .map(document -> new DocumentSummary(
+                        document.documentId(),
+                        document.metadata(),
+                        document.chunkSignature(),
+                        document.updatedAt(),
+                        document.text() == null ? 0 : document.text().length()))
+                .toList();
+        return new DocumentPage(all.size(), safeOffset, safeLimit, documents);
+    }
+
+    private RebuildResult reindexArchived(boolean clearFirst) {
+        List<ArchivedDocument> documents = documentArchive.listAll();
+        if (documents.isEmpty()) {
+            if (clearFirst) {
+                throw new IllegalStateException("没有归档文档，拒绝清空向量库");
+            }
+            return new RebuildResult(0, 0, 0, false);
+        }
+
+        if (clearFirst) {
+            vectorStore.delete(new FilterExpressionBuilder()
+                    .in(ChunkingService.FIELD_CHUNK_TYPE,
+                            ChunkingService.CHUNK_TYPE_CHUNK,
+                            ChunkingService.CHUNK_TYPE_CHILD)
+                    .build());
+            log.info("已清空当前集合中由 small-rag 写入的片段，开始全量重建: {} 篇", documents.size());
+        }
+
+        String signature = currentSignature();
+        int succeeded = 0;
+        int failed = 0;
+        int consecutiveFailures = 0;
+        for (ArchivedDocument document : documents) {
+            try {
+                reindex(document.documentId(), document.text(), document.metadata());
+                documentArchive.markIndexed(document.documentId(), signature);
+                succeeded++;
+                consecutiveFailures = 0;
+            } catch (Exception e) {
+                failed++;
+                consecutiveFailures++;
+                log.warn("重建失败: docId={}, 原因={}", document.documentId(), e.toString());
+                if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                    log.error("连续 {} 篇重建失败，中止本次任务", consecutiveFailures);
+                    return new RebuildResult(documents.size(), succeeded, failed, true);
+                }
+            }
+        }
+        log.info("重建完成: total={}, succeeded={}, failed={}", documents.size(), succeeded, failed);
+        return new RebuildResult(documents.size(), succeeded, failed, false);
+    }
+
+    private void markIndexedQuietly(String documentId) {
+        try {
+            documentArchive.markIndexed(documentId, currentSignature());
+        } catch (RuntimeException e) {
+            log.warn("归档签名更新失败，将在下次启动重新切分: docId={}, 原因={}",
+                    documentId, e.toString());
+        }
+    }
+
+    private String currentSignature() {
+        return ChunkingSignature.of(properties, qdrantProperties.getCollectionName());
+    }
+
+    private void requireArchiveEnabled() {
+        if (!documentArchive.isEnabled()) {
+            throw new IllegalStateException("原始文档归档不可用，无法执行该管理操作");
+        }
+    }
+
+    private static void requireDocumentId(String documentId) {
+        if (documentId == null || documentId.isBlank()) {
+            throw new IllegalArgumentException("documentId 不能为空");
+        }
+        try {
+            UUID.fromString(documentId);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("documentId 必须是 UUID", e);
+        }
     }
 
     private IngestResult index(String documentId, String text, Map<String, String> metadata) {
@@ -278,5 +435,32 @@ public class RagService {
      * @param parentCount 父块数；非 Parent-Child 策略为 0
      */
     public record IngestResult(String documentId, int chunkCount, int parentCount) {
+    }
+
+    /**
+     * 文档分页结果。
+     */
+    public record DocumentPage(int total, int offset, int limit, List<DocumentSummary> documents) {
+    }
+
+    /**
+     * 归档文档摘要（不返回全文）。
+     */
+    public record DocumentSummary(String documentId,
+            Map<String, String> metadata,
+            String chunkSignature,
+            String updatedAt,
+            int textLength) {
+    }
+
+    /**
+     * 重建结果。
+     *
+     * @param total     已归档文档总数
+     * @param succeeded 成功重建数
+     * @param failed    失败数
+     * @param aborted   是否因连续失败而中止
+     */
+    public record RebuildResult(int total, int succeeded, int failed, boolean aborted) {
     }
 }

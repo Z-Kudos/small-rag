@@ -13,6 +13,8 @@ import tools.jackson.databind.ObjectMapper;
  * {@code spring.ai.mcp.server.*} 配置项设置（见 application.yml）。
  * 不使用 {@code McpSyncServerCustomizer}，因为该扩展点为单例，
  * 已由 WebMVC 传输的自动配置占用。
+ *
+ * @author zjk
  */
 @Configuration(proxyBeanMethods = false)
 public class McpServerConfig {

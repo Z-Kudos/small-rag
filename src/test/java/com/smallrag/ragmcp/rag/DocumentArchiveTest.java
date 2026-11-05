@@ -11,6 +11,9 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+/**
+ * @author zjk
+ */
 class DocumentArchiveTest {
 
     @TempDir
@@ -59,6 +62,20 @@ class DocumentArchiveTest {
                 .singleElement()
                 .extracting(ArchivedDocument::chunkSignature)
                 .isNull();
+    }
+
+    @Test
+    void findsArchivedDocumentById() {
+        DocumentArchive archive = archive();
+        String documentId = "44444444-4444-4444-4444-444444444444";
+        archive.save(documentId, "可被查找的原文", Map.of("source", "faq"), "signature");
+
+        assertThat(archive.find(documentId))
+                .isPresent()
+                .get()
+                .extracting(ArchivedDocument::text)
+                .isEqualTo("可被查找的原文");
+        assertThat(archive.find("55555555-5555-5555-5555-555555555555")).isEmpty();
     }
 
     @Test

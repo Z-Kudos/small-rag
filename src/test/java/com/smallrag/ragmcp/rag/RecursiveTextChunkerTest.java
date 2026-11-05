@@ -6,6 +6,9 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * @author zjk
+ */
 class RecursiveTextChunkerTest {
 
     private static final List<String> SEPARATORS = List.of("\n\n", "\n", "。", "！", "？", "，", " ");

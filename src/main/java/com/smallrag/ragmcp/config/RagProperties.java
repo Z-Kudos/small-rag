@@ -11,6 +11,8 @@ import java.util.List;
  *
  * <p>这些值直接影响召回质量与 prompt 体积：相似度阈值过低会把噪声拼进上下文，
  * 上下文预算过高会稀释关键片段并浪费 token。
+ *
+ * @author zjk
  */
 @Data
 @ConfigurationProperties(prefix = "rag")
@@ -75,9 +77,9 @@ public class RagProperties {
     public static class Chunking {
 
         /**
-         * 切分策略：FIXED、RECURSIVE、SEMANTIC、PARENT_CHILD。
+         * 切分策略：FIXED、RECURSIVE、SEMANTIC、PARENT_CHILD。默认 Parent-Child。
          */
-        private ChunkingStrategy strategy = ChunkingStrategy.FIXED;
+        private ChunkingStrategy strategy = ChunkingStrategy.PARENT_CHILD;
 
         /**
          * 启动时检测切分配置签名，发现变化后自动重切已归档文档。

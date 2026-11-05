@@ -1,6 +1,6 @@
 # small-rag
 
-基于 Spring AI 的提供给 AGENT 调用的**纯文本 RAG 检索** MCP 服务（仅处理向量入库和检索，不做Chat问答）：通过 MCP（Streamable HTTP）暴露 `rag_ingest`、`rag_search`、`rag_query`，向量库使用 **Qdrant**，支持 `fixed` / `recursive` / `semantic` / `parent-child` 四种切分策略。
+基于 Spring AI 的提供给 AGENT 调用的**纯文本 RAG 检索** MCP 服务（仅处理向量入库和检索，不做Chat问答）：通过 MCP（Streamable HTTP）暴露文档新增/更新/删除/列表、手动重建以及 `rag_search`、`rag_query`，向量库使用 **Qdrant**，支持 `fixed` / `recursive` / `semantic` / `parent-child` 四种切分策略（默认 `parent-child`）。
 
 > `rag_query` 返回增强上下文，回答由调用方 Agent 生成。
 
@@ -89,7 +89,7 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 | `EMBEDDING_BASE_URL` | 回退 `OPENAI_BASE_URL`，再回退 `https://api.openai.com/v1` | 必须含 `/v1` |
 | `EMBEDDING_MODEL` | 回退 `OPENAI_EMBEDDING_MODEL`，再回退 `text-embedding-3-small` | 向量模型 |
 | `EMBEDDING_DIMENSION` | 回退 `QDRANT_DIMENSION`，再回退 `1536` | 必须与模型输出一致 |
-| `CHUNK_STRATEGY` | `fixed` | `fixed` / `recursive` / `semantic` / `parent-child` |
+| `CHUNK_STRATEGY` | `parent-child` | `fixed` / `recursive` / `semantic` / `parent-child` |
 | `CHUNK_SIZE` | `800` | 固定/递归目标块大小，语义切分默认上限 |
 | `CHUNK_OVERLAP` | `100` | 固定/递归块重叠 |
 | `SEMANTIC_SIMILARITY_THRESHOLD` | `0.75` | 相邻句子相似度低于该值时断开 |
@@ -119,9 +119,24 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 
 | 工具 | 用途 |
 | --- | --- |
-| `rag_ingest(text, metadata)` | 按配置策略切块写入 Qdrant 并归档原文，返回 `documentId`、`chunkCount`、`parentCount` |
+| `rag_ingest(text, metadata)` | 新增文档：按配置策略切块写入 Qdrant 并归档原文，返回 `documentId`、`chunkCount`、`parentCount` |
+| `rag_update(documentId, text, metadata)` | 更新已归档文档；`metadata` 不传时保留原元数据，并立即重建该文档向量 |
+| `rag_delete(documentId)` | 删除文档的全部向量和原文归档 |
+| `rag_list(limit, offset)` | 分页列出已归档文档的 id、元数据、切分签名和文本长度 |
+| `rag_reindex(documentId)` | 手动重建：传 `documentId` 重建单篇，不传则重建全部归档文档 |
+| `rag_rebuild(confirm)` | 全量重建：清空当前集合中由本服务写入的片段后按归档重建，必须 `confirm=true` |
 | `rag_search(query, topK)` | 仅检索，返回命中分块、相似度、来源元数据 |
 | `rag_query(query, topK)` | 返回带编号/来源/相似度的增强上下文（不调用生成模型） |
+
+### 文档管理与重建
+
+- `rag_update`：先更新原文归档，再切分并替换该 `doc_id` 的旧片段；`metadata` 不传时沿用归档中的元数据。
+- `rag_delete`：先按 `doc_id` 删除向量，再删除归档文件。
+- `rag_reindex`：只重建已归档文档，不会清理归档之外的残留片段；适合单篇修复或策略调整后手动触发。
+- `rag_rebuild`：先删除当前集合中 `chunk_type=chunk` 或 `chunk_type=child` 的片段，再重建全部归档文档；归档为空时拒绝执行，避免误清空。
+- 管理和重建依赖原始文档归档；没有归档的历史数据无法 `rag_list` / `rag_update` / `rag_reindex`，只能按 `docId` 删除或重新入库。`rag_rebuild` 只清理本服务写入的带 `chunk_type` 的片段。
+
+> 这些工具没有鉴权，能访问 `/mcp` 即可修改或清空知识库，请勿直接暴露公网。
 
 服务端是标准 Streamable HTTP MCP Server，URL `http://localhost:18080/mcp`，无鉴权，**不要直接暴露公网**。
 
@@ -158,12 +173,12 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 | 固定长度 | `fixed` | 按 `chunk-size` / `chunk-overlap` 滑窗硬切 | 无结构长文本 |
 | 递归字符 | `recursive` | 按段落 → 换行 → 句号 → 逗号 → 空格逐级切分，仍超长才硬切 | 文档、Markdown、FAQ |
 | 语义 | `semantic` | 拆句后按相邻句子 Embedding 相似度合并/断开，入库多一次 Embedding | 主题切换明显 |
-| Parent-Child | `parent-child` | 子块写入向量库参与检索，命中后展开父块上下文 | 精确召回 + 完整上下文 |
+| Parent-Child | `parent-child`（默认） | 子块写入向量库参与检索，命中后展开父块上下文 | 精确召回 + 完整上下文 |
 
 ```yaml
 rag:
   chunking:
-    strategy: recursive          # fixed | recursive | semantic | parent-child
+    strategy: parent-child      # fixed | recursive | semantic | parent-child
     recursive:
       separators: ["\n\n", "\n", "。", "！", "？", "；", "，", " "]
     semantic:
@@ -214,9 +229,10 @@ rag:
 
 ```
 mcp/       RagMcpTools：rag_ingest / rag_search / rag_query
-rag/       RagService、ChunkingService、TextChunker、RecursiveTextChunker、
-           SemanticTextChunker、KnowledgeBaseProbe、DocumentArchive、
-           ChunkingSignature、ChunkingReindexRunner
+rag/       RagService（入库/检索/上下文/更新删除重建）、ChunkingService、
+           TextChunker、RecursiveTextChunker、SemanticTextChunker、
+           KnowledgeBaseProbe、DocumentArchive、ChunkingSignature、
+           ChunkingReindexRunner
 config/    QdrantConfig、McpServerConfig、RagProperties、QdrantProperties
 docker/    start-qdrant.sh / start-ollama.sh / start-app.sh / supervisord.conf
 ```

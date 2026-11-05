@@ -5,6 +5,8 @@ import java.util.List;
 
 /**
  * 纯文本定长滑窗分块（参考 whale 的 800/100 策略）。
+ *
+ * @author zjk
  */
 public final class TextChunker {
 

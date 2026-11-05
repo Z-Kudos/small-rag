@@ -12,6 +12,8 @@ import java.util.Map;
  * @param metadata       入库时的业务元数据
  * @param chunkSignature 最近一次成功切分时的配置签名
  * @param updatedAt      最近一次归档/重切时间
+ *
+ * @author zjk
  */
 public record ArchivedDocument(
         String documentId,

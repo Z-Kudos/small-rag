@@ -3,6 +3,9 @@ package com.smallrag.ragmcp;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
+/**
+ * @author zjk
+ */
 @SpringBootApplication
 public class SmallRagApplication {
 
