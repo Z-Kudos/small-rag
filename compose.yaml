@@ -27,6 +27,15 @@ services:
       # true：启动时等待 Ollama 并确保 EMBEDDING_MODEL 已拉取
       SMALL_RAG_ENSURE_OLLAMA_MODEL: ${SMALL_RAG_ENSURE_OLLAMA_MODEL:-true}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:--1}
+      # 切分策略：fixed | recursive | semantic | parent-child
+      CHUNK_STRATEGY: ${CHUNK_STRATEGY:-fixed}
+      CHUNK_SIZE: ${CHUNK_SIZE:-800}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-100}
+      CHUNK_AUTO_RECHUNK: ${CHUNK_AUTO_RECHUNK:-true}
+      SMALL_RAG_ARCHIVE_DIR: ${SMALL_RAG_ARCHIVE_DIR:-/data/documents}
+      SEMANTIC_SIMILARITY_THRESHOLD: ${SEMANTIC_SIMILARITY_THRESHOLD:-0.75}
+      PARENT_CHUNK_SIZE: ${PARENT_CHUNK_SIZE:-2000}
+      CHILD_CHUNK_SIZE: ${CHILD_CHUNK_SIZE:-400}
     volumes:
       # Qdrant 数据 + Ollama 模型
       - small_rag_data:/data

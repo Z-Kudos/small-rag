@@ -27,17 +27,56 @@ spring:
           知识库为空时 rag_query 会返回“未检索到相关内容”。
 
 rag:
+  # 原始文档归档目录：自动重切的原文来源；目录不可写时降级为只入库
+  archive-dir: ${SMALL_RAG_ARCHIVE_DIR:./data/documents}
   default-top-k: 4
   max-top-k: 20
   # 相似度阈值：低于该值的片段直接丢弃（0~1，Cosine）
   min-score: 0.35
-  # 纯文本分块：800 字 / 100 字重叠（与 whale 的默认策略一致）
-  chunk-size: 800
-  chunk-overlap: 100
+  # 固定/递归切分的目标块大小；语义切分的默认上限也回落到这里
+  chunk-size: ${CHUNK_SIZE:800}
+  chunk-overlap: ${CHUNK_OVERLAP:100}
   # 返回上下文预算
   max-context-chars: 12000
   max-chunk-chars: 1200
   empty-context-answer: 未检索到相关内容。请先通过 rag_ingest 向知识库写入文本，或换一个查询词重试。
+  # 切分策略：fixed | recursive | semantic | parent-child
+  # 启动时检测切分配置签名，对已归档文档自动重切；未归档历史数据需重新入库
+  chunking:
+    strategy: ${CHUNK_STRATEGY:fixed}
+    # 启动时检测切分配置签名，发现变化后自动重切已归档文档
+    auto-rechunk: ${CHUNK_AUTO_RECHUNK:true}
+    recursive:
+      # 分隔符优先级从粗到细，按字面量匹配
+      separators:
+        - "\n\n"
+        - "\n"
+        - "。"
+        - "！"
+        - "？"
+        - "；"
+        - "…"
+        - ". "
+        - "! "
+        - "? "
+        - "; "
+        - "，"
+        - ", "
+        - " "
+    semantic:
+      # 相邻句子余弦相似度低于该值时断开
+      similarity-threshold: ${SEMANTIC_SIMILARITY_THRESHOLD:0.75}
+      # 未达到该长度时优先继续合并，避免语义碎块
+      min-chunk-chars: ${SEMANTIC_MIN_CHUNK_CHARS:200}
+      # <= 0 时回落到 rag.chunk-size
+      max-chunk-chars: ${SEMANTIC_MAX_CHUNK_CHARS:0}
+      batch-size: ${SEMANTIC_BATCH_SIZE:64}
+    parent-child:
+      # 父块用于提供上下文，子块写入向量库并参与检索
+      parent-size: ${PARENT_CHUNK_SIZE:2000}
+      parent-overlap: ${PARENT_CHUNK_OVERLAP:200}
+      child-size: ${CHILD_CHUNK_SIZE:400}
+      child-overlap: ${CHILD_CHUNK_OVERLAP:50}
   qdrant:
     host: ${QDRANT_HOST:localhost}
     # gRPC 端口（REST 是 6333）

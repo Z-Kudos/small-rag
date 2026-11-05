@@ -12,7 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.qdrant.QdrantVectorStore;
-import org.springframework.boot.ApplicationRunner;
+import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -83,8 +83,9 @@ public class QdrantConfig {
     }
 
     @Bean
-    public ApplicationRunner qdrantCollectionInitializer(QdrantClient qdrantClient, QdrantProperties properties) {
-        return args -> {
+    public SmartInitializingSingleton qdrantCollectionInitializer(QdrantClient qdrantClient,
+            QdrantProperties properties) {
+        return () -> {
             String collection = properties.getCollectionName();
             long timeout = properties.getInitTimeoutMs() + 1000L;
             try {

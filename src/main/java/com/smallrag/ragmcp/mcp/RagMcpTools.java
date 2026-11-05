@@ -79,13 +79,13 @@ public class RagMcpTools {
     }
 
     /**
-     * 将一段纯文本切块后写入知识库。
+     * 将一段纯文本按配置的切分策略切块后写入知识库。
      *
      * @param text     要入库的文本
      * @param metadata 文档元数据，例如 source、title
-     * @return 包含 documentId 与 chunkCount 的 JSON
+     * @return 包含 documentId、chunkCount 与 parentCount 的 JSON
      */
-    @McpTool(name = "rag_ingest", description = "将纯文本按分块写入知识库，可附带 source/title 等元数据")
+    @McpTool(name = "rag_ingest", description = "将纯文本按配置的切分策略写入知识库，可附带 source/title 等元数据")
     public String ragIngest(
             @McpToolParam(description = "要入库的文本", required = true) String text,
             @McpToolParam(description = "文档元数据键值对，可为空", required = false) Map<String, String> metadata) {
@@ -95,6 +95,7 @@ public class RagMcpTools {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("documentId", result.documentId());
             data.put("chunkCount", result.chunkCount());
+            data.put("parentCount", result.parentCount());
             return objectMapper.writeValueAsString(data);
         } catch (IllegalArgumentException e) {
             return error(e.getMessage());

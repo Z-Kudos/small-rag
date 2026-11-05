@@ -1,11 +1,14 @@
 package com.smallrag.ragmcp.rag;
 
+import com.smallrag.ragmcp.config.QdrantProperties;
 import com.smallrag.ragmcp.config.RagProperties;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.document.Document;
+import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
 
 import java.util.List;
 import java.util.Map;
@@ -14,6 +17,12 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -21,12 +30,16 @@ import static org.mockito.Mockito.when;
 
 class RagServiceTest {
 
+    private static ChunkingService chunkingService(RagProperties properties) {
+        return new ChunkingService(properties, mock(EmbeddingModel.class));
+    }
+
     @Test
     void emptyKnowledgeBaseShortCircuitsWithoutEmbedding() {
         VectorStore vectorStore = mock(VectorStore.class);
         RagProperties properties = new RagProperties();
 
-        RagService service = new RagService(vectorStore, properties, () -> true);
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> true, chunkingService(properties), mock(DocumentArchive.class));
 
         assertThat(service.query("项目支持哪些向量数据库？", 3))
                 .isEqualTo(properties.getEmptyContextAnswer());
@@ -39,7 +52,7 @@ class RagServiceTest {
         RagProperties properties = new RagProperties();
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
 
-        RagService service = new RagService(vectorStore, properties, () -> false);
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false, chunkingService(properties), mock(DocumentArchive.class));
 
         assertThat(service.query("任意问题", 3)).isEqualTo(properties.getEmptyContextAnswer());
     }
@@ -56,7 +69,7 @@ class RagServiceTest {
                 .build();
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(document));
 
-        RagService service = new RagService(vectorStore, properties, () -> false);
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false, chunkingService(properties), mock(DocumentArchive.class));
 
         assertThat(service.query("向量库是什么？", 3))
                 .contains("[1]")
@@ -68,7 +81,8 @@ class RagServiceTest {
     @Test
     void ingestSplitsPureTextIntoOverlappingChunks() {
         VectorStore vectorStore = mock(VectorStore.class);
-        RagService service = new RagService(vectorStore, new RagProperties(), () -> false);
+        RagProperties properties = new RagProperties();
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false, chunkingService(properties), mock(DocumentArchive.class));
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
@@ -79,20 +93,102 @@ class RagServiceTest {
         List<Document> documents = captor.getValue();
         assertThat(documents).hasSize(3);
         assertThat(result.chunkCount()).isEqualTo(3);
+        assertThat(result.parentCount()).isZero();
         assertThat(documents.get(0).getMetadata())
                 .containsEntry("doc_id", result.documentId())
                 .containsEntry("chunk_index", 0)
                 .containsEntry("chunk_count", 3)
+                .containsEntry("chunk_strategy", "fixed")
                 .containsEntry("source", "unit-test");
         assertThat(documents.get(1).getMetadata()).containsEntry("chunk_index", 1);
     }
 
     @Test
     void blankIngestTextIsRejected() {
-        RagService service = new RagService(mock(VectorStore.class), new RagProperties(), () -> false);
+        RagProperties properties = new RagProperties();
+        RagService service = new RagService(mock(VectorStore.class), properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), mock(DocumentArchive.class));
 
         assertThatThrownBy(() -> service.ingest("  ", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("不能为空");
+    }
+
+    @Test
+    void parentChildSearchFiltersChildrenAndExpandsParentText() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        properties.getChunking().setStrategy(ChunkingStrategy.PARENT_CHILD);
+
+        Document child = Document.builder()
+                .id(UUID.randomUUID().toString())
+                .text("命中的子块")
+                .metadata(Map.of(
+                        "chunk_type", "child",
+                        "parent_text", "父块正文包含完整上下文",
+                        "source", "handbook"))
+                .score(0.88)
+                .build();
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(child));
+
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false, chunkingService(properties), mock(DocumentArchive.class));
+
+        ArgumentCaptor<SearchRequest> requestCaptor = ArgumentCaptor.forClass(SearchRequest.class);
+        String context = service.query("上下文是什么？", 2);
+
+        verify(vectorStore).similaritySearch(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().hasFilterExpression()).isTrue();
+        assertThat(context)
+                .contains("父块正文包含完整上下文")
+                .contains("source=handbook")
+                .doesNotContain("命中的子块");
+    }
+
+    @Test
+    void ingestArchivesOriginalDocumentForAutomaticRechunk() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        DocumentArchive archive = mock(DocumentArchive.class);
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), archive);
+
+        RagService.IngestResult result = service.ingest("hello world", Map.of("source", "handbook"));
+
+        verify(archive).save(
+                eq(result.documentId()),
+                eq("hello world"),
+                eq(Map.of("source", "handbook")),
+                isNull());
+        verify(archive).markIndexed(eq(result.documentId()), anyString());
+    }
+
+    @Test
+    void ingestRemovesArchiveWhenVectorWriteFails() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        doThrow(new IllegalStateException("qdrant down")).when(vectorStore).add(anyList());
+        RagProperties properties = new RagProperties();
+        DocumentArchive archive = mock(DocumentArchive.class);
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), archive);
+
+        assertThatThrownBy(() -> service.ingest("hello", null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("qdrant down");
+        verify(archive).delete(anyString());
+    }
+
+    @Test
+    void reindexDeletesOldChunksBeforeAddingNewOnes() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), mock(DocumentArchive.class));
+        String documentId = UUID.randomUUID().toString();
+
+        service.reindex(documentId, "a".repeat(2000), Map.of());
+
+        var ordered = inOrder(vectorStore);
+        ordered.verify(vectorStore).delete(any(Filter.Expression.class));
+        ordered.verify(vectorStore).add(anyList());
     }
 }

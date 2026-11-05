@@ -1,242 +1,220 @@
 # small-rag
 
-基于 Spring AI 的**纯文本 RAG 检索**服务器：通过 MCP（Streamable HTTP）暴露 `rag_ingest`、`rag_search`、`rag_query`，向量库使用 **Qdrant**。
+基于 Spring AI 的**纯文本 RAG 检索**服务：通过 MCP（Streamable HTTP）暴露 `rag_ingest`、`rag_search`、`rag_query`，向量库使用 **Qdrant**，支持 `fixed` / `recursive` / `semantic` / `parent-child` 四种切分策略。
 
-> 本项目只使用 Embedding（向量）模型，**不装配 Chat / 生成模型**。`rag_query` 返回检索增强上下文，由调用方 Agent 自行生成回答。
+> 只使用 Embedding 模型，**不装配 Chat / 生成模型**；`rag_query` 返回增强上下文，回答由调用方 Agent 生成。
 
 ## 版本矩阵
 
 | 组件 | 版本 | 说明 |
 |---|---|---|
 | JDK | 25 | `maven.compiler.release=25` |
-| Spring Boot | 4.2.0-RC1 | 4.2.0 GA 尚未发布（截至 2026-11-04） |
-| Spring Cloud | 2026.0.0-RC1 | 2026.0.0 GA 尚未发布，与 Boot 4.2.0-RC1 对应 |
+| Spring Boot | 4.2.0-RC1 | GA 未发布（截至 2026-11） |
+| Spring Cloud | 2026.0.0-RC1 | 与 Boot 4.2.0-RC1 对应 |
 | Spring AI | 2.0.2 | Maven Central 稳定版 |
 | Qdrant | 1.x | gRPC 端口 6334 |
-| MCP 传输 | Streamable HTTP | `spring.ai.mcp.server.protocol=STREAMABLE` |
+| MCP | Streamable HTTP | 端点 `/mcp` |
 
-> 原始需求中的 `spring-boot-starter-parent:4.2.0` 与 `spring-cloud-dependencies:2026.0.0` 在 Maven 仓库中尚不存在，因此使用对应的 RC1；两者均从 `https://repo.spring.io/milestone` 解析，已在 `pom.xml` 配置。
+> Boot / Cloud 从 `https://repo.spring.io/milestone` 解析，已在 `pom.xml` 配置。
 
-## 前置依赖
+## 本地运行
 
-- JDK 25、Maven 3.9+
-- Qdrant（默认 `localhost:6334`，gRPC）
-- OpenAI 兼容的 **Embedding** 服务（官方 OpenAI、Ollama、vLLM、DashScope 等）
-
-启动 Qdrant：
+前置：JDK 25、Maven 3.9+、Qdrant，以及任意 OpenAI 兼容的 Embedding 服务（OpenAI、Ollama、vLLM 等）。
 
 ```bash
-podman run -d --name rag-qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant
-# 或 docker run -d --name rag-qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant
-```
+# Qdrant
+docker run -d --name rag-qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant
 
-若 Qdrant 启用了鉴权，设置 `QDRANT_API_KEY`。
-
-## 构建与启动
-
-```bash
-mvn clean package -DskipTests
-
-# 向量模型全部通过环境变量配置
+# Embedding（base-url 必须含 /v1）
 export EMBEDDING_API_KEY=sk-...
-export EMBEDDING_BASE_URL=https://api.openai.com/v1   # 可换成 http://localhost:11434/v1 等（必须含 /v1）
+export EMBEDDING_BASE_URL=https://api.openai.com/v1
 export EMBEDDING_MODEL=text-embedding-3-small
 export EMBEDDING_DIMENSION=1536
 
 mvn spring-boot:run
 ```
 
-默认端口 `18080`，MCP 端点为 `http://localhost:18080/mcp`。
+MCP 端点：`http://localhost:18080/mcp`。
 
-> 使用容器部署时，Qdrant 与 Ollama 与应用运行在**同一个容器**内，无需在宿主机安装。
+> 只接受 OpenAI 兼容的 HTTP 端点，不支持 JVM 内 ONNX / transformers；Ollama 示例：`EMBEDDING_BASE_URL=http://localhost:11434/v1`、`EMBEDDING_API_KEY=ollama`、`EMBEDDING_MODEL=bge-m3`、`EMBEDDING_DIMENSION=1024`。
 
-## 容器化部署（Docker / Podman）
+## 容器部署（单容器）
 
-容器采用**单容器**形态：应用、Qdrant、Ollama 运行在同一个镜像/容器内，由 `supervisord` 管理：
+镜像内同时运行应用、Qdrant、Ollama，由 `supervisord` 管理：
 
-| 进程 | 作用 | 监听地址 |
-|---|---|---|
-| `app` | small-rag（MCP + RAG） | `0.0.0.0:18080` |
-| `qdrant` | 向量库 | `127.0.0.1:6333` / `127.0.0.1:6334` |
-| `ollama` | 本地 Embedding 服务 | `127.0.0.1:11434` |
+| 进程 | 监听地址 |
+|---|---|
+| `app` | `0.0.0.0:18080` |
+| `qdrant` | `127.0.0.1:6333` / `127.0.0.1:6334` |
+| `ollama` | `127.0.0.1:11434` |
 
-- **只对外暴露 `18080` 一个端口**；Qdrant 与 Ollama 仅绑定回环地址，无法从容器外直接访问。
-- 数据目录统一放在 `/data`（Qdrant 数据 + Ollama 模型），建议挂载持久化卷。
-- 镜像由根目录 `Dockerfile` 多阶段构建：Maven 构建应用 → 运行时基于 Qdrant 官方镜像，复制 Temurin JRE 与 Ollama 的 CPU 运行时（剔除 CUDA/ROCm，控制镜像体积）。
-
-### Docker
+- **只对外暴露 `18080`**，其余服务仅绑定回环地址。
+- 数据统一存放在 `/data`（Qdrant 数据 + Ollama 模型 + 原始文档归档），建议挂载卷。
+- 运行时基于 Qdrant 官方镜像，复制 Temurin JRE 与 Ollama CPU 运行时（剔除 CUDA/ROCm）。
 
 ```bash
 cp .env.example .env
+
+# Docker
 docker compose up -d --build
-docker compose logs -f small-rag
+
+# Podman
+podman compose up -d --build   # 或 podman-compose up -d --build
 ```
 
-### Podman
+首次启动会等待 Ollama 并拉取默认模型 `modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF`（约 640 MB），日志出现 `embedding model ready` 后才开始监听 `18080`。手动预拉：`make pull-model`。
 
-```bash
-cp .env.example .env
-podman compose up -d --build
-# 或：podman-compose up -d --build
-```
-
-首次启动会自动等待 Ollama 就绪并拉取默认向量模型：
-
-```bash
-ollama pull modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF
-```
-
-容器内通过 Ollama `/api/pull` 完成同等操作，默认维度 `1024`；首次启动会等待模型下载完成（默认模型约 640 MB），随后才开始监听 `18080`，日志出现 `embedding model ready` 后即可访问 `http://localhost:18080/mcp`。
-
-也可以手动预拉：
-
-```bash
-make pull-model
-# Podman: make COMPOSE="podman compose" pull-model
-```
-
-### 单独构建/运行镜像
+单独构建/运行：
 
 ```bash
 docker build -t small-rag:1.0.0 .
 docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:1.0.0
-
-# Podman 相同
-podman build -t small-rag:1.0.0 .
-podman run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:1.0.0
 ```
 
-国内网络可通过 `.env` 覆盖基础镜像，例如：
+国内镜像可通过 `.env` 覆盖 `MAVEN_IMAGE` / `OLLAMA_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE`。使用 bind mount 时需保证容器内 UID `10001` 可写：`sudo chown -R 10001:10001 /path/to/data`。
 
-```dotenv
-MAVEN_IMAGE=docker.1ms.run/library/maven:3.9-eclipse-temurin-25
-OLLAMA_IMAGE=docker.1ms.run/ollama/ollama:latest
-QDRANT_IMAGE=docker.1ms.run/qdrant/qdrant:latest
-JRE_IMAGE=docker.1ms.run/library/eclipse-temurin:25-jre
-```
+### 换模型 / 外部 Embedding
 
-### 自定义模型与外部 Embedding
+- 换 Ollama 模型：修改 `EMBEDDING_MODEL` 与 `EMBEDDING_DIMENSION`，并换新的 `QDRANT_COLLECTION`。
+- 使用外部 Embedding：设置 `SMALL_RAG_ENSURE_OLLAMA_MODEL=false`，配置 `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`。
 
-- 换 Ollama 向量模型：修改 `.env` 中的 `EMBEDDING_MODEL` 与 `EMBEDDING_DIMENSION`，建议同时修改 `QDRANT_COLLECTION`，避免旧集合维度冲突。
-- 使用外部 OpenAI 兼容 Embedding：设置 `SMALL_RAG_ENSURE_OLLAMA_MODEL=false`，并配置 `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`（此时 Ollama 仍会启动，但不会被调用）。
-- 数据持久化在 `small_rag_data` 卷中；`docker compose down` 不会删除，`down -v` 才会。
-- 使用宿主机目录（bind mount）时，需保证容器内 UID `10001` 可写，例如 `sudo chown -R 10001:10001 /path/to/data`；使用命名卷则无需处理。
-
-## 环境变量
+## 配置
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `EMBEDDING_API_KEY` | 回退 `OPENAI_API_KEY`，再回退 `demo-key` | Embedding 服务密钥 |
-| `EMBEDDING_BASE_URL` | 回退 `OPENAI_BASE_URL`，再回退 `https://api.openai.com/v1` | OpenAI 兼容端点（**必须含 `/v1`**） |
-| `EMBEDDING_MODEL` | 回退 `OPENAI_EMBEDDING_MODEL`，再回退 `text-embedding-3-small` | 向量模型名 |
-| `EMBEDDING_DIMENSION` | 回退 `QDRANT_DIMENSION`，再回退 `1536` | 向量维度，必须与模型一致 |
+| `EMBEDDING_API_KEY` | 回退 `OPENAI_API_KEY`，再回退 `demo-key` | Embedding 密钥 |
+| `EMBEDDING_BASE_URL` | 回退 `OPENAI_BASE_URL`，再回退 `https://api.openai.com/v1` | 必须含 `/v1` |
+| `EMBEDDING_MODEL` | 回退 `OPENAI_EMBEDDING_MODEL`，再回退 `text-embedding-3-small` | 向量模型 |
+| `EMBEDDING_DIMENSION` | 回退 `QDRANT_DIMENSION`，再回退 `1536` | 必须与模型输出一致 |
+| `CHUNK_STRATEGY` | `fixed` | `fixed` / `recursive` / `semantic` / `parent-child` |
+| `CHUNK_SIZE` | `800` | 固定/递归目标块大小，语义切分默认上限 |
+| `CHUNK_OVERLAP` | `100` | 固定/递归块重叠 |
+| `SEMANTIC_SIMILARITY_THRESHOLD` | `0.75` | 相邻句子相似度低于该值时断开 |
+| `SEMANTIC_MIN_CHUNK_CHARS` | `200` | 语义切分目标最小块 |
+| `SEMANTIC_MAX_CHUNK_CHARS` | `0` | `0` 表示回落到 `CHUNK_SIZE` |
+| `PARENT_CHUNK_SIZE` | `2000` | Parent-Child 父块大小 |
+| `PARENT_CHUNK_OVERLAP` | `200` | Parent-Child 父块重叠 |
+| `CHILD_CHUNK_SIZE` | `400` | Parent-Child 子块大小（写入向量库） |
+| `CHILD_CHUNK_OVERLAP` | `50` | Parent-Child 子块重叠 |
+| `CHUNK_AUTO_RECHUNK` | `true` | 启动时检测切分配置变化并自动重切已归档文档 |
+| `SMALL_RAG_ARCHIVE_DIR` | `./data/documents`（镜像内 `/data/documents`） | 原始文档归档目录，自动重切的数据来源 |
 | `QDRANT_HOST` | `localhost` | Qdrant 地址 |
-| `QDRANT_PORT` | `6334` | gRPC 端口（不是 6333） |
-| `QDRANT_API_KEY` | 空 | Qdrant API Key |
-| `QDRANT_COLLECTION` | `small_rag_text` | 集合名，不存在时启动自动创建 |
-| `QDRANT_USE_TLS` | `false` | Qdrant 是否启用 TLS |
-| `SMALL_RAG_ENSURE_OLLAMA_MODEL` | `true`（镜像内默认） | 启动时通过 Ollama `/api/pull` 确保模型已存在 |
-| `OLLAMA_KEEP_ALIVE` | `-1` | Ollama 模型常驻内存（Compose 传入） |
+| `QDRANT_PORT` | `6334` | gRPC 端口 |
+| `QDRANT_API_KEY` | 空 | Qdrant 鉴权 |
+| `QDRANT_COLLECTION` | `small_rag_text` | 集合名，启动时自动创建 |
+| `QDRANT_USE_TLS` | `false` | 是否启用 TLS |
+| `SMALL_RAG_ENSURE_OLLAMA_MODEL` | `true`（镜像内） | 启动时确保 Ollama 模型存在 |
+| `OLLAMA_KEEP_ALIVE` | `-1` | Ollama 模型常驻内存 |
 
-> 镜像内默认值：`EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1`、`EMBEDDING_MODEL=modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF`、`EMBEDDING_DIMENSION=1024`、`QDRANT_HOST=127.0.0.1`、`SMALL_RAG_ENSURE_OLLAMA_MODEL=true`。完整默认值见 `.env.example` 与 `Dockerfile`。
+镜像内还会覆盖为：`EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1`、`EMBEDDING_MODEL=modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF`、`EMBEDDING_DIMENSION=1024`、`QDRANT_HOST=127.0.0.1`。
 
-⚠️ 切换 Embedding 模型后必须同步修改 `EMBEDDING_DIMENSION` 并重建集合；启动期会校验已存在集合的维度，不一致直接 fail-fast。
-
-### 本地向量模型
-
-当前实现使用 `spring-ai-starter-model-openai`，只要求目标是一个 **OpenAI 兼容的 HTTP 端点**，因此：
-
-- ✅ **支持**本地部署的 OpenAI 兼容服务：Ollama、vLLM、LM Studio、Xinference、LocalAI 等。
-- ❌ **不支持**在 JVM 进程内直接加载 ONNX / transformers 模型（那需要改用 `spring-ai-starter-model-transformers` 或 langchain4j 本地模型）。
-
-Ollama 示例：
-
-```bash
-ollama pull bge-m3
-
-export EMBEDDING_BASE_URL=http://localhost:11434/v1
-export EMBEDDING_API_KEY=ollama          # Ollama 不校验，但客户端要求非空
-export EMBEDDING_MODEL=bge-m3
-export EMBEDDING_DIMENSION=1024          # bge-m3 = 1024
-export QDRANT_COLLECTION=small_rag_text_bge_m3
-```
-
-常见本地模型维度：`nomic-embed-text` = 768，`bge-m3` = 1024，`qwen3-embedding:0.6b` = 1024。换模型时建议同时换 `QDRANT_COLLECTION`，避免与旧维度集合冲突。
+⚠️ 切换 Embedding 模型必须同步修改维度并重建集合；已存在集合维度不一致时启动直接失败。
 
 ## MCP 工具
 
 | 工具 | 用途 |
 |---|---|
-| `rag_ingest(text, metadata)` | 纯文本按 800/100 分块写入 Qdrant，返回 `documentId`、`chunkCount` |
-| `rag_search(query, topK)` | 仅检索，返回命中分块、相似度、来源元数据（JSON） |
-| `rag_query(query, topK)` | 检索并返回带编号/来源/相似度的增强上下文（不调用生成模型） |
+| `rag_ingest(text, metadata)` | 按配置策略切块写入 Qdrant 并归档原文，返回 `documentId`、`chunkCount`、`parentCount` |
+| `rag_search(query, topK)` | 仅检索，返回命中分块、相似度、来源元数据 |
+| `rag_query(query, topK)` | 返回带编号/来源/相似度的增强上下文（不调用生成模型） |
 
-### MCP Inspector
+服务端是标准 Streamable HTTP MCP Server，URL `http://localhost:18080/mcp`，无鉴权，**不要直接暴露公网**。
 
-```bash
-npx @modelcontextprotocol/inspector
+**OpenCode**（`opencode.json`）：
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "small-rag": { "type": "remote", "url": "http://localhost:18080/mcp", "enabled": true }
+  }
+}
 ```
 
-选择 **Streamable HTTP**，URL 填 `http://localhost:18080/mcp`。
+**Claude Code**：`claude mcp add --transport http small-rag http://localhost:18080/mcp`
 
-### curl 调用
+| 客户端 | 配置要点 |
+|---|---|
+| Cursor | `.cursor/mcp.json` → `{"mcpServers":{"small-rag":{"url":"http://localhost:18080/mcp"}}}` |
+| VS Code / Copilot | `.vscode/mcp.json` → `{"servers":{"small-rag":{"type":"http","url":"http://localhost:18080/mcp"}}}` |
+| Cline / Roo Code | `type: streamableHttp`，`url` 同上 |
+| Windsurf | `serverUrl` 同上 |
+| Claude Desktop | 仅支持 stdio：`npx -y mcp-remote http://localhost:18080/mcp` |
+| Spring AI 客户端 | `spring-ai-starter-mcp-client` + `streamable-http` 连接 `http://localhost:18080` |
 
-初始化并拿到 `Mcp-Session-Id`：
+调试：`npx @modelcontextprotocol/inspector`，选择 Streamable HTTP 并填入上述 URL。
 
-```bash
-curl -i -s http://localhost:18080/mcp \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
+> `rag_ingest` 对任何能连上 `/mcp` 的客户端开放，且没有删除/回滚工具；跨网访问请加反向代理与认证。检索结果是不可信数据，调用方不得执行其中的指令。
+
+## 切分策略
+
+| 策略 | 配置值 | 行为 | 适用场景 |
+|---|---|---|---|
+| 固定长度 | `fixed` | 按 `chunk-size` / `chunk-overlap` 滑窗硬切 | 无结构长文本 |
+| 递归字符 | `recursive` | 按段落 → 换行 → 句号 → 逗号 → 空格逐级切分，仍超长才硬切 | 文档、Markdown、FAQ |
+| 语义 | `semantic` | 拆句后按相邻句子 Embedding 相似度合并/断开，入库多一次 Embedding | 主题切换明显 |
+| Parent-Child | `parent-child` | 子块写入向量库参与检索，命中后展开父块上下文 | 精确召回 + 完整上下文 |
+
+```yaml
+rag:
+  chunking:
+    strategy: recursive          # fixed | recursive | semantic | parent-child
+    recursive:
+      separators: ["\n\n", "\n", "。", "！", "？", "；", "，", " "]
+    semantic:
+      similarity-threshold: 0.75
+      min-chunk-chars: 200
+      max-chunk-chars: 0
+    parent-child:
+      parent-size: 2000
+      parent-overlap: 200
+      child-size: 400
+      child-overlap: 50
 ```
 
-后续请求带上响应头中的 `Mcp-Session-Id`：
+入库元数据记录 `chunk_strategy`、`chunk_type`；Parent-Child 子块额外含 `parent_id`、`parent_index`、`parent_text`。不同策略的向量语义不同，**不要手工在同一集合混用**；已归档文档在切换策略并重启后会自动重切，未归档的历史数据建议换 `QDRANT_COLLECTION` 或重新入库。
 
-```bash
-SESSION=<上一步响应头中的值>
+### 自动重切
 
-# 入库
-curl -s http://localhost:18080/mcp \
-  -H "Mcp-Session-Id: $SESSION" \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rag_ingest","arguments":{"text":"Spring AI 提供 MCP Server 与 RAG 能力。","metadata":{"source":"demo"}}}}'
+启用 `rag.chunking.auto-rechunk`（默认 `true`）后，应用启动时会：
 
-# 检索（结构化）
-curl -s http://localhost:18080/mcp \
-  -H "Mcp-Session-Id: $SESSION" \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rag_search","arguments":{"query":"Spring AI 提供什么能力？","topK":3}}}'
+1. 计算当前切分配置签名（策略、块大小/重叠、分隔符、语义阈值、Parent-Child 尺寸）；
+2. 扫描 `SMALL_RAG_ARCHIVE_DIR` 中的原始文档归档；
+3. 对签名不一致的文档，按 `doc_id` 删除旧片段，再用当前策略重新切分、Embedding 并写入 Qdrant；
+4. 成功后更新归档签名；单篇失败只告警，下次启动继续重试，连续 3 篇失败会中止本次任务。
 
-# 检索（增强上下文）
-curl -s http://localhost:18080/mcp \
-  -H "Mcp-Session-Id: $SESSION" \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"rag_query","arguments":{"query":"Spring AI 提供什么能力？","topK":3}}}'
-```
+因此修改 `CHUNK_STRATEGY` 或相关切分参数后，**重启应用即可自动重切**。原始文档归档是重切的前提：
 
-## RAG 设计
+- 容器内默认 `/data/documents`，位于 `small_rag_data` 持久化卷内；
+- 本地运行默认 `./data/documents`（已在 `.gitignore` 中）；
+- 归档目录不可写时，应用仍可正常入库/检索，但自动重切不可用。
 
-- **仅向量模型**：`spring.ai.model.chat=none`，不会创建 ChatModel / ChatClient。
-- **分块**：800 字符 / 100 字符重叠（`rag.chunk-size`、`rag.chunk-overlap`），与 whale 默认策略一致。
-- **相似度阈值**：`rag.min-score=0.35`，低于阈值的片段直接丢弃。
-- **上下文预算**：单片段最多 1200 字符，总预算 12000 字符，超出按相似度优先截断。
-- **空库短路**：检索前用 Qdrant `count` 判断是否为空，避免无意义的 Embedding 调用。
-- **集合初始化**：Qdrant 不可用时只告警、不阻断启动（fail-soft）；集合已存在但维度不一致时 fail-fast。
-- **错误收敛**：MCP 工具把运行期异常收敛为 `{"error": "..."}` JSON，不向客户端抛协议层异常。
+设置 `CHUNK_AUTO_RECHUNK=false` 可关闭该行为。
+
+签名同时包含目标 `QDRANT_COLLECTION`：切换到新集合后启动，会把归档中的文档重建到新集合。如果新集合是另一套独立知识库，请同时换用独立的 `SMALL_RAG_ARCHIVE_DIR`。
+
+⚠️ 该功能只对**归档功能启用后入库的文档**生效。启用前已存在于 Qdrant 的历史数据没有原文，无法可靠重建；请重新 `rag_ingest` 一次，或换新集合后全量重建。
+
+## 设计要点
+
+- **仅向量模型**：`spring.ai.model.chat=none`，不创建 ChatModel / ChatClient。
+- **阈值与预算**：`rag.min-score=0.35`；单片段最多 1200 字符，总上下文 12000 字符。
+- **空库短路**：检索前用 Qdrant `count` 判断，避免无意义 Embedding 调用。
+- **启动韧性**：Qdrant 不可用只告警（fail-soft）；集合维度不一致直接失败（fail-fast）。
+- **自动重切**：原始文档归档 + 切分配置签名，启动时检测到变化后自动删除旧片段并重建。
+- **重切时机**：在应用启动时同步执行（HTTP 服务已就绪），失败不阻断启动，下次启动继续重试。
+- **错误收敛**：MCP 工具把运行期异常转为 `{"error": "..."}`，不抛协议层异常。
 
 ## 架构
 
 ```
 mcp/       RagMcpTools：rag_ingest / rag_search / rag_query
-rag/       RagService（分块入库 + 向量检索 + 上下文拼装）、TextChunker、KnowledgeBaseProbe
+rag/       RagService、ChunkingService、TextChunker、RecursiveTextChunker、
+           SemanticTextChunker、KnowledgeBaseProbe、DocumentArchive、
+           ChunkingSignature、ChunkingReindexRunner
 config/    QdrantConfig、McpServerConfig、RagProperties、QdrantProperties
-docker/    start-qdrant.sh / start-ollama.sh / start-app.sh / supervisord.conf（单容器内进程编排）
+docker/    start-qdrant.sh / start-ollama.sh / start-app.sh / supervisord.conf
 ```
-
-根目录的 `Dockerfile`、`compose.yaml`、`.env.example` 提供 Docker / Podman 容器化部署。
 
 `VectorStore` 与 `EmbeddingModel` 均按 Spring AI 接口注入。
 
@@ -246,11 +224,11 @@ docker/    start-qdrant.sh / start-ollama.sh / start-app.sh / supervisord.conf�
 mvn test
 ```
 
-单测不依赖 Qdrant / 模型密钥；端到端验证需先启动 Qdrant 并配置 Embedding 服务。
+单测不依赖 Qdrant / 模型密钥；端到端需启动 Qdrant 并配置 Embedding 服务。
 
 ## 与原始需求的差异
 
-- `spring-ai-starter-model-embedding` 在 Spring AI 2.0.2 中不存在；Embedding 由具体模型 starter 提供，这里使用 `spring-ai-starter-model-openai`，并关闭 Chat 自动配置。
-- 原始需求锁定 Boot `4.2.0` / Cloud `2026.0.0`，但二者 GA 尚未发布，按规范回退到 RC1 并使用 Spring Milestone 仓库。
-- 向量库按最新要求改为 Qdrant，仅保留纯文本 RAG（不含 Tika / OCR / 图谱 / 混合检索）。
-- 按最新要求只使用向量模型，不调用 Chat / 生成模型。
+- Spring AI 2.0.2 没有 `spring-ai-starter-model-embedding`，改用 `spring-ai-starter-model-openai` 并关闭 Chat。
+- Boot `4.2.0` / Cloud `2026.0.0` GA 未发布，按规范回退到 RC1。
+- 向量库改为 Qdrant，仅保留纯文本 RAG（不含 Tika / OCR / 图谱 / 混合检索）。
+- 只使用向量模型，不调用 Chat / 生成模型。

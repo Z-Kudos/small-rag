@@ -35,7 +35,9 @@
 ## 架构分层
 
 - `mcp` 包：`RagMcpTools` 暴露 `rag_query`、`rag_search`、`rag_ingest`。该类**不是** `@Component`，由 `McpServerConfig` 显式注册为 Bean。工具方法必须写 Javadoc——Spring AI 注解扫描把它作为工具描述发给客户端。
-- `rag` 包：`RagService` 只做“分块入库 + 向量检索 + 上下文拼装”，**不调用 Chat/生成模型**；`TextChunker` 负责 800/100 定长滑窗分块；`KnowledgeBaseProbe` 负责空库短路。
+- `rag` 包：`RagService` 只做“分块入库 + 向量检索 + 上下文拼装”，**不调用 Chat/生成模型**；`ChunkingService` 按 `rag.chunking.strategy` 选择 `fixed` / `recursive` / `semantic` / `parent-child`，`TextChunker` 负责定长滑窗，`RecursiveTextChunker` 负责分隔符递归，`SemanticTextChunker` 负责句子相似度合并；`KnowledgeBaseProbe` 负责空库短路。
+- **切分策略**：Parent-Child 只把子块写入向量库，父块正文放在子块 metadata 的 `parent_text`；检索时按 `chunk_type=child` 过滤并展开父块。已归档文档在切换策略并重启后会自动重切；未归档的历史数据不会，需重新入库。
+- **自动重切**：`DocumentArchive` 把原文按 `doc_id` 归档到 `rag.archive-dir`，`ChunkingSignature` 记录影响切分结果的配置；启动时 `ChunkingReindexRunner` 对比签名，对不一致的文档按 `doc_id` 删除旧片段并重建。归档目录不可写时降级为关闭自动重切，不阻断入库。
 - `config` 包：`QdrantConfig`（QdrantClient / QdrantVectorStore / 集合初始化 / 探活）、`McpServerConfig`、`RagProperties`、`QdrantProperties`。
 - **只使用向量模型**：`spring.ai.model.chat=none`；不要新增 `ChatClient` / `ChatModel` 依赖或 Bean。`rag_query` 返回增强上下文，生成由调用方 Agent 完成。
 - **Embedding 通过环境变量配置**：`EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`（分别回退 `OPENAI_*`）。新增配置时保持这一入口。

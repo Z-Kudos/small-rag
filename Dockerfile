@@ -81,7 +81,15 @@ ENV JAVA_HOME=/opt/java/openjdk \
     OLLAMA_MODELS="/data/ollama/models" \
     OLLAMA_LIBRARY_PATH="/usr/lib/ollama" \
     OLLAMA_KEEP_ALIVE="-1" \
-    SMALL_RAG_ENSURE_OLLAMA_MODEL="true"
+    SMALL_RAG_ENSURE_OLLAMA_MODEL="true" \
+    CHUNK_STRATEGY="fixed" \
+    CHUNK_SIZE="800" \
+    CHUNK_OVERLAP="100" \
+    CHUNK_AUTO_RECHUNK="true" \
+    SMALL_RAG_ARCHIVE_DIR="/data/documents" \
+    SEMANTIC_SIMILARITY_THRESHOLD="0.75" \
+    PARENT_CHUNK_SIZE="2000" \
+    CHILD_CHUNK_SIZE="400"
 
 USER root
 
