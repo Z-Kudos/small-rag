@@ -1,13 +1,13 @@
 # small-rag
 
-基于 Spring AI 的**纯文本 RAG 检索**服务：通过 MCP（Streamable HTTP）暴露 `rag_ingest`、`rag_search`、`rag_query`，向量库使用 **Qdrant**，支持 `fixed` / `recursive` / `semantic` / `parent-child` 四种切分策略。
+基于 Spring AI 的提供给 AGENT 调用的**纯文本 RAG 检索** MCP 服务（仅处理向量入库和检索，不做Chat问答）：通过 MCP（Streamable HTTP）暴露 `rag_ingest`、`rag_search`、`rag_query`，向量库使用 **Qdrant**，支持 `fixed` / `recursive` / `semantic` / `parent-child` 四种切分策略。
 
-> 只使用 Embedding 模型，**不装配 Chat / 生成模型**；`rag_query` 返回增强上下文，回答由调用方 Agent 生成。
+> `rag_query` 返回增强上下文，回答由调用方 Agent 生成。
 
 ## 版本矩阵
 
 | 组件 | 版本 | 说明 |
-|---|---|---|
+| --- | --- | --- |
 | JDK | 25 | `maven.compiler.release=25` |
 | Spring Boot | 4.2.0-RC1 | GA 未发布（截至 2026-11） |
 | Spring Cloud | 2026.0.0-RC1 | 与 Boot 4.2.0-RC1 对应 |
@@ -19,31 +19,34 @@
 
 ## 本地运行
 
-前置：JDK 25、Maven 3.9+、Qdrant，以及任意 OpenAI 兼容的 Embedding 服务（OpenAI、Ollama、vLLM 等）。
+前置：JDK 25、Maven 3.9+、Qdrant，以及任意 OpenAI 兼容的 Embedding 服务（这里采用本地 Ollama 默认配置拉取）。
 
 ```bash
 # Qdrant
 docker run -d --name rag-qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant
 
-# Embedding（base-url 必须含 /v1）
-export EMBEDDING_API_KEY=sk-...
-export EMBEDDING_BASE_URL=https://api.openai.com/v1
-export EMBEDDING_MODEL=text-embedding-3-small
-export EMBEDDING_DIMENSION=1536
+# Ollama 与本地向量模型（Qwen3-Embedding-0.6B，1024 维）
+ollama pull modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF
+
+# Embedding（base-url 必须含 /v1；Ollama 不校验 key，但客户端要求非空）
+export EMBEDDING_API_KEY=ollama
+export EMBEDDING_BASE_URL=http://localhost:11434/v1
+export EMBEDDING_MODEL=modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF
+export EMBEDDING_DIMENSION=1024
 
 mvn spring-boot:run
 ```
 
 MCP 端点：`http://localhost:18080/mcp`。
 
-> 只接受 OpenAI 兼容的 HTTP 端点，不支持 JVM 内 ONNX / transformers；Ollama 示例：`EMBEDDING_BASE_URL=http://localhost:11434/v1`、`EMBEDDING_API_KEY=ollama`、`EMBEDDING_MODEL=bge-m3`、`EMBEDDING_DIMENSION=1024`。
+> `EMBEDDING_DIMENSION=1024` 必须与 Qdrant 集合维度一致。如果之前用 `text-embedding-3-small`（1536 维）创建过集合，请设置新的 `QDRANT_COLLECTION` 或删除旧集合后再启动。
 
 ## 容器部署（单容器）
 
 镜像内同时运行应用、Qdrant、Ollama，由 `supervisord` 管理：
 
 | 进程 | 监听地址 |
-|---|---|
+| --- | --- |
 | `app` | `0.0.0.0:18080` |
 | `qdrant` | `127.0.0.1:6333` / `127.0.0.1:6334` |
 | `ollama` | `127.0.0.1:11434` |
@@ -81,7 +84,7 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 ## 配置
 
 | 变量 | 默认值 | 说明 |
-|---|---|---|
+| --- | --- | --- |
 | `EMBEDDING_API_KEY` | 回退 `OPENAI_API_KEY`，再回退 `demo-key` | Embedding 密钥 |
 | `EMBEDDING_BASE_URL` | 回退 `OPENAI_BASE_URL`，再回退 `https://api.openai.com/v1` | 必须含 `/v1` |
 | `EMBEDDING_MODEL` | 回退 `OPENAI_EMBEDDING_MODEL`，再回退 `text-embedding-3-small` | 向量模型 |
@@ -108,12 +111,14 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 
 镜像内还会覆盖为：`EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1`、`EMBEDDING_MODEL=modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF`、`EMBEDDING_DIMENSION=1024`、`QDRANT_HOST=127.0.0.1`。
 
+> 本地运行示例也使用 Ollama 的 Qwen3-Embedding-0.6B；如果完全不设置 `EMBEDDING_*`，应用会回退到表中的 OpenAI 默认值（1536 维）。
+
 ⚠️ 切换 Embedding 模型必须同步修改维度并重建集合；已存在集合维度不一致时启动直接失败。
 
 ## MCP 工具
 
 | 工具 | 用途 |
-|---|---|
+| --- | --- |
 | `rag_ingest(text, metadata)` | 按配置策略切块写入 Qdrant 并归档原文，返回 `documentId`、`chunkCount`、`parentCount` |
 | `rag_search(query, topK)` | 仅检索，返回命中分块、相似度、来源元数据 |
 | `rag_query(query, topK)` | 返回带编号/来源/相似度的增强上下文（不调用生成模型） |
@@ -134,7 +139,7 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 **Claude Code**：`claude mcp add --transport http small-rag http://localhost:18080/mcp`
 
 | 客户端 | 配置要点 |
-|---|---|
+| --- | --- |
 | Cursor | `.cursor/mcp.json` → `{"mcpServers":{"small-rag":{"url":"http://localhost:18080/mcp"}}}` |
 | VS Code / Copilot | `.vscode/mcp.json` → `{"servers":{"small-rag":{"type":"http","url":"http://localhost:18080/mcp"}}}` |
 | Cline / Roo Code | `type: streamableHttp`，`url` 同上 |
@@ -149,7 +154,7 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 ## 切分策略
 
 | 策略 | 配置值 | 行为 | 适用场景 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 固定长度 | `fixed` | 按 `chunk-size` / `chunk-overlap` 滑窗硬切 | 无结构长文本 |
 | 递归字符 | `recursive` | 按段落 → 换行 → 句号 → 逗号 → 空格逐级切分，仍超长才硬切 | 文档、Markdown、FAQ |
 | 语义 | `semantic` | 拆句后按相邻句子 Embedding 相似度合并/断开，入库多一次 Embedding | 主题切换明显 |
