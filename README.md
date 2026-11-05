@@ -46,7 +46,81 @@ export EMBEDDING_DIMENSION=1536
 mvn spring-boot:run
 ```
 
-默认端口 `8080`，MCP 端点为 `http://localhost:8080/mcp`。
+默认端口 `18080`，MCP 端点为 `http://localhost:18080/mcp`。
+
+> 使用容器部署时，Qdrant 与 Ollama 与应用运行在**同一个容器**内，无需在宿主机安装。
+
+## 容器化部署（Docker / Podman）
+
+容器采用**单容器**形态：应用、Qdrant、Ollama 运行在同一个镜像/容器内，由 `supervisord` 管理：
+
+| 进程 | 作用 | 监听地址 |
+|---|---|---|
+| `app` | small-rag（MCP + RAG） | `0.0.0.0:18080` |
+| `qdrant` | 向量库 | `127.0.0.1:6333` / `127.0.0.1:6334` |
+| `ollama` | 本地 Embedding 服务 | `127.0.0.1:11434` |
+
+- **只对外暴露 `18080` 一个端口**；Qdrant 与 Ollama 仅绑定回环地址，无法从容器外直接访问。
+- 数据目录统一放在 `/data`（Qdrant 数据 + Ollama 模型），建议挂载持久化卷。
+- 镜像由根目录 `Dockerfile` 多阶段构建：Maven 构建应用 → 运行时基于 Qdrant 官方镜像，复制 Temurin JRE 与 Ollama 的 CPU 运行时（剔除 CUDA/ROCm，控制镜像体积）。
+
+### Docker
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+docker compose logs -f small-rag
+```
+
+### Podman
+
+```bash
+cp .env.example .env
+podman compose up -d --build
+# 或：podman-compose up -d --build
+```
+
+首次启动会自动等待 Ollama 就绪并拉取默认向量模型：
+
+```bash
+ollama pull modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF
+```
+
+容器内通过 Ollama `/api/pull` 完成同等操作，默认维度 `1024`；首次启动会等待模型下载完成（默认模型约 640 MB），随后才开始监听 `18080`，日志出现 `embedding model ready` 后即可访问 `http://localhost:18080/mcp`。
+
+也可以手动预拉：
+
+```bash
+make pull-model
+# Podman: make COMPOSE="podman compose" pull-model
+```
+
+### 单独构建/运行镜像
+
+```bash
+docker build -t small-rag:1.0.0 .
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:1.0.0
+
+# Podman 相同
+podman build -t small-rag:1.0.0 .
+podman run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:1.0.0
+```
+
+国内网络可通过 `.env` 覆盖基础镜像，例如：
+
+```dotenv
+MAVEN_IMAGE=docker.1ms.run/library/maven:3.9-eclipse-temurin-25
+OLLAMA_IMAGE=docker.1ms.run/ollama/ollama:latest
+QDRANT_IMAGE=docker.1ms.run/qdrant/qdrant:latest
+JRE_IMAGE=docker.1ms.run/library/eclipse-temurin:25-jre
+```
+
+### 自定义模型与外部 Embedding
+
+- 换 Ollama 向量模型：修改 `.env` 中的 `EMBEDDING_MODEL` 与 `EMBEDDING_DIMENSION`，建议同时修改 `QDRANT_COLLECTION`，避免旧集合维度冲突。
+- 使用外部 OpenAI 兼容 Embedding：设置 `SMALL_RAG_ENSURE_OLLAMA_MODEL=false`，并配置 `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`（此时 Ollama 仍会启动，但不会被调用）。
+- 数据持久化在 `small_rag_data` 卷中；`docker compose down` 不会删除，`down -v` 才会。
+- 使用宿主机目录（bind mount）时，需保证容器内 UID `10001` 可写，例如 `sudo chown -R 10001:10001 /path/to/data`；使用命名卷则无需处理。
 
 ## 环境变量
 
@@ -61,6 +135,10 @@ mvn spring-boot:run
 | `QDRANT_API_KEY` | 空 | Qdrant API Key |
 | `QDRANT_COLLECTION` | `small_rag_text` | 集合名，不存在时启动自动创建 |
 | `QDRANT_USE_TLS` | `false` | Qdrant 是否启用 TLS |
+| `SMALL_RAG_ENSURE_OLLAMA_MODEL` | `true`（镜像内默认） | 启动时通过 Ollama `/api/pull` 确保模型已存在 |
+| `OLLAMA_KEEP_ALIVE` | `-1` | Ollama 模型常驻内存（Compose 传入） |
+
+> 镜像内默认值：`EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1`、`EMBEDDING_MODEL=modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF`、`EMBEDDING_DIMENSION=1024`、`QDRANT_HOST=127.0.0.1`、`SMALL_RAG_ENSURE_OLLAMA_MODEL=true`。完整默认值见 `.env.example` 与 `Dockerfile`。
 
 ⚠️ 切换 Embedding 模型后必须同步修改 `EMBEDDING_DIMENSION` 并重建集合；启动期会校验已存在集合的维度，不一致直接 fail-fast。
 
@@ -99,14 +177,14 @@ export QDRANT_COLLECTION=small_rag_text_bge_m3
 npx @modelcontextprotocol/inspector
 ```
 
-选择 **Streamable HTTP**，URL 填 `http://localhost:8080/mcp`。
+选择 **Streamable HTTP**，URL 填 `http://localhost:18080/mcp`。
 
 ### curl 调用
 
 初始化并拿到 `Mcp-Session-Id`：
 
 ```bash
-curl -i -s http://localhost:8080/mcp \
+curl -i -s http://localhost:18080/mcp \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
@@ -118,21 +196,21 @@ curl -i -s http://localhost:8080/mcp \
 SESSION=<上一步响应头中的值>
 
 # 入库
-curl -s http://localhost:8080/mcp \
+curl -s http://localhost:18080/mcp \
   -H "Mcp-Session-Id: $SESSION" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rag_ingest","arguments":{"text":"Spring AI 提供 MCP Server 与 RAG 能力。","metadata":{"source":"demo"}}}}'
 
 # 检索（结构化）
-curl -s http://localhost:8080/mcp \
+curl -s http://localhost:18080/mcp \
   -H "Mcp-Session-Id: $SESSION" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rag_search","arguments":{"query":"Spring AI 提供什么能力？","topK":3}}}'
 
 # 检索（增强上下文）
-curl -s http://localhost:8080/mcp \
+curl -s http://localhost:18080/mcp \
   -H "Mcp-Session-Id: $SESSION" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
@@ -155,7 +233,10 @@ curl -s http://localhost:8080/mcp \
 mcp/       RagMcpTools：rag_ingest / rag_search / rag_query
 rag/       RagService（分块入库 + 向量检索 + 上下文拼装）、TextChunker、KnowledgeBaseProbe
 config/    QdrantConfig、McpServerConfig、RagProperties、QdrantProperties
+docker/    start-qdrant.sh / start-ollama.sh / start-app.sh / supervisord.conf（单容器内进程编排）
 ```
+
+根目录的 `Dockerfile`、`compose.yaml`、`.env.example` 提供 Docker / Podman 容器化部署。
 
 `VectorStore` 与 `EmbeddingModel` 均按 Spring AI 接口注入。
 

@@ -22,6 +22,16 @@
 - **JDK 23+ 默认不自动发现注解处理器**：必须设置 `<maven.compiler.proc>full</maven.compiler.proc>`，否则 Lombok 的 `@Slf4j`/getter 全部“找不到符号”。
 - 验证命令：`mvn clean package -DskipTests`；单测用 `mvn test`。
 
+## 容器化
+
+- **单容器架构**：`Dockerfile` 最终镜像同时包含应用、Qdrant、Ollama，`supervisord` 作为 PID 1 管理三个进程；不要拆成 compose 多服务，也不要把依赖做成 sidecar。
+- 只对外暴露 **18080**（应用）；Qdrant（6333/6334）与 Ollama（11434）必须绑定 `127.0.0.1`。
+- 多阶段构建：`maven:3.9-eclipse-temurin-25` 构建应用 → 运行时基于 `qdrant/qdrant`，复制 Temurin JRE 与 Ollama 的 CPU 运行时（剔除 CUDA/ROCm）；基础镜像可用 `MAVEN_IMAGE` / `OLLAMA_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE` 构建参数替换。
+- 默认向量模型 `modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF`，维度 1024；`docker/start-app.sh` 在 `SMALL_RAG_ENSURE_OLLAMA_MODEL=true` 时等待 Ollama 并调用 `/api/pull`。
+- 启动脚本：`docker/start-qdrant.sh`、`docker/start-ollama.sh`、`docker/start-app.sh`，由 `docker/supervisord.conf` 调度；数据统一放在 `/data`（Qdrant + Ollama 模型）。
+- 新增容器配置时保持 `Dockerfile`、`compose.yaml`、`.env.example`、`README.md` 的端口与默认值一致；不要把 `.env` 或密钥提交到仓库。
+- Podman 命令：`podman compose up -d --build` 或 `podman-compose up -d --build`；两者都读取同一份 `compose.yaml`。
+
 ## 架构分层
 
 - `mcp` 包：`RagMcpTools` 暴露 `rag_query`、`rag_search`、`rag_ingest`。该类**不是** `@Component`，由 `McpServerConfig` 显式注册为 Bean。工具方法必须写 Javadoc——Spring AI 注解扫描把它作为工具描述发给客户端。

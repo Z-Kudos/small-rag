@@ -1,0 +1,41 @@
+name: small-rag
+
+services:
+  small-rag:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        MAVEN_IMAGE: ${MAVEN_IMAGE:-docker.io/library/maven:3.9-eclipse-temurin-25}
+        OLLAMA_IMAGE: ${OLLAMA_IMAGE:-docker.io/ollama/ollama:latest}
+        QDRANT_IMAGE: ${QDRANT_IMAGE:-docker.io/qdrant/qdrant:latest}
+        JRE_IMAGE: ${JRE_IMAGE:-docker.io/library/eclipse-temurin:25-jre}
+    image: small-rag:${APP_IMAGE_TAG:-1.0.0}
+    restart: unless-stopped
+    # 单容器只对外暴露一个端口：应用 18080
+    ports:
+      - "${APP_PORT:-18080}:18080"
+    environment:
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://127.0.0.1:11434/v1}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-ollama}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF}
+      # Qwen3-Embedding-0.6B 输出 1024 维，必须与 Qdrant 集合维度一致
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-small_rag_text}
+      # 留空表示不启用鉴权
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      # true：启动时等待 Ollama 并确保 EMBEDDING_MODEL 已拉取
+      SMALL_RAG_ENSURE_OLLAMA_MODEL: ${SMALL_RAG_ENSURE_OLLAMA_MODEL:-true}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:--1}
+    volumes:
+      # Qdrant 数据 + Ollama 模型
+      - small_rag_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/18080'"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 300s
+
+volumes:
+  small_rag_data:
