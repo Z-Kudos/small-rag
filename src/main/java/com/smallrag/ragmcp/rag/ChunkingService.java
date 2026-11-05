@@ -49,6 +49,7 @@ public class ChunkingService {
             case FIXED -> new ChunkingResult(fixed(text), 0);
             case RECURSIVE -> new ChunkingResult(recursive(text), 0);
             case SEMANTIC -> new ChunkingResult(semantic(text), 0);
+            case MARKDOWN -> new ChunkingResult(markdown(text), 0);
             case PARENT_CHILD -> parentChild(text, documentId);
         };
     }
@@ -63,7 +64,7 @@ public class ChunkingService {
 
     private List<TextChunk> fixed(String text) {
         List<String> parts = TextChunker.chunk(text, properties.getChunkSize(), properties.getChunkOverlap());
-        return toChunks(parts);
+        return toPlainChunks(parts);
     }
 
     private List<TextChunk> recursive(String text) {
@@ -72,7 +73,7 @@ public class ChunkingService {
                 properties.getChunkSize(),
                 properties.getChunkOverlap(),
                 separators());
-        return toChunks(parts);
+        return toPlainChunks(parts);
     }
 
     private List<TextChunk> semantic(String text) {
@@ -87,47 +88,91 @@ public class ChunkingService {
                 config.getMinChunkChars(),
                 config.getSimilarityThreshold(),
                 config.getBatchSize());
-        return toChunks(parts);
+        return toPlainChunks(parts);
+    }
+
+    private List<TextChunk> markdown(String text) {
+        return withChunkType(MarkdownChunker.chunk(
+                text,
+                properties.getChunkSize(),
+                properties.getChunkOverlap(),
+                headingSeparator(),
+                Map.of()));
     }
 
     private ChunkingResult parentChild(String text, String documentId) {
         RagProperties.ParentChild config = properties.getChunking().getParentChild();
-        List<String> separators = separators();
-        List<String> parents = RecursiveTextChunker.chunk(
+        String separator = headingSeparator();
+        List<TextChunk> parents = MarkdownChunker.chunk(
                 text,
                 config.getParentSize(),
                 config.getParentOverlap(),
-                separators);
+                separator,
+                Map.of());
 
         List<TextChunk> chunks = new ArrayList<>();
         for (int parentIndex = 0; parentIndex < parents.size(); parentIndex++) {
-            String parentText = parents.get(parentIndex);
+            TextChunk parent = parents.get(parentIndex);
+            String parentText = parent.text();
             String parentId = documentId + "#p" + parentIndex;
-            List<String> children = RecursiveTextChunker.chunk(
+
+            // 父块已经带有完整 heading_path；子块重新解析时只继承非标题元数据，
+            // 解析完后再把完整标题路径补回，避免只得到当前标题。
+            Map<String, Object> childBase = new LinkedHashMap<>(parent.metadata());
+            childBase.remove(MarkdownChunker.FIELD_HEADING);
+            childBase.remove(MarkdownChunker.FIELD_HEADING_LEVEL);
+            childBase.remove(MarkdownChunker.FIELD_HEADING_PATH);
+            childBase.remove("wikilinks");
+            childBase.remove("oversized_block");
+            List<TextChunk> children = MarkdownChunker.chunk(
                     parentText,
                     config.getChildSize(),
                     config.getChildOverlap(),
-                    separators);
+                    separator,
+                    childBase);
 
-            for (String child : children) {
-                Map<String, Object> metadata = new LinkedHashMap<>();
+            Object parentHeadingPath = parent.metadata().get(MarkdownChunker.FIELD_HEADING_PATH);
+            for (TextChunk child : children) {
+                Map<String, Object> metadata = new LinkedHashMap<>(child.metadata());
+                if (parentHeadingPath != null) {
+                    metadata.put(MarkdownChunker.FIELD_HEADING_PATH, parentHeadingPath);
+                    metadata.put(MarkdownChunker.FIELD_HEADING,
+                            parent.metadata().get(MarkdownChunker.FIELD_HEADING));
+                    metadata.put(MarkdownChunker.FIELD_HEADING_LEVEL,
+                            parent.metadata().get(MarkdownChunker.FIELD_HEADING_LEVEL));
+                }
                 metadata.put(FIELD_CHUNK_TYPE, CHUNK_TYPE_CHILD);
                 metadata.put(FIELD_PARENT_ID, parentId);
                 metadata.put(FIELD_PARENT_INDEX, parentIndex);
                 metadata.put(FIELD_PARENT_TEXT, parentText);
-                chunks.add(new TextChunk(child, metadata));
+                chunks.add(new TextChunk(child.text(), metadata));
             }
         }
         log.debug("Parent-Child 切分完成: parents={}, children={}", parents.size(), chunks.size());
         return new ChunkingResult(chunks, parents.size());
     }
 
-    private List<TextChunk> toChunks(List<String> parts) {
+    private List<TextChunk> toPlainChunks(List<String> parts) {
         List<TextChunk> chunks = new ArrayList<>(parts.size());
         for (String part : parts) {
             chunks.add(new TextChunk(part, Map.of(FIELD_CHUNK_TYPE, CHUNK_TYPE_CHUNK)));
         }
         return chunks;
+    }
+
+    private List<TextChunk> withChunkType(List<TextChunk> chunks) {
+        List<TextChunk> result = new ArrayList<>(chunks.size());
+        for (TextChunk chunk : chunks) {
+            Map<String, Object> metadata = new LinkedHashMap<>(chunk.metadata());
+            metadata.put(FIELD_CHUNK_TYPE, CHUNK_TYPE_CHUNK);
+            result.add(new TextChunk(chunk.text(), metadata));
+        }
+        return result;
+    }
+
+    private String headingSeparator() {
+        String separator = properties.getChunking().getMarkdown().getHeadingSeparator();
+        return (separator == null || separator.isBlank()) ? " > " : separator;
     }
 
     private List<String> separators() {

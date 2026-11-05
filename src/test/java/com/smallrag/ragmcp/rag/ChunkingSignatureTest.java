@@ -59,4 +59,15 @@ class ChunkingSignatureTest {
         assertThat(ChunkingSignature.of(properties, "collection_a"))
                 .isNotEqualTo(ChunkingSignature.of(properties, "collection_b"));
     }
+
+    @Test
+    void changingMarkdownHeadingSeparatorChangesSignature() {
+        RagProperties properties = new RagProperties();
+        properties.getChunking().setStrategy(ChunkingStrategy.MARKDOWN);
+        String before = ChunkingSignature.of(properties);
+
+        properties.getChunking().getMarkdown().setHeadingSeparator(" / ");
+
+        assertThat(ChunkingSignature.of(properties)).isNotEqualTo(before);
+    }
 }

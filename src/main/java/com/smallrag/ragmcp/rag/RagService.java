@@ -374,6 +374,10 @@ public class RagService {
             if (source != null && !String.valueOf(source).isBlank()) {
                 context.append(" source=").append(source);
             }
+            Object headingPath = document.getMetadata().get(MarkdownChunker.FIELD_HEADING_PATH);
+            if (headingPath != null && !String.valueOf(headingPath).isBlank()) {
+                context.append(" heading=").append(headingPath);
+            }
             if (document.getScore() != null) {
                 context.append(String.format(Locale.ROOT, " score=%.3f", document.getScore()));
             }

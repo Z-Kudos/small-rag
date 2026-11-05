@@ -64,6 +64,30 @@ class ChunkingServiceTest {
     }
 
     @Test
+    void markdownStrategyUsesHeadingMetadata() {
+        RagProperties properties = new RagProperties();
+        properties.getChunking().setStrategy(ChunkingStrategy.MARKDOWN);
+        properties.setChunkSize(500);
+
+        ChunkingService service = new ChunkingService(properties, mock(EmbeddingModel.class));
+        ChunkingService.ChunkingResult result = service.chunk("""
+                # 指南
+
+                第一段内容。
+
+                ## 安装
+
+                安装说明。
+                """, "doc-1");
+
+        assertThat(result.chunks()).isNotEmpty();
+        assertThat(result.chunks()).allSatisfy(chunk ->
+                assertThat(chunk.metadata()).containsEntry("chunk_type", "chunk"));
+        assertThat(result.chunks()).anySatisfy(chunk ->
+                assertThat(chunk.metadata()).containsEntry("heading_path", "指南 > 安装"));
+    }
+
+    @Test
     void parentChildStrategyStoresParentTextInChildMetadata() {
         RagProperties properties = new RagProperties();
         properties.getChunking().setStrategy(ChunkingStrategy.PARENT_CHILD);
@@ -85,6 +109,33 @@ class ChunkingServiceTest {
                     .containsKey("parent_index")
                     .containsKey("parent_text");
             assertThat(String.valueOf(chunk.metadata().get("parent_id"))).startsWith("doc-1#p");
+        });
+    }
+
+    @Test
+    void parentChildStrategyInheritsMarkdownHeadingMetadata() {
+        RagProperties properties = new RagProperties();
+        properties.getChunking().setStrategy(ChunkingStrategy.PARENT_CHILD);
+        properties.getChunking().getParentChild().setParentSize(2000);
+        properties.getChunking().getParentChild().setChildSize(100);
+        properties.getChunking().getParentChild().setChildOverlap(0);
+
+        ChunkingService service = new ChunkingService(properties, mock(EmbeddingModel.class));
+        ChunkingService.ChunkingResult result = service.chunk("""
+                # 指南
+
+                ## 安装
+
+                安装说明。
+                """, "doc-1");
+
+        assertThat(result.chunks()).isNotEmpty();
+        assertThat(result.chunks()).anySatisfy(chunk -> {
+            assertThat(chunk.text()).contains("安装说明");
+            assertThat(chunk.metadata())
+                    .containsEntry("chunk_type", "child")
+                    .containsEntry("heading_path", "指南 > 安装")
+                    .containsEntry("content_format", "markdown");
         });
     }
 }

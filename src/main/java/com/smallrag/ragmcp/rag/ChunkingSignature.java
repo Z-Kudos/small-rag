@@ -19,7 +19,7 @@ import java.util.List;
  */
 public final class ChunkingSignature {
 
-    private static final String VERSION = "v1";
+    private static final String VERSION = "v2";
 
     private ChunkingSignature() {
     }
@@ -68,12 +68,16 @@ public final class ChunkingSignature {
                     .append("|max=").append(semanticMaxChars(properties))
                     .append("|min=").append(chunking.getSemantic().getMinChunkChars())
                     .append("|threshold=").append(chunking.getSemantic().getSimilarityThreshold());
+            case MARKDOWN -> value
+                    .append("|size=").append(properties.getChunkSize())
+                    .append("|overlap=").append(properties.getChunkOverlap())
+                    .append("|heading-separator=").append(safeHeadingSeparator(chunking));
             case PARENT_CHILD -> value
                     .append("|parent=").append(chunking.getParentChild().getParentSize())
                     .append('|').append(chunking.getParentChild().getParentOverlap())
                     .append("|child=").append(chunking.getParentChild().getChildSize())
                     .append('|').append(chunking.getParentChild().getChildOverlap())
-                    .append("|separators=").append(String.join("\u001f", safeSeparators(chunking)));
+                    .append("|heading-separator=").append(safeHeadingSeparator(chunking));
         }
         return value.toString();
     }
@@ -86,5 +90,10 @@ public final class ChunkingSignature {
     private static List<String> safeSeparators(RagProperties.Chunking chunking) {
         List<String> separators = chunking.getRecursive().getSeparators();
         return separators == null ? List.of() : separators;
+    }
+
+    private static String safeHeadingSeparator(RagProperties.Chunking chunking) {
+        String separator = chunking.getMarkdown().getHeadingSeparator();
+        return (separator == null || separator.isBlank()) ? " > " : separator;
     }
 }

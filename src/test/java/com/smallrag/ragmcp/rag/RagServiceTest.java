@@ -69,7 +69,7 @@ class RagServiceTest {
         Document document = Document.builder()
                 .id(UUID.randomUUID().toString())
                 .text("Qdrant 负责向量存储")
-                .metadata(Map.of("source", "verify"))
+                .metadata(Map.of("source", "verify", "heading_path", "指南 > 存储"))
                 .score(0.9)
                 .build();
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(document));
@@ -79,6 +79,7 @@ class RagServiceTest {
         assertThat(service.query("向量库是什么？", 3))
                 .contains("[1]")
                 .contains("source=verify")
+                .contains("heading=指南 > 存储")
                 .contains("score=0.900")
                 .contains("Qdrant 负责向量存储");
     }

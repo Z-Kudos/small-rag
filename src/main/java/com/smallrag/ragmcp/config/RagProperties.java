@@ -91,6 +91,8 @@ public class RagProperties {
         private Semantic semantic = new Semantic();
 
         private ParentChild parentChild = new ParentChild();
+
+        private Markdown markdown = new Markdown();
     }
 
     /**
@@ -159,5 +161,17 @@ public class RagProperties {
          * 子块之间的重叠字符数。
          */
         private int childOverlap = 50;
+    }
+
+    /**
+     * Markdown / Obsidian 感知切分参数。
+     */
+    @Data
+    public static class Markdown {
+
+        /**
+         * 标题路径分隔符，例如 " > " 会生成 "指南 > 安装 > Linux"。
+         */
+        private String headingSeparator = " > ";
     }
 }

@@ -1,6 +1,8 @@
 # small-rag
 
-基于 Spring AI 的提供给 AGENT 调用的**纯文本 RAG 检索** MCP 服务（仅处理向量入库和检索，不做Chat问答）：通过 MCP（Streamable HTTP）暴露文档新增/更新/删除/列表、手动重建以及 `rag_search`、`rag_query`，向量库使用 **Qdrant**，支持 `fixed` / `recursive` / `semantic` / `parent-child` 四种切分策略（默认 `parent-child`）。
+基于 Spring AI 的提供给 AGENT 调用的**纯文本 RAG 检索** MCP 服务（仅处理向量入库和检索，不做Chat问答）：通过 MCP（Streamable HTTP）暴露文档新增/更新/删除/列表、手动重建以及 `rag_search`、`rag_query`，向量库使用 **Qdrant**，支持 `fixed` / `recursive` / `markdown` / `semantic` / `parent-child` 五种切分策略（默认 `parent-child`，针对标准 Markdown 与 Obsidian 兼容 Markdown 优化）。
+
+支持的文档输入：标准markdown以及obsidian兼容markdown语法的纯文本，可以是中文或英文。
 
 > `rag_query` 返回增强上下文，回答由调用方 Agent 生成。
 
@@ -89,9 +91,9 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 | `EMBEDDING_BASE_URL` | 回退 `OPENAI_BASE_URL`，再回退 `https://api.openai.com/v1` | 必须含 `/v1` |
 | `EMBEDDING_MODEL` | 回退 `OPENAI_EMBEDDING_MODEL`，再回退 `text-embedding-3-small` | 向量模型 |
 | `EMBEDDING_DIMENSION` | 回退 `QDRANT_DIMENSION`，再回退 `1536` | 必须与模型输出一致 |
-| `CHUNK_STRATEGY` | `parent-child` | `fixed` / `recursive` / `semantic` / `parent-child` |
-| `CHUNK_SIZE` | `800` | 固定/递归目标块大小，语义切分默认上限 |
-| `CHUNK_OVERLAP` | `100` | 固定/递归块重叠 |
+| `CHUNK_STRATEGY` | `parent-child` | `fixed` / `recursive` / `markdown` / `semantic` / `parent-child` |
+| `CHUNK_SIZE` | `800` | 固定/递归/Markdown 目标块大小，语义切分默认上限 |
+| `CHUNK_OVERLAP` | `100` | 固定/递归/Markdown 块重叠 |
 | `SEMANTIC_SIMILARITY_THRESHOLD` | `0.75` | 相邻句子相似度低于该值时断开 |
 | `SEMANTIC_MIN_CHUNK_CHARS` | `200` | 语义切分目标最小块 |
 | `SEMANTIC_MAX_CHUNK_CHARS` | `0` | `0` 表示回落到 `CHUNK_SIZE` |
@@ -171,14 +173,19 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 | 策略 | 配置值 | 行为 | 适用场景 |
 | --- | --- | --- | --- |
 | 固定长度 | `fixed` | 按 `chunk-size` / `chunk-overlap` 滑窗硬切 | 无结构长文本 |
-| 递归字符 | `recursive` | 按段落 → 换行 → 句号 → 逗号 → 空格逐级切分，仍超长才硬切 | 文档、Markdown、FAQ |
+| 递归字符 | `recursive` | 按段落 → 换行 → 句号 → 逗号 → 空格逐级切分，仍超长才硬切 | 普通纯文本、FAQ |
+| Markdown / Obsidian | `markdown` | 按标题分节，保护 fenced/缩进代码、表格、引用/callout；提取 frontmatter、标题路径与 wikilink | 标准 Markdown、Obsidian 笔记 |
 | 语义 | `semantic` | 拆句后按相邻句子 Embedding 相似度合并/断开，入库多一次 Embedding | 主题切换明显 |
-| Parent-Child | `parent-child`（默认） | 子块写入向量库参与检索，命中后展开父块上下文 | 精确召回 + 完整上下文 |
+| Parent-Child | `parent-child`（默认） | 父块/子块都使用 Markdown 感知切分；子块写入向量库，命中后展开父块上下文 | 精确召回 + 完整上下文 |
+
+> `fixed` / `recursive` / `semantic` 是通用文本策略，不保证保护 Markdown 代码块和表格；Markdown / Obsidian 文档优先使用 `markdown` 或 `parent-child`。
 
 ```yaml
 rag:
   chunking:
-    strategy: parent-child      # fixed | recursive | semantic | parent-child
+    strategy: parent-child      # fixed | recursive | markdown | semantic | parent-child
+    markdown:
+      heading-separator: " > "  # 生成 heading_path，例如 "指南 > 安装 > Linux"
     recursive:
       separators: ["\n\n", "\n", "。", "！", "？", "；", "，", " "]
     semantic:
@@ -192,13 +199,23 @@ rag:
       child-overlap: 50
 ```
 
+Markdown 感知切分的具体行为：
+
+- 按 `#` / Setext 标题分节，`heading_path` 记录完整标题层级；检索结果可直接看到片段所属章节。
+- fenced code（``` / ~~~）、缩进代码、表格、引用块和 Obsidian callout 作为受保护块，正常大小下不会被从中间切断。
+- 解析 YAML frontmatter，并把 `title` / `tags` / `aliases` / `description` 写入 `frontmatter_*` 元数据；frontmatter 不进入正文。
+- 从片段中提取 Obsidian `[[wikilink]]` 目标到 `wikilinks` 元数据。
+- 只有单个块超过大小上限时才回落：文本块用递归字符切分，代码/表格按行切分，并标记 `oversized_block=true`。
+- 所有片段带 `content_format=markdown` 与 `markdown_block_types`（例如 `heading,paragraph,code`）。
+- `rag_query` 的上下文前缀会附带 `heading=标题路径`，方便调用方 Agent 标注引用章节。
+
 入库元数据记录 `chunk_strategy`、`chunk_type`；Parent-Child 子块额外含 `parent_id`、`parent_index`、`parent_text`。不同策略的向量语义不同，**不要手工在同一集合混用**；已归档文档在切换策略并重启后会自动重切，未归档的历史数据建议换 `QDRANT_COLLECTION` 或重新入库。
 
 ### 自动重切
 
 启用 `rag.chunking.auto-rechunk`（默认 `true`）后，应用启动时会：
 
-1. 计算当前切分配置签名（策略、块大小/重叠、分隔符、语义阈值、Parent-Child 尺寸）；
+1. 计算当前切分配置签名（策略、块大小/重叠、分隔符、语义阈值、Parent-Child 尺寸、Markdown 标题分隔符）；
 2. 扫描 `SMALL_RAG_ARCHIVE_DIR` 中的原始文档归档；
 3. 对签名不一致的文档，按 `doc_id` 删除旧片段，再用当前策略重新切分、Embedding 并写入 Qdrant；
 4. 成功后更新归档签名；单篇失败只告警，下次启动继续重试，连续 3 篇失败会中止本次任务。
@@ -222,6 +239,7 @@ rag:
 - **空库短路**：检索前用 Qdrant `count` 判断，避免无意义 Embedding 调用。
 - **启动韧性**：Qdrant 不可用只告警（fail-soft）；集合维度不一致直接失败（fail-fast）。
 - **自动重切**：原始文档归档 + 切分配置签名，启动时检测到变化后自动删除旧片段并重建。
+- **Markdown 结构**：标题分节，代码/表格/callout 受保护，frontmatter、heading_path、wikilink 写入元数据。
 - **重切时机**：在应用启动时同步执行（HTTP 服务已就绪），失败不阻断启动，下次启动继续重试。
 - **错误收敛**：MCP 工具把运行期异常转为 `{"error": "..."}`，不抛协议层异常。
 
@@ -230,7 +248,7 @@ rag:
 ```
 mcp/       RagMcpTools：rag_ingest / rag_search / rag_query
 rag/       RagService（入库/检索/上下文/更新删除重建）、ChunkingService、
-           TextChunker、RecursiveTextChunker、SemanticTextChunker、
+           TextChunker、RecursiveTextChunker、MarkdownChunker、SemanticTextChunker、
            KnowledgeBaseProbe、DocumentArchive、ChunkingSignature、
            ChunkingReindexRunner
 config/    QdrantConfig、McpServerConfig、RagProperties、QdrantProperties
@@ -246,10 +264,3 @@ mvn test
 ```
 
 单测不依赖 Qdrant / 模型密钥；端到端需启动 Qdrant 并配置 Embedding 服务。
-
-## 与原始需求的差异
-
-- Spring AI 2.0.2 没有 `spring-ai-starter-model-embedding`，改用 `spring-ai-starter-model-openai` 并关闭 Chat。
-- Boot `4.2.0` / Cloud `2026.0.0` GA 未发布，按规范回退到 RC1。
-- 向量库改为 Qdrant，仅保留纯文本 RAG（不含 Tika / OCR / 图谱 / 混合检索）。
-- 只使用向量模型，不调用 Chat / 生成模型。

@@ -34,19 +34,22 @@ rag:
   max-top-k: 20
   # 相似度阈值：低于该值的片段直接丢弃（0~1，Cosine）
   min-score: 0.35
-  # 固定/递归切分的目标块大小；语义切分的默认上限也回落到这里
+  # 固定/递归/Markdown 切分的目标块大小；语义切分的默认上限也回落到这里
   chunk-size: ${CHUNK_SIZE:800}
   chunk-overlap: ${CHUNK_OVERLAP:100}
   # 返回上下文预算
   max-context-chars: 12000
   max-chunk-chars: 1200
   empty-context-answer: 未检索到相关内容。请先通过 rag_ingest 向知识库写入文本，或换一个查询词重试。
-  # 切分策略：fixed | recursive | semantic | parent-child（默认 parent-child）
+  # 切分策略：fixed | recursive | markdown | semantic | parent-child（默认 parent-child）
   # 启动时检测切分配置签名，对已归档文档自动重切；未归档历史数据需重新入库
   chunking:
     strategy: ${CHUNK_STRATEGY:parent-child}
     # 启动时检测切分配置签名，发现变化后自动重切已归档文档
     auto-rechunk: ${CHUNK_AUTO_RECHUNK:true}
+    markdown:
+      # 标题路径分隔符，例如 "指南 > 安装 > Linux"
+      heading-separator: " > "
     recursive:
       # 分隔符优先级从粗到细，按字面量匹配
       separators:

@@ -3,9 +3,9 @@ package com.smallrag.ragmcp.rag;
 /**
  * 文本切分策略。
  *
- * <p>通过 {@code rag.chunking.strategy} 选择，修改策略不会自动重切历史数据：
- * 已入库的向量仍按原策略保留，切换后建议使用新的 {@code QDRANT_COLLECTION}
- * 或重新入库，避免同一集合混用不同切分方式。
+ * <p>通过 {@code rag.chunking.strategy} 选择。已归档文档在切换策略并重启后
+ * 会自动重切；未归档的历史数据不会，需重新入库。默认策略为
+ * {@link #PARENT_CHILD}，并在父子块内部使用 {@link #MARKDOWN} 的结构化切分。
  *
  * @author zjk
  */
@@ -21,6 +21,13 @@ public enum ChunkingStrategy {
      * 仅当片段仍超长时才继续用更细的分隔符或硬切。
      */
     RECURSIVE,
+
+    /**
+     * Markdown / Obsidian 感知切分：按标题分节，保护 fenced code、表格、
+     * 引用/标注块等结构，并记录标题路径。适合标准 Markdown 与
+     * Obsidian 兼容语法（frontmatter、wikilink、callout 等）。
+     */
+    MARKDOWN,
 
     /**
      * 语义切分：先按句子拆分，再根据相邻句子的 Embedding 相似度合并，
