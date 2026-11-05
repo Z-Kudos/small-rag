@@ -35,7 +35,9 @@ import tools.jackson.databind.ObjectMapper;
  * JAVA_HOME='D:\java\jdk-27.0.1.0.3' mvn test -Dtest=BreakpointPercentileCalibration -Dcalibrate=true
  * </pre>
  *
- * <p>前置：本机 Ollama 已启动且已拉取 {@code EMBEDDING_MODEL}。语料取仓库内真实
+ * <p>前置：本机已运行 OpenAI 兼容 Embedding 服务（如容器内 llama-server 或 Ollama），
+ * 可用 {@code EMBEDDING_BASE_URL} / {@code EMBEDDING_MODEL} / {@code EMBEDDING_API_KEY} 覆盖默认值。
+ * 语料取仓库内真实
  * Markdown 文档；对每个 breakpoint-percentile 输出块数与块大小分布，用于选定
  * 推荐默认值。
  *
@@ -43,8 +45,11 @@ import tools.jackson.databind.ObjectMapper;
  */
 class BreakpointPercentileCalibration {
 
-    private static final String BASE_URL = "http://127.0.0.1:11434/v1";
-    private static final String MODEL = "modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF";
+    /** OpenAI 兼容 Embedding 服务地址、模型名与密钥，均可用环境变量覆盖。 */
+    private static final String BASE_URL =
+            System.getenv().getOrDefault("EMBEDDING_BASE_URL", "http://127.0.0.1:11434/v1");
+    private static final String MODEL = System.getenv().getOrDefault("EMBEDDING_MODEL", "qwen3-embedding-0.6b");
+    private static final String API_KEY = System.getenv().getOrDefault("EMBEDDING_API_KEY", "local");
 
     private static final List<String> CORPUS_FILES = List.of(
             "README.md",
@@ -57,7 +62,7 @@ class BreakpointPercentileCalibration {
     @Test
     @EnabledIfSystemProperty(named = "calibrate", matches = "true")
     void calibrateBreakpointPercentileOnRealCorpus() throws Exception {
-        EmbeddingModel model = ollamaEmbeddingModel();
+        EmbeddingModel model = localOpenAiEmbeddingModel();
         List<String> documents = CORPUS_FILES.stream()
                 .map(name -> {
                     try {
@@ -99,10 +104,11 @@ class BreakpointPercentileCalibration {
     }
 
     /**
-     * 最小 EmbeddingModel 适配器：直接调用 Ollama 的 OpenAI 兼容 /v1/embeddings，
-     * 避免为校准引入 OpenAI SDK 客户端模块依赖。
+     * 最小 EmbeddingModel 适配器：直接调用 OpenAI 兼容的 /v1/embeddings
+     * （llama.cpp llama-server / Ollama / 云端服务均可），避免为校准引入
+     * OpenAI SDK 客户端模块依赖。
      */
-    private static EmbeddingModel ollamaEmbeddingModel() {
+    private static EmbeddingModel localOpenAiEmbeddingModel() {
         ObjectMapper mapper = new ObjectMapper();
         HttpClient http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
@@ -135,7 +141,7 @@ class BreakpointPercentileCalibration {
                     HttpRequest request = HttpRequest.newBuilder()
                             .uri(URI.create(BASE_URL + "/embeddings"))
                             .header("Content-Type", "application/json")
-                            .header("Authorization", "Bearer ollama")
+                            .header("Authorization", "Bearer " + API_KEY)
                             .timeout(Duration.ofMinutes(5))
                             .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                             .build();
@@ -161,7 +167,7 @@ class BreakpointPercentileCalibration {
                             .collect(Collectors.toList());
                     return new EmbeddingResponse(embeddings);
                 } catch (java.io.IOException | InterruptedException e) {
-                    throw new IllegalStateException("调用 Ollama Embedding 失败", e);
+                    throw new IllegalStateException("调用 Embedding 服务失败", e);
                 }
             }
         };

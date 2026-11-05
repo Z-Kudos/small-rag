@@ -1,20 +1,11 @@
-# syntax=docker/dockerfile:1
-
-# 单容器镜像：small-rag 应用 + Qdrant + Ollama 运行在同一个容器内。
-# 仅暴露 18080（MCP/HTTP）；Qdrant（6333/6334）与 Ollama（11434）只绑定 127.0.0.1。
-#
-# 基础镜像可通过 --build-arg 覆盖为国内镜像，例如：
-#   docker build \
-#     --build-arg MAVEN_IMAGE=docker.1ms.run/library/maven:3.9-eclipse-temurin-25 \
-#     --build-arg OLLAMA_IMAGE=docker.1ms.run/ollama/ollama:latest \
-#     --build-arg QDRANT_IMAGE=docker.1ms.run/qdrant/qdrant:latest \
-#     --build-arg JRE_IMAGE=docker.1ms.run/library/eclipse-temurin:25-jre \
-#     -t small-rag:1.0.0 .
+# 单容器镜像：small-rag 应用 + Qdrant + llama.cpp（Embedding 推理）运行在同一个容器内。
+# 仅暴露 18080（MCP/HTTP）；Qdrant（6333/6334）与 Embedding 服务（11434）只绑定 127.0.0.1。
 
 ARG MAVEN_IMAGE=docker.io/library/maven:3.9-eclipse-temurin-25
-ARG OLLAMA_IMAGE=docker.io/ollama/ollama:latest
 ARG QDRANT_IMAGE=docker.io/qdrant/qdrant:latest
 ARG JRE_IMAGE=docker.io/library/eclipse-temurin:25-jre
+# llama.cpp 源码版本（GitHub tag）；源码包经 gh-proxy 加速下载
+ARG LLAMA_CPP_TAG=v0.9.0
 
 # ---------- 构建应用 ----------
 FROM ${MAVEN_IMAGE} AS build
@@ -25,63 +16,78 @@ COPY pom.xml ./
 COPY src ./src
 RUN mvn -B -q -DskipTests clean package
 
-# ---------- 提取 Ollama CPU 运行时 ----------
-FROM ${OLLAMA_IMAGE} AS ollama
+# ---------- 编译 llama.cpp ----------
+# 编译基底 = 运行基底（qdrant 镜像 = debian:13-slim），产物无 glibc 兼容问题；
+# 相比 Ollama 官方镜像（3.25GB，CUDA/ROCm 占大头）只需下载约 40MB 源码包。
+FROM ${QDRANT_IMAGE} AS llama-build
+ARG LLAMA_CPP_TAG
 
-# 官方镜像包含 CUDA / ROCm 运行库（约 4.3 GB）；本镜像只需要 CPU 推理。
-RUN rm -rf \
-    /usr/lib/ollama/cuda_v12 \
-    /usr/lib/ollama/cuda_v13 \
-    /usr/lib/ollama/mlx_cuda_v13 \
-    /usr/lib/ollama/vulkan \
-    /usr/lib/ollama/include
+# apt 走清华镜像（构建机在国内网络）；deb822 源的 URI 本身带 /debian 路径，只替换域名
+RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/*.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends build-essential cmake ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
 
+RUN set -eu; \
+    url="https://github.com/ggml-org/llama.cpp/archive/refs/tags/${LLAMA_CPP_TAG}.tar.gz"; \
+    curl -fL --retry 3 -o /tmp/llama-src.tar.gz "https://gh-proxy.com/${url}" \
+      || curl -fL --retry 3 -o /tmp/llama-src.tar.gz "${url}"; \
+    mkdir -p /src && tar -xzf /tmp/llama-src.tar.gz -C /src --strip-components=1
+
+# 只构建 llama-server（Embedding 推理服务）；不需要 libcurl 下载能力（模型由启动脚本提供）
+RUN cmake -S /src -B /build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DGGML_NATIVE=ON \
+      -DLLAMA_CURL=OFF \
+      -DLLAMA_BUILD_EXAMPLES=OFF \
+      -DLLAMA_BUILD_TESTS=OFF \
+ && cmake --build /build --target llama-server -j"$(nproc)"
+
+# ---------- JRE ----------
 FROM ${JRE_IMAGE} AS jre
 
 # ---------- 单容器运行时 ----------
-# 以 Qdrant 官方镜像为基础：自带 qdrant 二进制、配置与 Debian 运行时。
+# 以 Qdrant 官方镜像为基础（debian:13-slim）：自带 qdrant 二进制、配置与 Debian 运行时。
 FROM ${QDRANT_IMAGE}
 
 COPY --from=jre /opt/java/openjdk /opt/java/openjdk
-COPY --from=ollama /usr/bin/ollama /usr/bin/ollama
-COPY --from=ollama /usr/lib/ollama /usr/lib/ollama
+COPY --from=llama-build /build/bin/ /opt/llama/
 
-# curl 用于进程就绪探测与模型拉取，supervisor 负责管理三个进程
+# curl 用于进程就绪探测与模型下载，supervisor 负责管理三个进程
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl supervisor ca-certificates \
+    && apt-get install -y --no-install-recommends curl supervisor ca-certificates libstdc++6 libgomp1 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 app \
     && useradd --uid 10001 --gid 10001 --create-home --home-dir /app app \
-    && mkdir -p /data/qdrant/storage /data/ollama/models /data/ollama/home /app \
+    && mkdir -p /data/qdrant/storage /data/models /app \
     && chown -R app:app /data /app
 
 WORKDIR /app
 
 COPY --from=build --chown=app:app /workspace/target/small-rag-*.jar /app/app.jar
 COPY --chown=app:app docker/start-qdrant.sh /app/start-qdrant.sh
-COPY --chown=app:app docker/start-ollama.sh /app/start-ollama.sh
+COPY --chown=app:app docker/start-llama.sh /app/start-llama.sh
 COPY --chown=app:app docker/start-app.sh /app/start-app.sh
 COPY docker/supervisord.conf /etc/supervisor/conf.d/small-rag.conf
-RUN chmod 0755 /app/start-qdrant.sh /app/start-ollama.sh /app/start-app.sh
+RUN chmod 0755 /app/start-qdrant.sh /app/start-llama.sh /app/start-app.sh
 
 # 应用只对外暴露 18080
 ENV JAVA_HOME=/opt/java/openjdk \
-    PATH=/opt/java/openjdk/bin:$PATH \
+    PATH="/opt/java/openjdk/bin:/opt/llama:$PATH" \
+    LD_LIBRARY_PATH="/opt/llama" \
     JAVA_OPTS="-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError" \
     EMBEDDING_BASE_URL="http://127.0.0.1:11434/v1" \
-    EMBEDDING_API_KEY="ollama" \
-    EMBEDDING_MODEL="modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF" \
-    EMBEDDING_DIMENSION="1024" \
+    EMBEDDING_API_KEY="local" \
+    EMBEDDING_MODEL="qwen3-embedding-0.6b" \
+    EMBEDDING_MODEL_URL="https://modelscope.cn/models/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/master/Qwen3-Embedding-0.6B-Q8_0.gguf" \
+    EMBEDDING_MODEL_PATH="/data/models/qwen3-embedding-0.6b-q8_0.gguf" \
+    EMBEDDING_CTX_SIZE="8192" \
+    SMALL_RAG_ENSURE_EMBEDDING_MODEL="true" \
     QDRANT_HOST="127.0.0.1" \
     QDRANT_PORT="6334" \
     QDRANT_COLLECTION="small_rag_text" \
     QDRANT_USE_TLS="false" \
     QDRANT_STORAGE_PATH="/data/qdrant/storage" \
-    OLLAMA_HOST="127.0.0.1:11434" \
-    OLLAMA_MODELS="/data/ollama/models" \
-    OLLAMA_LIBRARY_PATH="/usr/lib/ollama" \
-    OLLAMA_KEEP_ALIVE="-1" \
-    SMALL_RAG_ENSURE_OLLAMA_MODEL="true" \
     CHUNK_STRATEGY="parent-child" \
     CHUNK_SIZE="800" \
     CHUNK_OVERLAP="100" \

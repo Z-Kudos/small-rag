@@ -17,19 +17,23 @@
 
 ## 本地运行
 
-前置：JDK 25、Maven 3.9+、Qdrant、任意 OpenAI 兼容 Embedding 服务（示例用本地 Ollama）。
+前置：JDK 25、Maven 3.9+、Qdrant、任意 OpenAI 兼容 Embedding 服务（本机开发示例用 llama.cpp llama-server，与容器内置的运行时一致）。
 
 ```bash
 # Qdrant
 docker run -d --name rag-qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant
 
-# Ollama 与本地向量模型（Qwen3-Embedding-0.6B，1024 维）
-ollama pull modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF
+# llama.cpp llama-server 加载本地向量模型（Qwen3-Embedding-0.6B，1024 维）
+mkdir -p models && curl -fL --retry 5 -C - -o models/qwen3-embedding-0.6b-q8_0.gguf \
+  https://modelscope.cn/models/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/master/Qwen3-Embedding-0.6B-Q8_0.gguf
+llama-server --host 127.0.0.1 --port 11434 \
+  -m models/qwen3-embedding-0.6b-q8_0.gguf \
+  --embeddings --pooling last --no-webui
 
-# Embedding（base-url 必须含 /v1；Ollama 不校验 key，但客户端要求非空）
-export EMBEDDING_API_KEY=ollama
+# Embedding（base-url 必须含 /v1；本地服务不校验 key，但客户端要求非空）
+export EMBEDDING_API_KEY=local
 export EMBEDDING_BASE_URL=http://localhost:11434/v1
-export EMBEDDING_MODEL=modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF
+export EMBEDDING_MODEL=qwen3-embedding-0.6b
 export EMBEDDING_DIMENSION=1024
 
 mvn spring-boot:run
@@ -41,11 +45,9 @@ MCP 端点：`http://localhost:18080/mcp`。
 
 ## 容器部署（单容器）
 
-镜像内同时运行应用、Qdrant、Ollama，由 `supervisord` 管理；**只对外暴露 `18080`**，其余服务绑定回环地址。数据统一在 `/data`（Qdrant + Ollama 模型 + 文档归档），建议挂载卷。
+镜像内同时运行应用、Qdrant、llama.cpp（llama-server Embedding 推理），由 `supervisord` 管理；**只对外暴露 `18080`**，其余服务绑定回环地址。数据统一在 `/data`（Qdrant + Embedding 模型 + 文档归档），建议挂载卷。
 
 ```bash
-cp .env.example .env
-
 # Docker
 docker compose up -d --build
 
@@ -53,7 +55,7 @@ docker compose up -d --build
 podman compose up -d --build   # 或 podman-compose up -d --build
 ```
 
-首次启动会等待 Ollama 拉取默认模型（约 640 MB），日志出现 `embedding model ready` 后开始监听 `18080`。手动预拉：`make pull-model`。
+首次启动由 `start-llama.sh` 从 ModelScope 下载默认模型（约 640 MB，支持断点续传），加载就绪后日志出现 `embedding model ready` 并开始监听 `18080`。手动预拉：`make pull-model`。
 
 单独构建/运行：
 
@@ -62,12 +64,12 @@ docker build -t small-rag:0.0.2 .
 docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.2
 ```
 
-国内镜像可通过 `.env` 覆盖 `MAVEN_IMAGE` / `OLLAMA_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE`。bind mount 时需保证容器内 UID `10001` 可写：`sudo chown -R 10001:10001 /path/to/data`。
+国内镜像可通过 `.env` 覆盖 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE`，llama.cpp 源码版本用 `LLAMA_CPP_TAG`（默认 `v0.9.0`，镜像内从源码编译 llama-server，与运行时同基底无 glibc 兼容问题）。bind mount 时需保证容器内 UID `10001` 可写：`sudo chown -R 10001:10001 /path/to/data`。
 
 ### 换模型 / 外部 Embedding
 
-- 换 Ollama 模型：修改 `EMBEDDING_MODEL` 与 `EMBEDDING_DIMENSION`，并换新的 `QDRANT_COLLECTION`。
-- 外部 Embedding：`SMALL_RAG_ENSURE_OLLAMA_MODEL=false`，配置 `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`。
+- 换容器内模型：修改 `EMBEDDING_MODEL_URL`（GGUF 下载地址）与 `EMBEDDING_DIMENSION`，并换新的 `QDRANT_COLLECTION`；`EMBEDDING_MODEL` 只是 API 侧名称，llama-server 不校验。
+- 外部 Embedding：`SMALL_RAG_ENSURE_EMBEDDING_MODEL=false`，配置 `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`。
 
 ## 配置
 
@@ -96,12 +98,14 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 | `QDRANT_API_KEY` | 空 | Qdrant 鉴权 |
 | `QDRANT_COLLECTION` | `small_rag_text` | 集合名，启动时自动创建 |
 | `QDRANT_USE_TLS` | `false` | 是否启用 TLS |
-| `SMALL_RAG_ENSURE_OLLAMA_MODEL` | `true`（镜像内） | 启动时确保 Ollama 模型存在 |
-| `OLLAMA_KEEP_ALIVE` | `-1` | Ollama 模型常驻内存 |
+| `SMALL_RAG_ENSURE_EMBEDDING_MODEL` | `true`（镜像内） | 启动时等待容器内 Embedding 服务就绪（模型由 `start-llama.sh` 下载） |
+| `EMBEDDING_MODEL_URL` | Qwen3-Embedding-0.6B Q8_0（ModelScope） | GGUF 模型下载地址 |
+| `EMBEDDING_MODEL_PATH` | `/data/models/qwen3-embedding-0.6b-q8_0.gguf` | GGUF 落盘路径（须在持久化卷内） |
+| `EMBEDDING_CTX_SIZE` | `8192` | llama-server 上下文长度 |
 
 > 切分尺寸类配置的单位是**全宽字符当量**：CJK 字符计 1，拉丁/半角计 0.25，中英文在相同配置下语义体量对齐；英文硬切自动回退单词边界，句界识别内置英文缩写白名单。
 
-镜像内覆盖：`EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1`、`EMBEDDING_MODEL=modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF`、`EMBEDDING_DIMENSION=1024`、`QDRANT_HOST=127.0.0.1`。
+镜像内覆盖：`EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1`、`EMBEDDING_MODEL=qwen3-embedding-0.6b`、`EMBEDDING_DIMENSION=1024`、`QDRANT_HOST=127.0.0.1`。
 
 ⚠️ 切换 Embedding 模型必须同步修改维度并重建集合；已存在集合维度不一致时启动直接失败。
 
@@ -237,7 +241,7 @@ rag/chunking/   ChunkingService、ChunkingStrategy、ChunkingSignature、TextChu
                 TextChunker、RecursiveTextChunker、MarkdownChunker、SemanticTextChunker
 rag/archive/    DocumentArchive、ArchivedDocument（原文归档与签名记录）
 config/         QdrantConfig、McpServerConfig、RagProperties、QdrantProperties
-docker/         start-qdrant.sh / start-ollama.sh / start-app.sh / supervisord.conf
+docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord.conf
 ```
 
 `VectorStore` 与 `EmbeddingModel` 均按 Spring AI 接口注入。

@@ -25,12 +25,12 @@
 
 ## 容器化
 
-- **单容器架构**：最终镜像同时包含应用、Qdrant、Ollama，`supervisord` 作为 PID 1；不拆 compose 多服务、不做 sidecar。
-- 只对外暴露 **18080**；Qdrant（6333/6334）与 Ollama（11434）绑定 `127.0.0.1`。
-- 多阶段构建：`maven:3.9-eclipse-temurin-25` 构建 → 运行时基于 `qdrant/qdrant` + Temurin JRE + Ollama CPU 运行时（剔除 CUDA/ROCm）；基础镜像可用 `MAVEN_IMAGE` / `OLLAMA_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE` 替换。
-- 默认向量模型 `modelscope.cn/Qwen/Qwen3-Embedding-0.6B-GGUF`（1024 维）；`SMALL_RAG_ENSURE_OLLAMA_MODEL=true` 时 `start-app.sh` 等待 Ollama 并拉模型。
-- 启动脚本：`docker/start-qdrant.sh`、`start-ollama.sh`、`start-app.sh`，由 `docker/supervisord.conf` 调度；数据统一 `/data`。
-- 端口与默认值在 `Dockerfile`、`compose.yaml`、`.env.example`、`README.md` 间保持一致；`.env`/密钥不入库。
+- **单容器架构**：最终镜像同时包含应用、Qdrant、llama.cpp，`supervisord` 作为 PID 1；不拆 compose 多服务、不做 sidecar。
+- 只对外暴露 **18080**；Qdrant（6333/6334）与 Embedding 服务（11434）绑定 `127.0.0.1`。
+- 多阶段构建：`maven:3.9-eclipse-temurin-25` 构建 → 以 `qdrant/qdrant`（debian:13-slim）为基底**从源码编译 llama-server**（`LLAMA_CPP_TAG`，默认 `v0.9.0`；编译基底=运行基底，无 glibc 兼容问题；源码包走 gh-proxy 加速）→ 拷入 Temurin JRE；基础镜像可用 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE` 替换。**不用 Ollama 镜像**（3.25GB，国内拉取过慢）。
+- 默认向量模型 Qwen3-Embedding-0.6B Q8_0（1024 维），`start-llama.sh` 首次启动从 ModelScope 下载 GGUF（`EMBEDDING_MODEL_URL`→`EMBEDDING_MODEL_PATH`，断点续传）并以 `--embeddings --pooling last` 启动 llama-server（**Qwen3-Embedding 必须 last pooling**）；`start-app.sh` 等待其 `/health` 就绪。
+- 启动脚本：`docker/start-qdrant.sh`、`start-llama.sh`、`start-app.sh`，由 `docker/supervisord.conf` 调度；数据统一 `/data`。
+- 端口与默认值在 `Dockerfile`、`compose.yaml`、`.env`、`README.md` 间保持一致；`.env` 已入库（仅模板值），**真实密钥不要写入 `.env`**（改用部署环境注入），`.dockerignore` 仍排除它以防进入镜像。
 - Podman：`podman compose up -d --build` 或 `podman-compose up -d --build`，同一份 `compose.yaml`。
 
 ## 架构分层
@@ -65,7 +65,7 @@
 
 ## Git 与文档
 
-- 主分支 `main`；`.gitignore` 覆盖 `target/`、`.idea/`、`*.iml`、`.vscode/`、`*.log`、`.env`、`data/`。
+- 主分支 `main`；`.gitignore` 覆盖 `target/`、`.idea/`、`*.iml`、`.vscode/`、`*.log`、`data/`。
 - 提交信息用 Conventional Commits。首次提交：`chore: bootstrap small-rag with JDK 25 + Spring Cloud 2026.0.0 + Spring AI 2.0.2`。
 - `README.md` 必须含：版本矩阵、启动命令、`/mcp` 端点说明、入库示例、RC/milestone 说明。
 - **开发记忆（强制）**：每次开发都必须同步更新项目根目录的 `DEV-MEMORY.md`（不存在则创建）——简要记录本次开发所做的更改。要求：尽可能精简且实时，只保留当前有效的状态（架构、接口、行为、关键决策），过时的记忆直接覆盖或删除，不做历史归档（历史归档交给 git log）。

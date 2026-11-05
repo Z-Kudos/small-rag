@@ -1,0 +1,6 @@
+# 全仓文本统一 LF（CRLF 会导致容器内 shell 脚本 exec ENOENT：/bin/sh^M）
+* text=auto eol=lf
+# Windows 专属脚本保持 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
