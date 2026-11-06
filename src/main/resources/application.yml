@@ -24,12 +24,30 @@ spring:
           基于纯文本知识库的 RAG 检索服务（不调用生成模型）。
           使用 rag_ingest 新增文档、rag_update 更新、rag_delete 删除、rag_list 查看归档。
           使用 rag_search 查看命中分块，使用 rag_query 获取带来源与相似度的增强上下文。
-          rag_reindex 可手动重建单篇或全部归档文档；rag_rebuild 需 confirm=true 才会全量重建。
+          rag_reindex 可手动重建单篇（同步）或全部归档文档（异步）；rag_rebuild 需 confirm=true 才会全量异步重建。
+          异步重建返回 taskId：用 rag_task_status 查询进度（status/total/processed/percent/stalled），用 rag_task_cancel 协作式取消。
+          任务快照与任务锁持久化在 Qdrant 的独立状态集合中；进程重启后未完成任务为 interrupted 并继续持锁，默认自动续接，也可用 rag_task_resume 手动续接或 rag_task_cancel 放弃。
           知识库为空时 rag_query 会返回“未检索到相关内容”。
 
 rag:
   # 原始文档归档目录：自动重切的原文来源；目录不可写时降级为只入库
   archive-dir: ${SMALL_RAG_ARCHIVE_DIR:./data/documents}
+  # Embedding（OpenAI 兼容）HTTP 超时：防止服务假死时重建线程被永久占用
+  embedding:
+    connect-timeout-ms: ${EMBEDDING_CONNECT_TIMEOUT_MS:10000}
+    # 单次请求 read/write/总超时；本地 llama.cpp 大批量可能较慢
+    read-timeout-ms: ${EMBEDDING_READ_TIMEOUT_MS:120000}
+  # 异步重建看门狗：停滞只告警，硬超时中断线程；0 表示关闭
+  reindex:
+    stall-timeout-seconds: ${REINDEX_STALL_TIMEOUT_SECONDS:1800}
+    hard-timeout-seconds: ${REINDEX_HARD_TIMEOUT_SECONDS:3600}
+    check-interval-seconds: ${REINDEX_CHECK_INTERVAL_SECONDS:30}
+    join-timeout-seconds: ${REINDEX_JOIN_TIMEOUT_SECONDS:10}
+    # 撤销写权限后等待在途写入结束的宽限期；到期强制释放任务锁（无需重启）
+    recovery-grace-seconds: ${REINDEX_RECOVERY_GRACE_SECONDS:120}
+    # 任务快照与任务锁存放在 Qdrant 的 <collection>_reindex_state 集合，跟随 Qdrant 持久化
+    # 启动时自动续接重启前未完成的任务；false 时停在 interrupted 并继续持锁
+    resume-on-startup: ${REINDEX_RESUME_ON_STARTUP:true}
   default-top-k: 4
   max-top-k: 20
   # MMR 多样性权重 λ（0 < λ < 1 启用，1 = 纯相关排序），默认 0.7
@@ -96,3 +114,5 @@ rag:
     # 必须与 Embedding 模型输出维度一致；text-embedding-3-small = 1536
     dimension: ${EMBEDDING_DIMENSION:${QDRANT_DIMENSION:1536}}
     init-timeout-ms: 5000
+    # 常规 RPC（写入/删除/检索）deadline，与初始化超时分开
+    request-timeout-ms: ${QDRANT_REQUEST_TIMEOUT_MS:30000}

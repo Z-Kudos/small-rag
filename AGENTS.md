@@ -35,8 +35,8 @@
 
 ## 架构分层
 
-- `mcp`：`RagMcpTools` 暴露 `rag_ingest`/`rag_update`/`rag_delete`/`rag_list`/`rag_reindex`/`rag_rebuild`/`rag_search`/`rag_query`。**不是** `@Component`，由 `McpServerConfig` 显式注册。工具方法必须写 Javadoc——注解扫描会把它作为工具描述发给客户端。
-- `rag`：`RagService` 负责分块入库、向量检索、上下文拼装、更新/删除/手动重建，**不调用 Chat/生成模型**；`KnowledgeBaseProbe` 空库短路；`ChunkingReindexRunner` 启动自动重切。
+- `mcp`：`RagMcpTools` 暴露 `rag_ingest`/`rag_update`/`rag_delete`/`rag_list`/`rag_reindex`/`rag_rebuild`/`rag_task_status`/`rag_task_resume`/`rag_task_cancel`/`rag_search`/`rag_query`。**不是** `@Component`，由 `McpServerConfig` 显式注册。工具方法必须写 Javadoc——注解扫描会把它作为工具描述发给客户端。
+- `rag`：`RagService` 负责分块入库、向量检索、上下文拼装、更新/删除/手动重建，**不调用 Chat/生成模型**；`ReindexTaskService` 提供异步重建任务、进度快照与看门狗（每任务独立线程 + 单任务互斥 + 保留最近 20 个；超过 `rag.reindex.stall-timeout-seconds` 标 `stalled` 但保留锁；超过 `hard-timeout-seconds` 撤销写权限、取消在途调用并中断线程，确认退出或宽限期到期后释放锁；`rag_task_cancel` 为文档边界协作式取消）；`ReindexStateStore` 将任务快照 + 检查点（`cleared` / 已完成文档 id）+ 任务锁写入 Qdrant 的独立集合 `<rag.qdrant.collection-name>_reindex_state`（`QdrantReindexStateBackend`，跟随 Qdrant 持久化，不依赖容器文件系统；1 维哑向量 + payload JSON，集合按需创建），重启后恢复为 `interrupted` 并继续持锁，`rag_task_resume` 或 `resume-on-startup` 续接（跳过已完成文档、不重复清空）；`CancellationScope` 负责任务级 OkHttp 调用取消；`KnowledgeBaseProbe` 空库短路；`ChunkingReindexRunner` 启动自动重切。
 - `rag/chunking`（切分引擎）：
   - `ChunkingService` 按 `rag.chunking.strategy` 分发 `fixed` / `recursive` / `semantic` / `parent-child`（默认 `parent-child`）。
   - `MarkdownChunker` 是内部结构引擎（标题分节 + 受保护块），**不是独立策略**，由 `semantic` 与 `parent-child` 共用；`chunkSemantic` 提供语义合并入口（节内文本块与累积质心比较，代码/表格独立成块）。
@@ -45,15 +45,17 @@
   - **长度度量**：所有切分尺寸的单位是全宽字符当量（`TextWeights`：CJK 计 1、拉丁/半角计 0.25）；英文硬切回退单词边界，句界带缩写白名单；SEMANTIC 支持 `breakpoint-percentile` 分位数断点（>0 时忽略绝对阈值）。
   - **MMR**：`rag.mmr-lambda`（默认 0.7，=1 关闭）控制候选收敛时相关性与多样性的折中；Parent-Child 复用父块存储向量做相似度（零额外模型调用），其余策略对候选文本做一次批量 Embedding（`SemanticTextChunker.embedAll` 已 public）。
 - `rag/archive`：`DocumentArchive` 按 `doc_id` 归档原文到 `rag.archive-dir`；`ChunkingSignature` 记录影响切分结果的配置，启动时 `ChunkingReindexRunner` 对签名不一致的文档删旧片段重建。归档目录不可写时降级关闭自动重切，不阻断入库。未归档的历史数据不会自动重切。
-- `config`：`QdrantConfig`（QdrantClient / QdrantVectorStore / 集合初始化 / 探活）、`McpServerConfig`、`RagProperties`、`QdrantProperties`。
-- 手工管理：`rag_update` 更新归档并重建单篇；`rag_delete` 删除向量与归档；`rag_list` 分页查看；`rag_reindex` 重建单篇/全部；`rag_rebuild(confirm=true)` 清理本服务写入的片段后全量重建。
+- `config`：`QdrantConfig`（QdrantClient / QdrantVectorStore / 集合初始化 / 探活）、`McpServerConfig`、`EmbeddingConfig`（OpenAI SDK/OkHttp 超时）、`RagProperties`、`QdrantProperties`。
+- 手工管理：`rag_update` 更新归档并重建单篇；`rag_delete` 删除向量与归档；`rag_list` 分页查看；`rag_reindex` 重建单篇（同步）/全部（异步）；`rag_rebuild(confirm=true)` 清理本服务写入的片段后全量异步重建；`rag_task_status` 查进度，`rag_task_resume` 续接重启时中断的任务，`rag_task_cancel` 取消/放弃任务。
 - **只使用向量模型**：`spring.ai.model.chat=none`；不新增 `ChatClient`/`ChatModel`。`rag_query` 只返回增强上下文，生成由调用方 Agent 完成。
-- **Embedding 配置入口**：`EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`（回退 `OPENAI_*`）；base-url 必须含 `/v1`。只支持 OpenAI 兼容 HTTP 服务，**不支持 JVM 内 ONNX/transformers**。
+- **Embedding 配置入口**：`EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`（回退 `OPENAI_*`）；base-url 必须含 `/v1`。只支持 OpenAI 兼容 HTTP 服务，**不支持 JVM 内 ONNX/transformers**。HTTP 超时用 `EMBEDDING_CONNECT_TIMEOUT_MS` / `EMBEDDING_READ_TIMEOUT_MS`，由 `EmbeddingConfig` 通过 OpenAI SDK 的 `OpenAiHttpClientBuilderCustomizer` 设置（`spring.http.client.*` 不生效）。
 - **Qdrant 关键约束**：
   - gRPC 端口 `6334`（REST 才是 6333）。
   - `Document` id 必须是 **UUID**；业务 id 放 metadata 的 `doc_id`。
   - `doSimilaritySearch` **先调 Embedding 再查库**；空库必须用 `KnowledgeBaseProbe`（Qdrant `count`）短路。
   - 集合初始化 fail-soft（不可用只告警）；维度与 `rag.qdrant.dimension` 不一致 fail-fast；维度必须与 Embedding 输出一致。
+  - gRPC 默认 deadline 用 `rag.qdrant.request-timeout-ms`（默认 30s）；`init-timeout-ms` 只用于启动期探活/初始化等待，不要复用为常规 RPC 超时。
+  - 重建任务状态用**独立集合** `<collection>_reindex_state`（1 维 Dot 哑向量 + payload JSON），不要并入主集合：否则会污染 `count` 空库探活、相似度检索与 `rag_rebuild` 的 `chunk_type` 清理。
 - `McpSyncServerCustomizer` 是单例扩展点且已被 WebMVC 自动配置占用；**不要自定义 customizer**。instructions 等走 `spring.ai.mcp.server.*`。
 - `application.yml` 必须：`protocol=STREAMABLE`、`name=small-rag`、`version=0.0.2`。MCP 端点 `/mcp`。payload 正文字段名共用 `RagService.CONTENT_FIELD`（"content"），改字段名必须同步。
 
@@ -73,7 +75,7 @@
 ## 验收标准
 
 1. `mvn clean package -DskipTests` 成功；`mvn test` 无外部依赖可跑。
-2. 启动后 `/mcp` 可用，MCP Inspector 能列出全部 8 个工具。
+2. 启动后 `/mcp` 可用，MCP Inspector 能列出全部 11 个工具。
 3. 空知识库下 `rag_query` 返回友好提示而非异常堆栈（依赖 count 短路）。
 4. 端到端（入库→检索）需要 Qdrant + OpenAI 兼容 Embedding；不需要 Chat 模型。
 5. README 步骤可复现，`git log` 至少一条 Conventional Commits。

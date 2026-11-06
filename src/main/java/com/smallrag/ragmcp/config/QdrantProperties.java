@@ -35,4 +35,12 @@ public class QdrantProperties {
      * 集合初始化 / 探活的 RPC 超时（毫秒）。
      */
     private int initTimeoutMs = 5000;
+
+    /**
+     * 常规 Qdrant RPC（写入/删除/检索）的 deadline（毫秒）。
+     *
+     * <p>与 {@link #initTimeoutMs} 分开：初始化要求快速失败，而批量写入
+     * 可能远超 5 秒，过短的 deadline 会让大文档重建间歇性失败。
+     */
+    private long requestTimeoutMs = 30000;
 }

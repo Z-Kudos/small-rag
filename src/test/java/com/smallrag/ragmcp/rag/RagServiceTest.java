@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -484,6 +485,155 @@ class RagServiceTest {
         assertThat(result.aborted()).isFalse();
         verify(vectorStore, times(2)).add(anyList());
         verify(archive, times(2)).markIndexed(anyString(), anyString());
+    }
+
+    @Test
+    void rebuildReportsProgressEvents() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        DocumentArchive archive = mock(DocumentArchive.class);
+        when(archive.isEnabled()).thenReturn(true);
+
+        ArchivedDocument first = new ArchivedDocument(
+                UUID.randomUUID().toString(), "第一篇文章", Map.of("source", "a"), "sig", "t1");
+        ArchivedDocument second = new ArchivedDocument(
+                UUID.randomUUID().toString(), "第二篇文章", Map.of("source", "b"), "sig", "t2");
+        when(archive.listAll()).thenReturn(List.of(first, second));
+
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+        List<ReindexProgress> events = new ArrayList<>();
+
+        RagService.RebuildResult result = service.reindexArchived(true, events::add);
+
+        assertThat(result.succeeded()).isEqualTo(2);
+        assertThat(events.getFirst().stage()).isEqualTo(ReindexProgress.Stage.CLEARING);
+        assertThat(events.getLast().stage()).isEqualTo(ReindexProgress.Stage.COMPLETED);
+        assertThat(events.getLast().processed()).isEqualTo(2);
+        assertThat(events).anyMatch(progress -> progress.stage() == ReindexProgress.Stage.REINDEXING
+                && progress.total() == 2
+                && first.documentId().equals(progress.currentDocumentId()));
+        assertThat(events).anyMatch(progress -> progress.stage() == ReindexProgress.Stage.REINDEXING
+                && progress.processed() == 2
+                && progress.succeeded() == 2);
+    }
+
+    @Test
+    void rebuildStopsWhenCancelled() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        DocumentArchive archive = mock(DocumentArchive.class);
+        when(archive.isEnabled()).thenReturn(true);
+
+        ArchivedDocument first = new ArchivedDocument(
+                UUID.randomUUID().toString(), "第一篇文章", Map.of("source", "a"), "sig", "t1");
+        ArchivedDocument second = new ArchivedDocument(
+                UUID.randomUUID().toString(), "第二篇文章", Map.of("source", "b"), "sig", "t2");
+        when(archive.listAll()).thenReturn(List.of(first, second));
+
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+        List<ReindexProgress> events = new ArrayList<>();
+        boolean[] cancelled = {false};
+        ReindexListener listener = new ReindexListener() {
+            @Override
+            public void onProgress(ReindexProgress progress) {
+                events.add(progress);
+                if (progress.stage() == ReindexProgress.Stage.REINDEXING && progress.processed() >= 1) {
+                    cancelled[0] = true;
+                }
+            }
+
+            @Override
+            public boolean isCancelled() {
+                return cancelled[0];
+            }
+        };
+
+        RagService.RebuildResult result = service.reindexArchived(false, listener);
+
+        assertThat(result.succeeded()).isEqualTo(1);
+        assertThat(events.getLast().stage()).isEqualTo(ReindexProgress.Stage.CANCELLED);
+        assertThat(events.getLast().processed()).isEqualTo(1);
+        verify(vectorStore, times(1)).add(anyList());
+    }
+
+    @Test
+    void rebuildStopsWritingWhenRevoked() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        DocumentArchive archive = mock(DocumentArchive.class);
+        when(archive.isEnabled()).thenReturn(true);
+
+        ArchivedDocument first = new ArchivedDocument(
+                UUID.randomUUID().toString(), "第一篇文章", Map.of("source", "a"), "sig", "t1");
+        ArchivedDocument second = new ArchivedDocument(
+                UUID.randomUUID().toString(), "第二篇文章", Map.of("source", "b"), "sig", "t2");
+        when(archive.listAll()).thenReturn(List.of(first, second));
+
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+        boolean[] revoked = {false};
+        ReindexListener listener = new ReindexListener() {
+            @Override
+            public void onProgress(ReindexProgress progress) {
+                if (progress.stage() == ReindexProgress.Stage.REINDEXING && progress.processed() >= 1) {
+                    revoked[0] = true;
+                }
+            }
+
+            @Override
+            public boolean isWritable() {
+                return !revoked[0];
+            }
+        };
+
+        assertThatThrownBy(() -> service.reindexArchived(false, listener))
+                .isInstanceOf(ReindexRevokedException.class);
+
+        // 第一篇已写入；撤销后第二篇不得再触发 add
+        verify(vectorStore, times(1)).add(anyList());
+        verify(vectorStore, times(1)).delete(any(Filter.Expression.class));
+    }
+
+    @Test
+    void rebuildSkipsAlreadyCompletedDocuments() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        DocumentArchive archive = mock(DocumentArchive.class);
+        when(archive.isEnabled()).thenReturn(true);
+
+        ArchivedDocument first = new ArchivedDocument(
+                UUID.randomUUID().toString(), "第一篇文章", Map.of("source", "a"), "sig", "t1");
+        ArchivedDocument second = new ArchivedDocument(
+                UUID.randomUUID().toString(), "第二篇文章", Map.of("source", "b"), "sig", "t2");
+        when(archive.listAll()).thenReturn(List.of(first, second));
+
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+        List<String> finished = new ArrayList<>();
+        List<ReindexProgress> events = new ArrayList<>();
+        ReindexListener listener = new ReindexListener() {
+            @Override
+            public void onProgress(ReindexProgress progress) {
+                events.add(progress);
+            }
+
+            @Override
+            public void onDocumentFinished(String documentId, boolean success) {
+                finished.add(documentId);
+            }
+        };
+
+        RagService.RebuildResult result = service.reindexArchived(
+                false, listener, Set.of(first.documentId()));
+
+        // 跳过的文档计入成功，但不再写入、不再触发完成回调
+        assertThat(result.succeeded()).isEqualTo(2);
+        assertThat(finished).containsExactly(second.documentId());
+        assertThat(events.getLast().stage()).isEqualTo(ReindexProgress.Stage.COMPLETED);
+        assertThat(events.getLast().processed()).isEqualTo(2);
+        verify(vectorStore, times(1)).add(anyList());
     }
 
     @Test

@@ -211,12 +211,23 @@ public class RagService {
      * @return 重切后的片段数
      */
     public IngestResult reindex(String documentId, String text, Map<String, String> metadata) {
+        return reindex(documentId, text, metadata, ReindexListener.NOOP);
+    }
+
+    /**
+     * 带写栅栏的重建：Qdrant 变更前校验 {@link ReindexListener#isWritable()}，
+     * 被看门狗撤销后立即停止写入。
+     */
+    private IngestResult reindex(String documentId, String text, Map<String, String> metadata,
+            ReindexListener progress) {
         requireDocumentId(documentId);
         requireText(text);
 
         ChunkingService.ChunkingResult chunked = chunkingService.chunk(text, documentId);
         List<Document> documents = buildDocuments(documentId, metadata, chunked);
+        requireWritable(progress, "删除旧片段");
         vectorStore.delete(new FilterExpressionBuilder().eq("doc_id", documentId).build());
+        requireWritable(progress, "写入新片段");
         vectorStore.add(documents);
         log.info("文档已重切: docId={}, strategy={}, chunks={}, parents={}",
                 documentId, chunkingService.strategy(), chunked.chunks().size(), chunked.parentCount());
@@ -276,8 +287,7 @@ public class RagService {
      * 手动重建全部已归档文档的向量；不会清理归档之外的残留片段。
      */
     public RebuildResult reindexAll() {
-        requireArchiveEnabled();
-        return reindexArchived(false);
+        return reindexArchived(false, ReindexListener.NOOP);
     }
 
     /**
@@ -286,8 +296,7 @@ public class RagService {
      * <p>没有归档文档时拒绝执行，避免误清空知识库。
      */
     public RebuildResult rebuild() {
-        requireArchiveEnabled();
-        return reindexArchived(true);
+        return reindexArchived(true, ReindexListener.NOOP);
     }
 
     /**
@@ -312,47 +321,126 @@ public class RagService {
         return new DocumentPage(all.size(), safeOffset, safeLimit, documents);
     }
 
-    private RebuildResult reindexArchived(boolean clearFirst) {
-        List<ArchivedDocument> documents = documentArchive.listAll();
-        if (documents.isEmpty()) {
+    /**
+     * 按归档重建全部文档，并通过 listener 上报阶段与逐篇进度。
+     *
+     * <p>先校验归档非空（避免误清空），再执行清空（如需），随后重新读取归档列表，
+     * 尽量收窄“清空后、重建前”新入库文档被漏掉的时间窗。
+     *
+     * @param clearFirst 是否先清空当前集合中由本服务写入的片段
+     * @param listener   进度回调；为 null 时忽略
+     * @return 重建统计
+     */
+    public RebuildResult reindexArchived(boolean clearFirst, ReindexListener listener) {
+        return reindexArchived(clearFirst, listener, Set.of());
+    }
+
+    /**
+     * 按归档重建全部文档；{@code skipDocumentIds} 中的文档视为已完成，直接跳过。
+     *
+     * <p>重启续接时使用：不重新清空，只补做上次未完成的文档。
+     *
+     * @param clearFirst      是否先清空当前集合中由本服务写入的片段
+     * @param listener        进度回调；为 null 时忽略
+     * @param skipDocumentIds 已完成、应跳过的文档 id
+     * @return 重建统计
+     */
+    public RebuildResult reindexArchived(boolean clearFirst, ReindexListener listener,
+            Set<String> skipDocumentIds) {
+        requireArchiveEnabled();
+        ReindexListener progress = listener == null ? ReindexListener.NOOP : listener;
+        Set<String> skip = skipDocumentIds == null ? Set.of() : Set.copyOf(skipDocumentIds);
+
+        if (progress.isCancelled()) {
+            progress.onProgress(new ReindexProgress(
+                    ReindexProgress.Stage.CANCELLED, 0, 0, 0, 0, null, false));
+            return new RebuildResult(0, 0, 0, false);
+        }
+
+        if (documentArchive.listAll().isEmpty()) {
             if (clearFirst) {
                 throw new IllegalStateException("没有归档文档，拒绝清空向量库");
             }
+            progress.onProgress(new ReindexProgress(
+                    ReindexProgress.Stage.COMPLETED, 0, 0, 0, 0, null, false));
             return new RebuildResult(0, 0, 0, false);
         }
 
         if (clearFirst) {
+            requireWritable(progress, "清空向量库");
+            progress.onProgress(new ReindexProgress(
+                    ReindexProgress.Stage.CLEARING, 0, 0, 0, 0, null, false));
             vectorStore.delete(new FilterExpressionBuilder()
                     .in(ChunkingService.FIELD_CHUNK_TYPE,
                             ChunkingService.CHUNK_TYPE_CHUNK,
                             ChunkingService.CHUNK_TYPE_CHILD,
                             ChunkingService.CHUNK_TYPE_PARENT)
                     .build());
-            log.info("已清空当前集合中由 small-rag 写入的片段，开始全量重建: {} 篇", documents.size());
+            progress.onCleared();
+            log.info("已清空当前集合中由 small-rag 写入的片段，开始全量重建");
+        }
+
+        List<ArchivedDocument> documents = documentArchive.listAll();
+        int total = documents.size();
+        if (total == 0) {
+            progress.onProgress(new ReindexProgress(
+                    ReindexProgress.Stage.COMPLETED, 0, 0, 0, 0, null, false));
+            return new RebuildResult(0, 0, 0, false);
         }
 
         String signature = currentSignature();
         int succeeded = 0;
         int failed = 0;
         int consecutiveFailures = 0;
-        for (ArchivedDocument document : documents) {
+        progress.onProgress(new ReindexProgress(
+                ReindexProgress.Stage.REINDEXING, total, 0, 0, 0, null, false));
+
+        for (int index = 0; index < total; index++) {
+            if (progress.isCancelled()) {
+                log.info("重建任务已取消: processed={}/{}", index, total);
+                progress.onProgress(new ReindexProgress(ReindexProgress.Stage.CANCELLED,
+                        total, index, succeeded, failed, null, false));
+                return new RebuildResult(total, succeeded, failed, false);
+            }
+            ArchivedDocument document = documents.get(index);
+            if (skip.contains(document.documentId())) {
+                // 续接：上次已成功重建，直接计入进度
+                succeeded++;
+                progress.onProgress(new ReindexProgress(ReindexProgress.Stage.REINDEXING,
+                        total, index + 1, succeeded, failed, document.documentId(), false));
+                continue;
+            }
+            progress.onProgress(new ReindexProgress(ReindexProgress.Stage.REINDEXING,
+                    total, index, succeeded, failed, document.documentId(), false));
             try {
-                reindex(document.documentId(), document.text(), document.metadata());
+                reindex(document.documentId(), document.text(), document.metadata(), progress);
                 documentArchive.markIndexed(document.documentId(), signature);
                 succeeded++;
                 consecutiveFailures = 0;
+                progress.onDocumentFinished(document.documentId(), true);
+            } catch (ReindexRevokedException e) {
+                // 写权限已被撤销：立即停止，不能把后续文档算作失败
+                log.warn("重建任务写权限已撤销，停止重建: docId={}", document.documentId());
+                throw e;
             } catch (Exception e) {
                 failed++;
                 consecutiveFailures++;
+                progress.onDocumentFinished(document.documentId(), false);
                 log.warn("重建失败: docId={}, 原因={}", document.documentId(), e.toString());
                 if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                     log.error("连续 {} 篇重建失败，中止本次任务", consecutiveFailures);
-                    return new RebuildResult(documents.size(), succeeded, failed, true);
+                    progress.onProgress(new ReindexProgress(ReindexProgress.Stage.ABORTED,
+                            total, index + 1, succeeded, failed, document.documentId(), true));
+                    return new RebuildResult(total, succeeded, failed, true);
                 }
             }
+            progress.onProgress(new ReindexProgress(ReindexProgress.Stage.REINDEXING,
+                    total, index + 1, succeeded, failed, document.documentId(), false));
         }
-        log.info("重建完成: total={}, succeeded={}, failed={}", documents.size(), succeeded, failed);
-        return new RebuildResult(documents.size(), succeeded, failed, false);
+        log.info("重建完成: total={}, succeeded={}, failed={}", total, succeeded, failed);
+        progress.onProgress(new ReindexProgress(
+                ReindexProgress.Stage.COMPLETED, total, total, succeeded, failed, null, false));
+        return new RebuildResult(total, succeeded, failed, false);
     }
 
     private void markIndexedQuietly(String documentId) {
@@ -371,6 +459,15 @@ public class RagService {
     private void requireArchiveEnabled() {
         if (!documentArchive.isEnabled()) {
             throw new IllegalStateException("原始文档归档不可用，无法执行该管理操作");
+        }
+    }
+
+    /**
+     * 写栅栏：看门狗撤销写权限后，旧任务不得再发起 Qdrant 变更。
+     */
+    private static void requireWritable(ReindexListener progress, String action) {
+        if (!progress.isWritable()) {
+            throw new ReindexRevokedException("重建任务写权限已撤销，拒绝" + action);
         }
     }
 

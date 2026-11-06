@@ -21,11 +21,16 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding-0.6b}
       # Qwen3-Embedding-0.6B 输出 1024 维，必须与 Qdrant 集合维度一致
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
+      # Embedding HTTP 超时（毫秒）：防止服务假死时重建线程被永久占用
+      EMBEDDING_CONNECT_TIMEOUT_MS: ${EMBEDDING_CONNECT_TIMEOUT_MS:-10000}
+      EMBEDDING_READ_TIMEOUT_MS: ${EMBEDDING_READ_TIMEOUT_MS:-120000}
       # GGUF 模型下载地址（首次启动由 start-llama.sh 下载到 EMBEDDING_MODEL_PATH）
       EMBEDDING_MODEL_URL: ${EMBEDDING_MODEL_URL:-https://modelscope.cn/models/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/master/Qwen3-Embedding-0.6B-Q8_0.gguf}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-small_rag_text}
       # 留空表示不启用鉴权
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      # 常规 Qdrant RPC（写入/删除/检索）deadline（毫秒）
+      QDRANT_REQUEST_TIMEOUT_MS: ${QDRANT_REQUEST_TIMEOUT_MS:-30000}
       # true：启动时等待容器内 Embedding 服务就绪（模型由 start-llama.sh 下载）
       SMALL_RAG_ENSURE_EMBEDDING_MODEL: ${SMALL_RAG_ENSURE_EMBEDDING_MODEL:-true}
       # 切分策略：fixed | recursive | semantic | parent-child（默认 parent-child）
@@ -34,6 +39,15 @@ services:
       CHUNK_OVERLAP: ${CHUNK_OVERLAP:-100}
       CHUNK_AUTO_RECHUNK: ${CHUNK_AUTO_RECHUNK:-true}
       SMALL_RAG_ARCHIVE_DIR: ${SMALL_RAG_ARCHIVE_DIR:-/data/documents}
+      # 异步重建看门狗（秒）：停滞只告警，硬超时中断线程；0 关闭
+      REINDEX_STALL_TIMEOUT_SECONDS: ${REINDEX_STALL_TIMEOUT_SECONDS:-1800}
+      REINDEX_HARD_TIMEOUT_SECONDS: ${REINDEX_HARD_TIMEOUT_SECONDS:-3600}
+      REINDEX_CHECK_INTERVAL_SECONDS: ${REINDEX_CHECK_INTERVAL_SECONDS:-30}
+      REINDEX_JOIN_TIMEOUT_SECONDS: ${REINDEX_JOIN_TIMEOUT_SECONDS:-10}
+      # 硬超时撤销写权限后的宽限期（秒），到期强制释放任务锁
+      REINDEX_RECOVERY_GRACE_SECONDS: ${REINDEX_RECOVERY_GRACE_SECONDS:-120}
+      # 任务快照与任务锁存放在 Qdrant 的 <collection>_reindex_state 集合
+      REINDEX_RESUME_ON_STARTUP: ${REINDEX_RESUME_ON_STARTUP:-true}
       SEMANTIC_SIMILARITY_THRESHOLD: ${SEMANTIC_SIMILARITY_THRESHOLD:-0.75}
       PARENT_CHUNK_SIZE: ${PARENT_CHUNK_SIZE:-2000}
       CHILD_CHUNK_SIZE: ${CHILD_CHUNK_SIZE:-400}

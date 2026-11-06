@@ -1,11 +1,13 @@
 package com.smallrag.ragmcp.mcp;
 
 import com.smallrag.ragmcp.rag.RagService;
+import com.smallrag.ragmcp.rag.ReindexTaskService;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -19,30 +21,32 @@ import static org.mockito.Mockito.when;
 class RagMcpToolsTest {
 
     private final RagService ragService = mock(RagService.class);
-    private final RagMcpTools tools = new RagMcpTools(ragService, new ObjectMapper());
+    private final ReindexTaskService reindexTaskService = mock(ReindexTaskService.class);
+    private final RagMcpTools tools = new RagMcpTools(ragService, reindexTaskService, new ObjectMapper());
 
     @Test
     void rebuildRequiresExplicitConfirmation() {
         assertThat(tools.ragRebuild(false)).contains("confirm=true");
-        verifyNoInteractions(ragService);
+        verifyNoInteractions(ragService, reindexTaskService);
     }
 
     @Test
-    void rebuildDelegatesAndReturnsStatistics() {
-        when(ragService.rebuild()).thenReturn(new RagService.RebuildResult(2, 2, 0, false));
+    void rebuildSubmitsAsyncTask() {
+        when(reindexTaskService.submit("rebuild", true)).thenReturn(taskView("task-1", "queued", 0));
 
         assertThat(tools.ragRebuild(true))
-                .contains("\"total\":2")
-                .contains("\"succeeded\":2")
-                .contains("\"aborted\":false");
+                .contains("\"taskId\":\"task-1\"")
+                .contains("\"mode\":\"rebuild\"")
+                .contains("\"status\":\"queued\"");
     }
 
     @Test
-    void reindexWithoutDocumentIdRebuildsAll() {
-        when(ragService.reindexAll()).thenReturn(new RagService.RebuildResult(3, 3, 0, false));
+    void reindexWithoutDocumentIdSubmitsAsyncTask() {
+        when(reindexTaskService.submit("reindex", false)).thenReturn(taskView("task-2", "queued", 0));
 
-        assertThat(tools.ragReindex(null)).contains("\"total\":3");
-        verify(ragService).reindexAll();
+        assertThat(tools.ragReindex(null)).contains("\"taskId\":\"task-2\"");
+        verify(reindexTaskService).submit("reindex", false);
+        verifyNoInteractions(ragService);
     }
 
     @Test
@@ -52,6 +56,45 @@ class RagMcpToolsTest {
         assertThat(tools.ragReindex("doc-1"))
                 .contains("\"documentId\":\"doc-1\"")
                 .contains("\"chunkCount\":4");
+    }
+
+    @Test
+    void taskStatusReturnsLatestTask() {
+        when(reindexTaskService.status(null)).thenReturn(Optional.of(taskView("task-3", "reindexing", 50)));
+
+        assertThat(tools.ragTaskStatus(null))
+                .contains("\"taskId\":\"task-3\"")
+                .contains("\"status\":\"reindexing\"")
+                .contains("\"percent\":50");
+    }
+
+    @Test
+    void taskStatusReturnsIdleWhenNoTask() {
+        when(reindexTaskService.status(null)).thenReturn(Optional.empty());
+
+        assertThat(tools.ragTaskStatus(null)).contains("\"status\":\"IDLE\"");
+    }
+
+    @Test
+    void taskCancelDelegates() {
+        when(reindexTaskService.cancel("task-4")).thenReturn(new ReindexTaskService.ReindexTaskView(
+                "task-4", "reindex", "reindexing", 4, 2, 2, 0, 50,
+                "doc-1", "2026-11-06T12:00:00Z", false, true,
+                "2026-11-06T11:59:00Z", null, false, null, false, null));
+
+        assertThat(tools.ragTaskCancel("task-4"))
+                .contains("\"taskId\":\"task-4\"")
+                .contains("\"cancelRequested\":true");
+    }
+
+    @Test
+    void taskResumeDelegates() {
+        when(reindexTaskService.resume("task-5")).thenReturn(
+                taskView("task-5", "reindexing", 50));
+
+        assertThat(tools.ragTaskResume("task-5"))
+                .contains("\"taskId\":\"task-5\"")
+                .contains("\"status\":\"reindexing\"");
     }
 
     @Test
@@ -83,5 +126,11 @@ class RagMcpToolsTest {
                 .contains("\"total\":1")
                 .contains("\"documentId\":\"doc-1\"")
                 .contains("\"textLength\":12");
+    }
+
+    private static ReindexTaskService.ReindexTaskView taskView(String taskId, String status, int percent) {
+        return new ReindexTaskService.ReindexTaskView(taskId, "rebuild", status, 4, 2, 2, 0,
+                percent, "doc-1", "2026-11-06T12:00:00Z", false, false,
+                "2026-11-06T11:59:00Z", null, false, null, false, null);
     }
 }

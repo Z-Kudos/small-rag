@@ -78,6 +78,16 @@ public class RagProperties {
     private Chunking chunking = new Chunking();
 
     /**
+     * Embedding HTTP 调用超时。
+     */
+    private Embedding embedding = new Embedding();
+
+    /**
+     * 异步重建任务的看门狗参数。
+     */
+    private Reindex reindex = new Reindex();
+
+    /**
      * 切分配置。
      */
     @Data
@@ -190,5 +200,85 @@ public class RagProperties {
          * 标题路径分隔符，例如 " > " 会生成 "指南 > 安装 > Linux"。
          */
         private String headingSeparator = " > ";
+    }
+
+    /**
+     * Embedding 服务调用超时。服务假死时避免重建线程被永久占用。
+     */
+    @Data
+    public static class Embedding {
+
+        /**
+         * 建立连接超时（毫秒）。
+         */
+        private long connectTimeoutMs = 10_000;
+
+        /**
+         * 读取/写入/单次请求总超时（毫秒）。本地 llama-server 处理大批量时可能较慢。
+         */
+        private long readTimeoutMs = 120_000;
+    }
+
+    /**
+     * 异步重建任务的看门狗参数：停滞检测只告警，硬超时才中断工作线程。
+     */
+    @Data
+    public static class Reindex {
+
+        /**
+         * 超过该秒数没有进度事件视为停滞；{@code <= 0} 关闭停滞检测。
+         */
+        private long stallTimeoutSeconds = 1_800;
+
+        /**
+         * 停滞超过该秒数后中断工作线程；{@code <= 0} 关闭硬超时。
+         */
+        private long hardTimeoutSeconds = 3_600;
+
+        /**
+         * 看门狗检查间隔（秒），实际值至少 1 秒。
+         */
+        private long checkIntervalSeconds = 30;
+
+        /**
+         * 硬超时中断后等待工作线程退出的秒数。
+         */
+        private long joinTimeoutSeconds = 10;
+
+        /**
+         * 硬超时撤销写权限后，等待在途写入结束的宽限期（秒）；到期仍未退出则强制释放任务锁。
+         *
+         * <p>实际值不小于 Qdrant 常规 RPC deadline 的 2 倍：撤销后旧任务无法再发起新写入，
+         * 只需覆盖撤销瞬间已经在途的请求。
+         */
+        private long recoveryGraceSeconds = 120;
+
+        /**
+         * 启动时是否自动续接重启前未完成的重建任务。
+         *
+         * <p>关闭后任务会停在 {@code interrupted} 并继续持有任务锁，
+         * 可通过 {@code rag_task_resume} 手动续接或 {@code rag_task_cancel} 放弃。
+         */
+        private boolean resumeOnStartup = true;
+
+        /**
+         * 实际检查间隔，至少 1 秒。
+         *
+         * @return 检查间隔秒数
+         */
+        public long effectiveCheckIntervalSeconds() {
+            return Math.max(1, checkIntervalSeconds);
+        }
+
+        /**
+         * 实际宽限期：不小于 Qdrant deadline 的 2 倍。
+         *
+         * @param qdrantTimeoutMs Qdrant 常规 RPC deadline（毫秒）
+         * @return 宽限期秒数
+         */
+        public long effectiveRecoveryGraceSeconds(long qdrantTimeoutMs) {
+            long floor = Math.max(1, (Math.max(0, qdrantTimeoutMs) * 2) / 1000);
+            return Math.max(recoveryGraceSeconds, floor);
+        }
     }
 }

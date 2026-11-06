@@ -44,7 +44,7 @@ public class QdrantConfig {
     public QdrantClient qdrantClient(QdrantProperties properties) {
         QdrantGrpcClient.Builder builder = QdrantGrpcClient
                 .newBuilder(properties.getHost(), properties.getPort(), properties.isUseTls())
-                .withTimeout(Duration.ofMillis(properties.getInitTimeoutMs()));
+                .withTimeout(Duration.ofMillis(properties.getRequestTimeoutMs()));
         if (properties.getApiKey() != null && !properties.getApiKey().isBlank()) {
             builder.withApiKey(properties.getApiKey());
         }

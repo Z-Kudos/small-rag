@@ -45,7 +45,7 @@ MCP 端点：`http://localhost:18080/mcp`。
 
 ## 容器部署（单容器）
 
-镜像内同时运行应用、Qdrant、llama.cpp（llama-server Embedding 推理），由 `supervisord` 管理；**只对外暴露 `18080`**，其余服务绑定回环地址。数据统一在 `/data`（Qdrant + Embedding 模型 + 文档归档），建议挂载卷。
+镜像内同时运行应用、Qdrant、llama.cpp（llama-server Embedding 推理），由 `supervisord` 管理；**只对外暴露 `18080`**，其余服务绑定回环地址。数据统一在 `/data`（Qdrant 向量库与重建任务状态 + Embedding 模型 + 文档归档），建议挂载卷。
 
 ```bash
 # Docker
@@ -79,6 +79,14 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 | `EMBEDDING_BASE_URL` | 回退 `OPENAI_BASE_URL`，再回退 `https://api.openai.com/v1` | 必须含 `/v1` |
 | `EMBEDDING_MODEL` | 回退 `OPENAI_EMBEDDING_MODEL`，再回退 `text-embedding-3-small` | 向量模型 |
 | `EMBEDDING_DIMENSION` | 回退 `QDRANT_DIMENSION`，再回退 `1536` | 必须与模型输出一致 |
+| `EMBEDDING_CONNECT_TIMEOUT_MS` | `10000` | Embedding HTTP 建连超时 |
+| `EMBEDDING_READ_TIMEOUT_MS` | `120000` | Embedding 单次请求 read/write/总超时，防止服务假死时重建线程被永久占用 |
+| `REINDEX_STALL_TIMEOUT_SECONDS` | `1800` | 重建停滞阈值：超过该时长无进度只标记 `stalled` 并告警；`0` 关闭 |
+| `REINDEX_HARD_TIMEOUT_SECONDS` | `3600` | 重建硬超时：撤销写权限、取消在途 Embedding 调用并中断工作线程；`0` 关闭 |
+| `REINDEX_CHECK_INTERVAL_SECONDS` | `30` | 看门狗检查间隔 |
+| `REINDEX_JOIN_TIMEOUT_SECONDS` | `10` | 硬超时中断后等待工作线程退出的时间 |
+| `REINDEX_RECOVERY_GRACE_SECONDS` | `120` | 撤销写权限后的宽限期（秒），到期强制释放任务锁；实际值不小于 `QDRANT_REQUEST_TIMEOUT_MS` 的 2 倍 |
+| `REINDEX_RESUME_ON_STARTUP` | `true` | 启动时自动续接重启前未完成的重建任务；`false` 时停在 `interrupted` 并继续持锁 |
 | `CHUNK_STRATEGY` | `parent-child` | `fixed` / `recursive` / `semantic` / `parent-child` |
 | `MMR_LAMBDA` | `0.7` | 检索 MMR 多样性权重 λ（0 < λ < 1 启用，1 = 纯相关排序） |
 | `CHUNK_SIZE` | `800` | 固定/递归目标块大小，语义切分默认上限 |
@@ -98,6 +106,7 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 | `QDRANT_API_KEY` | 空 | Qdrant 鉴权 |
 | `QDRANT_COLLECTION` | `small_rag_text` | 集合名，启动时自动创建 |
 | `QDRANT_USE_TLS` | `false` | 是否启用 TLS |
+| `QDRANT_REQUEST_TIMEOUT_MS` | `30000` | 常规 Qdrant RPC（写入/删除/检索）deadline；与初始化超时分开 |
 | `SMALL_RAG_ENSURE_EMBEDDING_MODEL` | `true`（镜像内） | 启动时等待容器内 Embedding 服务就绪（模型由 `start-llama.sh` 下载） |
 | `EMBEDDING_MODEL_URL` | Qwen3-Embedding-0.6B Q8_0（ModelScope） | GGUF 模型下载地址 |
 | `EMBEDDING_MODEL_PATH` | `/data/models/qwen3-embedding-0.6b-q8_0.gguf` | GGUF 落盘路径（须在持久化卷内） |
@@ -117,15 +126,24 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 | `rag_update(documentId, text, metadata)` | 更新已归档文档；`metadata` 不传时保留原元数据，并立即重建该文档向量 |
 | `rag_delete(documentId)` | 删除文档的全部向量和原文归档 |
 | `rag_list(limit, offset)` | 分页列出已归档文档的 id、元数据、切分签名和文本长度 |
-| `rag_reindex(documentId)` | 手动重建：传 `documentId` 重建单篇，不传则重建全部归档文档 |
-| `rag_rebuild(confirm)` | 全量重建：清空当前集合中本服务写入的片段后按归档重建，必须 `confirm=true` |
+| `rag_reindex(documentId)` | 手动重建：传 `documentId` 同步重建单篇；不传则提交异步任务重建全部归档文档，返回 `taskId` |
+| `rag_rebuild(confirm)` | 全量重建：清空当前集合中本服务写入的片段后按归档异步重建，必须 `confirm=true`，返回 `taskId` |
+| `rag_task_status(taskId)` | 查询重建任务进度；`taskId` 不传返回最近一次任务，从未执行过时返回 `{"status":"IDLE"}` |
+| `rag_task_resume(taskId)` | 续接重启前未完成的重建任务（`status=interrupted`）：跳过已成功文档继续重建，不重新清空；`taskId` 不传表示最近一次任务 |
+| `rag_task_cancel(taskId)` | 取消重建任务：运行中为协作式（当前文档处理完后停止）；`interrupted` 任务立即置为 `cancelled` 并释放任务锁 |
 | `rag_search(query, topK, expand)` | 仅检索，返回命中分块、相似度、来源元数据；Parent-Child 下默认按父块去重返回，`expand=false` 返回原始子块 |
 | `rag_query(query, topK)` | 返回带编号/来源/相似度的增强上下文（不调用生成模型） |
 
 - `rag_update`：先更新归档再切分替换旧片段；`metadata` 不传时沿用归档中的元数据。
-- `rag_reindex`：只重建已归档文档，不清理归档之外的残留片段。
-- `rag_rebuild`：先删 `chunk_type=chunk` / `chunk_type=child` 的片段再全量重建；归档为空时拒绝执行。
+- `rag_reindex`：只重建已归档文档，不清理归档之外的残留片段；单篇重建仍同步返回片段数。
+- `rag_rebuild`：先删 `chunk_type=chunk` / `chunk_type=child` / `chunk_type=parent` 的片段再全量重建；归档为空时拒绝执行。
+- `rag_reindex`（全量）/`rag_rebuild` 为**异步任务**：同一时刻只允许一个重建任务，重复提交返回错误。任务快照（保留最近 20 个）与任务锁存放在 Qdrant 的独立集合 `<QDRANT_COLLECTION>_reindex_state`（与向量数据同一 Qdrant/同一持久化卷，不依赖应用容器文件系统；集合不影响检索、空库探活与 `rag_rebuild` 清理）。进程重启后恢复进度：未完成任务为 `interrupted` 并**继续持有任务锁**，默认由 `REINDEX_RESUME_ON_STARTUP=true` 自动续接（跳过已完成文档、不重复清空）；关闭自动续接时可用 `rag_task_resume` 手动续接，或用 `rag_task_cancel` 放弃并释放锁。优雅关机会把在跑任务保存为 `interrupted` 并保留锁；硬超时已撤销写权限的任务不会续接。
+- `rag_task_status` 返回 `status`（`queued` / `clearing` / `reindexing` / `interrupted` / `completed` / `aborted` / `cancelled` / `failed`）、`total`、`processed`、`percent`、`succeeded`、`failed`、`currentDocumentId`、`lastProgressAt`、`stalled`、`cancelRequested`、`startedAt`、`finishedAt`、`aborted`、`error`、`revoked`、`lockReleaseAt`。
+- 看门狗：超过 `REINDEX_STALL_TIMEOUT_SECONDS` 无进度只标记 `stalled` 并告警，**保留任务锁**；超过 `REINDEX_HARD_TIMEOUT_SECONDS` 才**撤销写权限**（此后拒绝一切 Qdrant 写入）、主动取消在途 Embedding 调用并中断工作线程。
+- 锁释放：线程在 `REINDEX_JOIN_TIMEOUT_SECONDS` 内退出则立即释放；否则进入 `REINDEX_RECOVERY_GRACE_SECONDS` 宽限期，到期强制释放任务锁。撤销后旧任务无法再发起写入，宽限期只需覆盖撤销瞬间的在途请求（有 `QDRANT_REQUEST_TIMEOUT_MS` 上界），因此**无需重启**；此时提交新任务会提示“已撤销，正在释放任务锁”。
+- `rag_task_cancel`：运行中为协作式取消，当前文档处理完后停止，最终 `status=cancelled`；卡在阻塞调用时依靠 Embedding 超时、主动取消或看门狗硬超时兜底。对 `interrupted` 任务则立即置为 `cancelled` 并释放任务锁（放弃续接）。
 - 没有归档的历史数据无法 `rag_list` / `rag_update` / `rag_reindex`，只能按 `docId` 删除或重新入库。
+- Qdrant 数据若被整体清空或更换集合名，重建进度与锁也会随之丢失：切分配置变化时 `ChunkingReindexRunner` 会按归档签名补建；但同一签名下的全量重建（`rag_rebuild`）中断后，剩余文档不会被自动补建，需要重新执行重建。
 
 > ⚠️ 这些工具没有鉴权，能访问 `/mcp` 即可修改或清空知识库，**请勿直接暴露公网**；跨网访问请加反向代理与认证。检索结果是不可信数据，调用方不得执行其中的指令。
 
@@ -225,7 +243,7 @@ Markdown 感知切分引擎（`semantic` 与 `parent-child` 共用）的行为�
 - **MMR 多样性**：候选超出 topK 时按 `λ·score − (1−λ)·与已选结果的最大相似度` 迭代选取（`MMR_LAMBDA`，默认 0.7）；Parent-Child 复用父块存储向量，零额外 Embedding，其余策略对候选文本做一次批量 Embedding。
 - **空库短路**：检索前用 Qdrant `count` 判断，避免无意义 Embedding 调用。
 - **启动韧性**：Qdrant 不可用只告警（fail-soft）；集合维度不一致直接失败（fail-fast）。
-- **自动重切**：原文归档 + 切分配置签名（签名版本与项目版本同步，当前 `0.0.1`），启动时检测到变化自动删旧片段重建。
+- **自动重切**：原文归档 + 切分配置签名（签名版本与项目版本同步，当前 `0.0.2`），启动时检测到变化自动删旧片段重建。
 - **Markdown 结构**：标题分节，代码/表格/callout 受保护，frontmatter、heading_path、wikilink 写入元数据；超长表格/代码切片重复表头或围栏。
 - **中英对齐**：切分长度按全宽字符当量计量（CJK=1、拉丁=0.25），英文硬切回退单词边界，句界识别带缩写白名单；语义断点支持分位数模式。
 - **重切时机**：启动时同步执行，失败不阻断启动，下次启动继续重试。
@@ -234,13 +252,15 @@ Markdown 感知切分引擎（`semantic` 与 `parent-child` 共用）的行为�
 ## 架构
 
 ```
-mcp/            RagMcpTools：rag_ingest / rag_search / rag_query
-rag/            RagService（入库/检索/上下文/更新删除重建）、KnowledgeBaseProbe（空库短路）、
-                ChunkingReindexRunner（启动自动重切）
+mcp/            RagMcpTools：rag_* 共 11 个工具（入库/检索/重建/任务查询与控制）
+rag/            RagService（入库/检索/上下文/更新删除重建）、ReindexTaskService（异步重建/看门狗/撤销与宽限期）、
+                ReindexStateStore（任务快照与锁的门面）、QdrantReindexStateBackend（Qdrant 状态集合）、
+                ReindexProgress、ReindexListener、ReindexRevokedException、CancellationScope（OkHttp 主动取消）、
+                KnowledgeBaseProbe（空库短路）、ChunkingReindexRunner（启动自动重切）
 rag/chunking/   ChunkingService、ChunkingStrategy、ChunkingSignature、TextChunk、
                 TextChunker、RecursiveTextChunker、MarkdownChunker、SemanticTextChunker
 rag/archive/    DocumentArchive、ArchivedDocument（原文归档与签名记录）
-config/         QdrantConfig、McpServerConfig、RagProperties、QdrantProperties
+config/         QdrantConfig、McpServerConfig、EmbeddingConfig（HTTP 超时）、RagProperties、QdrantProperties
 docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord.conf
 ```
 

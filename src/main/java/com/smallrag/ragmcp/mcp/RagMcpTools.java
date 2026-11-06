@@ -1,6 +1,7 @@
 package com.smallrag.ragmcp.mcp;
 
 import com.smallrag.ragmcp.rag.RagService;
+import com.smallrag.ragmcp.rag.ReindexTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -29,6 +30,7 @@ import java.util.Map;
 public class RagMcpTools {
 
     private final RagService ragService;
+    private final ReindexTaskService reindexTaskService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -169,18 +171,18 @@ public class RagMcpTools {
     }
 
     /**
-     * 手动重建向量：指定 documentId 时重建单篇，不传时重建全部归档文档。
+     * 手动重建向量：指定 documentId 时同步重建单篇；不传时提交异步任务重建全部归档文档。
      *
      * @param documentId 文档 id；为空表示全部
-     * @return 单篇返回片段数，全部返回重建统计
+     * @return 单篇返回片段数；全部返回任务快照（含 taskId），用 rag_task_status 查询进度
      */
-    @McpTool(name = "rag_reindex", description = "手动重建向量：传 documentId 重建单篇，不传则重建全部已归档文档")
+    @McpTool(name = "rag_reindex", description = "手动重建向量：传 documentId 同步重建单篇；不传则提交异步任务重建全部已归档文档，返回 taskId，用 rag_task_status 查询进度")
     public String ragReindex(
-            @McpToolParam(description = "文档 id（UUID）；为空表示重建全部", required = false) String documentId) {
+            @McpToolParam(description = "文档 id（UUID）；为空表示异步重建全部", required = false) String documentId) {
         log.debug("MCP rag_reindex 调用，documentId={}", documentId);
         try {
             if (documentId == null || documentId.isBlank()) {
-                return objectMapper.writeValueAsString(ragService.reindexAll());
+                return objectMapper.writeValueAsString(reindexTaskService.submit("reindex", false));
             }
             return ingestResult(ragService.reindexDocument(documentId));
         } catch (Exception e) {
@@ -190,12 +192,12 @@ public class RagMcpTools {
     }
 
     /**
-     * 全量重建：清空当前集合中由本服务写入的片段，再按归档重建全部文档。
+     * 全量重建：清空当前集合中由本服务写入的片段，再按归档异步重建全部文档。
      *
      * @param confirm 必须为 true，防止误清空知识库
-     * @return 重建统计
+     * @return 任务快照（含 taskId），用 rag_task_status 查询进度
      */
-    @McpTool(name = "rag_rebuild", description = "全量重建：清空当前集合中由 small-rag 写入的片段后按归档重建；必须 confirm=true")
+    @McpTool(name = "rag_rebuild", description = "全量重建：清空当前集合中由 small-rag 写入的片段后按归档异步重建；必须 confirm=true，返回 taskId，用 rag_task_status 查询进度")
     public String ragRebuild(
             @McpToolParam(description = "必须显式传 true，防止误清空知识库", required = true) Boolean confirm) {
         log.debug("MCP rag_rebuild 调用，confirm={}", confirm);
@@ -203,10 +205,68 @@ public class RagMcpTools {
             return error("必须传 confirm=true 才能执行全量重建");
         }
         try {
-            return objectMapper.writeValueAsString(ragService.rebuild());
+            return objectMapper.writeValueAsString(reindexTaskService.submit("rebuild", true));
         } catch (Exception e) {
             log.warn("MCP rag_rebuild 失败: 原因={}", e.toString());
             return error("全量重建失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 查询重建任务进度：传 taskId 查指定任务，不传返回最近一次任务。
+     *
+     * @param taskId 任务 id；为空表示最近一次任务
+     * @return 任务快照（status、total、processed、percent、succeeded、failed、currentDocumentId、
+     *         lastProgressAt、stalled、cancelRequested、revoked、lockReleaseAt 等）；
+     *         从未执行过重建时返回 {@code status=IDLE}
+     */
+    @McpTool(name = "rag_task_status", description = "查询重建任务进度：传 taskId 查指定任务，不传返回最近一次任务；返回 status/total/processed/percent/stalled/cancelRequested/revoked/lockReleaseAt，无任务时 status=IDLE")
+    public String ragTaskStatus(
+            @McpToolParam(description = "任务 id；为空表示最近一次重建任务", required = false) String taskId) {
+        log.debug("MCP rag_task_status 调用，taskId={}", taskId);
+        try {
+            return reindexTaskService.status(taskId)
+                    .map(objectMapper::writeValueAsString)
+                    .orElseGet(() -> objectMapper.writeValueAsString(Map.of("status", "IDLE")));
+        } catch (Exception e) {
+            log.warn("MCP rag_task_status 失败: taskId={}, 原因={}", taskId, e.toString());
+            return error("查询任务失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 请求取消正在执行的重建任务；协作式，当前文档处理完后在文档边界停止。
+     *
+     * @param taskId 任务 id；为空表示最近一次任务
+     * @return 收到取消请求后的任务快照（cancelRequested=true）
+     */
+    @McpTool(name = "rag_task_cancel", description = "取消重建任务：运行中为协作式（当前文档处理完后停止）；interrupted 任务立即置为 cancelled 并释放任务锁")
+    public String ragTaskCancel(
+            @McpToolParam(description = "任务 id；为空表示最近一次重建任务", required = false) String taskId) {
+        log.debug("MCP rag_task_cancel 调用，taskId={}", taskId);
+        try {
+            return objectMapper.writeValueAsString(reindexTaskService.cancel(taskId));
+        } catch (Exception e) {
+            log.warn("MCP rag_task_cancel 失败: taskId={}, 原因={}", taskId, e.toString());
+            return error("取消任务失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 续接重启前未完成的重建任务（status=interrupted），从上次成功的文档之后继续，不重新清空。
+     *
+     * @param taskId 任务 id；为空表示最近一次任务
+     * @return 续接后的任务快照
+     */
+    @McpTool(name = "rag_task_resume", description = "续接重启前未完成的重建任务（status=interrupted）：跳过已成功文档继续重建，不重新清空；传 taskId 指定任务，不传表示最近一次")
+    public String ragTaskResume(
+            @McpToolParam(description = "任务 id；为空表示最近一次重建任务", required = false) String taskId) {
+        log.debug("MCP rag_task_resume 调用，taskId={}", taskId);
+        try {
+            return objectMapper.writeValueAsString(reindexTaskService.resume(taskId));
+        } catch (Exception e) {
+            log.warn("MCP rag_task_resume 失败: taskId={}, 原因={}", taskId, e.toString());
+            return error("续接任务失败: " + rootMessage(e));
         }
     }
 
