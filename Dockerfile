@@ -68,8 +68,10 @@ COPY --from=build --chown=app:app /workspace/target/small-rag-*.jar /app/app.jar
 COPY --chown=app:app docker/start-qdrant.sh /app/start-qdrant.sh
 COPY --chown=app:app docker/start-llama.sh /app/start-llama.sh
 COPY --chown=app:app docker/start-app.sh /app/start-app.sh
-COPY docker/supervisord.conf /etc/supervisor/conf.d/small-rag.conf
-RUN chmod 0755 /app/start-qdrant.sh /app/start-llama.sh /app/start-app.sh
+COPY --chown=app:app docker/supervisord.conf /app/supervisord-all-in-one.conf
+COPY --chown=app:app docker/supervisord-app-only.conf /app/supervisord-app-only.conf
+COPY --chown=app:app docker/entrypoint.sh /app/entrypoint.sh
+RUN chmod 0755 /app/start-qdrant.sh /app/start-llama.sh /app/start-app.sh /app/entrypoint.sh
 
 # 应用只对外暴露 18080
 ENV JAVA_HOME=/opt/java/openjdk \
@@ -105,4 +107,4 @@ EXPOSE 18080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=300s --retries=3 \
     CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/18080' || exit 1
 
-ENTRYPOINT ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf", "-n"]
+ENTRYPOINT ["/app/entrypoint.sh"]

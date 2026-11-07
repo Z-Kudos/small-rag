@@ -1,21 +1,38 @@
 package com.smallrag.ragmcp.rag;
 
+import com.smallrag.ragmcp.config.DistributedProperties;
+import com.smallrag.ragmcp.distributed.DistributedLock;
+import com.smallrag.ragmcp.distributed.LockHandle;
+import com.smallrag.ragmcp.distributed.LocalDistributedLock;
+import jakarta.annotation.PreDestroy;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 索引写入活动的进程内互斥标记。
+ * 索引写入活动的互斥标记。
  *
  * <p>重建任务（{@code reindex:<taskId>}）与目录导入（{@code sources}）都会写入
  * Qdrant 与归档；两者并发会互相删除/覆盖对方刚写入的片段，因此用同一把活动锁
- * 串行化。它不是分布式锁，多副本部署仍按单实例设计。
+ * 串行化。
+ *
+ * <p>standalone 模式使用进程内锁；distributed 模式通过 {@link DistributedLock}
+ * 使用 Redis 租约锁，跨副本互斥。持有期间后台定时续租；续租失败或异常时立即
+ * 标记锁丢失并停止本地持有权，调用方通过 {@link #isHeldBy(String)} 感知并停止写入。
  *
  * @author zjk
  */
 @Component
+@Slf4j
 public class IndexActivityGuard {
 
     /**
@@ -23,7 +40,40 @@ public class IndexActivityGuard {
      */
     public static final String SOURCES = "sources";
 
+    private static final String LOCK_SUFFIX = "index-activity";
+
     private final AtomicReference<String> owner = new AtomicReference<>();
+    private final DistributedLock lock;
+    private final DistributedProperties properties;
+    private final ScheduledExecutorService renewer;
+
+    private volatile LockHandle handle;
+    private volatile boolean lockLost;
+    private volatile ScheduledFuture<?> renewal;
+
+    /**
+     * Spring 注入入口。
+     *
+     * @param lock       本地或 Redis 锁实现
+     * @param properties 分布式配置
+     */
+    @Autowired
+    public IndexActivityGuard(DistributedLock lock, DistributedProperties properties) {
+        this.lock = lock;
+        this.properties = properties;
+        this.renewer = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "index-activity-lock-renewer");
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
+    /**
+     * 测试与 standalone 默认入口：进程内锁、默认租约配置。
+     */
+    public IndexActivityGuard() {
+        this(new LocalDistributedLock(), new DistributedProperties());
+    }
 
     /**
      * 重建任务活动标识。
@@ -45,8 +95,20 @@ public class IndexActivityGuard {
         if (label == null || owner.get() != null) {
             return false;
         }
-        owner.set(label);
-        return true;
+        try {
+            Optional<LockHandle> acquired = lock.tryAcquire(lockKey(), label, effectiveLease());
+            if (acquired.isEmpty()) {
+                return false;
+            }
+            handle = acquired.get();
+            lockLost = false;
+            owner.set(label);
+            scheduleRenewal();
+            return true;
+        } catch (Exception e) {
+            log.warn("获取索引活动锁失败: label={}, 原因={}", label, e.toString());
+            return false;
+        }
     }
 
     /**
@@ -57,9 +119,33 @@ public class IndexActivityGuard {
      * @param label 活动标识
      */
     public synchronized void release(String label) {
-        if (Objects.equals(owner.get(), label)) {
-            owner.set(null);
+        if (!Objects.equals(owner.get(), label)) {
+            return;
         }
+        cancelRenewal();
+        LockHandle current = handle;
+        handle = null;
+        owner.set(null);
+        lockLost = false;
+        if (current != null) {
+            try {
+                lock.release(current);
+            } catch (Exception e) {
+                log.warn("释放索引活动锁失败: label={}, 原因={}", label, e.toString());
+            }
+        }
+    }
+
+    /**
+     * 当前实例是否仍安全持有该活动锁。
+     *
+     * <p>重建循环与目录导入在每次写入前检查；返回 false 表示必须立即停止写入。
+     *
+     * @param label 活动标识
+     * @return true 表示本地持有且租约未丢失
+     */
+    public boolean isHeldBy(String label) {
+        return !lockLost && Objects.equals(owner.get(), label);
     }
 
     /**
@@ -67,5 +153,65 @@ public class IndexActivityGuard {
      */
     public Optional<String> owner() {
         return Optional.ofNullable(owner.get());
+    }
+
+    /**
+     * 续租一次；失败则标记锁丢失。包级可见，便于单元测试直接触发。
+     */
+    synchronized void renewLock() {
+        LockHandle current = handle;
+        if (current == null) {
+            return;
+        }
+        try {
+            if (!lock.renew(current, effectiveLease())) {
+                markLost(current, "续租失败（锁已被其他副本获取或已过期）");
+            }
+        } catch (Exception e) {
+            markLost(current, e.toString());
+        }
+    }
+
+    private void markLost(LockHandle current, String reason) {
+        lockLost = true;
+        handle = null;
+        owner.set(null);
+        cancelRenewal();
+        log.error("索引活动锁已丢失，停止继续写入: key={}, owner={}, 原因={}",
+                current.key(), current.owner(), reason);
+    }
+
+    private void scheduleRenewal() {
+        cancelRenewal();
+        long interval = Math.max(10, properties.getLock().getRenewInterval().toMillis());
+        renewal = renewer.scheduleAtFixedRate(this::renewLock, interval, interval,
+                TimeUnit.MILLISECONDS);
+    }
+
+    private void cancelRenewal() {
+        ScheduledFuture<?> current = renewal;
+        renewal = null;
+        if (current != null) {
+            current.cancel(false);
+        }
+    }
+
+    private String lockKey() {
+        return properties.getLock().getKeyPrefix() + LOCK_SUFFIX;
+    }
+
+    private Duration effectiveLease() {
+        long interval = Math.max(10, properties.getLock().getRenewInterval().toMillis());
+        long lease = properties.getLock().getLease().toMillis();
+        return Duration.ofMillis(Math.max(lease, interval * 3));
+    }
+
+    /**
+     * 应用关闭时停止续租；不主动释放租约，避免优雅停机期间另一副本过早接管。
+     */
+    @PreDestroy
+    void shutdown() {
+        cancelRenewal();
+        renewer.shutdownNow();
     }
 }

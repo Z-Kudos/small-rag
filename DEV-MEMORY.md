@@ -12,15 +12,14 @@
 ## v0.0.2 目标（进行中）
 
 - 保持 standalone 单容器默认运行不变；新增可选 `distributed` 模式：外部 Qdrant/Redis/Consul/Embedding + 多副本。
-- 分布式锁（Redis SET NX PX + Lua）、任务 owner/lease/fencing、目录导入与启动重切 leader 化。
-- Spring Cloud：Consul discovery/config、Resilience4j 熔断；Gateway 可选。
-- RAG：标注语料评测（recall@k / MRR / nDCG）、Testcontainers 端到端测试、MMR 与断点分位数回归。
+- **P0 已完成**：`DistributedLock`（进程内 / Redis `SET NX PX` + Lua）、`IndexActivityGuard` 后台续租与丢失即停写、双运行模式（`SMALL_RAG_RUNTIME=all-in-one|app-only`）、`compose.distributed.yaml` + HAProxy gateway。
+- 待做：P1 Consul discovery/config + Resilience4j；P2 任务 owner/lease/fencing、leader-only 扫描；P3 可选 Gateway；P4 RAG 评测与 Testcontainers。
 - 详细里程碑与验收见 `ROADMAP.md`。
 
 ## 项目状态（2026-11-07）
 
 - 版本：`0.0.2-SNAPSHOT`（pom.xml、application.yml MCP server version、README docker tag、ChunkingSignature 签名版本四处统一；签名版本与项目版本同步，但切分算法/存储布局变更需单独提升）。
-- 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；126 测试全绿。
+- 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；136 测试全绿。
 - Dockerfile 无 `# syntax=` 指令（国内网络拉不到 docker.io 的 frontend 镜像；所用特性内置 BuildKit 全支持）；compose/.env 镜像 tag 随项目版本走 `APP_IMAGE_TAG`。
 - 配置文件：`.env` 直接入库（由 .env.example 改名，仅模板值，.gitignore 已取消忽略；真实密钥禁止写入，.dockerignore 仍排除）。
 - 容器迁移端到端验证通过（2026-11-05）：镜像构建 24 分钟（含首次 Maven 依赖下载与 llama.cpp 编译）；三进程（qdrant/llama-server/app）全部就绪；容器内 llama.cpp 与宿主机 Ollama 同文本向量余弦 = 1.0000（pooling last 正确）；MCP 全链路 rag_ingest→rag_query→rag_search(expand=false)→rag_delete 冒烟通过。**教训：docker/*.sh 工作区曾出现 CRLF 导致 exec ENOENT，已加 .gitattributes 强制 LF**。
@@ -43,11 +42,11 @@
 - **重建进度与看门狗**：`rag_rebuild` 与 `rag_reindex`（不传 documentId）为**异步任务**，立即返回 `taskId`；`rag_task_status(taskId?)` 查询 `status`（queued/clearing/reindexing/interrupted/completed/aborted/cancelled/failed）、`total/processed/percent/succeeded/failed/currentDocumentId/lastProgressAt/stalled/cancelRequested/startedAt/finishedAt/error/revoked/lockReleaseAt`；`rag_task_cancel(taskId?)` 对运行中任务是文档边界协作式取消，对 `interrupted` 任务立即放弃并释放锁；`rag_task_resume(taskId?)` 续接 `interrupted` 任务。`ReindexTaskService` = 每任务独立 daemon 线程 + 单任务互斥 + 保留最近 20 个快照。单篇 `rag_reindex(documentId)` 仍同步。
 - **状态持久化与重启续接**：`ReindexStateStore`（门面）+ `QdrantReindexStateBackend` 把任务快照（含 `cleared` + `completedDocumentIds` 检查点，JSON 字符串）与任务锁写入 Qdrant 独立集合 `<rag.qdrant.collection-name>_reindex_state`：1 维 Dot 哑向量 + payload，集合按需创建；任务 point id 由 taskId 确定性生成，锁为固定 id 的单 point。状态跟随 Qdrant 持久化，不依赖应用容器文件系统；读失败按“无历史任务/无锁”处理，写失败由调用方告警降级。重启时加载全部快照；锁持有者未撤销/未取消则标记 `interrupted` 并**继续持有任务锁**，默认 `REINDEX_RESUME_ON_STARTUP=true` 时由 `ApplicationReadyEvent` 自动续接：`clearFirst = rebuild && !cleared`，跳过 `completedDocumentIds` 并计入成功；`false` 时停在 `interrupted` 等手动 `rag_task_resume`（或 `rag_task_cancel` 放弃）。优雅关机（`@PreDestroy`）会撤销写入、中断线程，但把状态覆盖为 `interrupted` 并保留任务锁，供重启续接；硬超时已撤销的任务不会续接。若 Qdrant 数据/集合名变化导致状态丢失：切分配置变化时 `ChunkingReindexRunner` 会按归档签名补建；但同签名 `rag_rebuild` 中断后剩余文档不会自动补建，需重新执行。
 - 看门狗：每 `REINDEX_CHECK_INTERVAL_SECONDS`（30s）检查；超过 `REINDEX_STALL_TIMEOUT_SECONDS`（1800s）无进度只置 `stalled` 并告警、**保留锁**；超过 `REINDEX_HARD_TIMEOUT_SECONDS`（3600s）执行 `revoke()`：撤销写权限（`ReindexListener.isWritable()=false`，`RagService` 在每次 `delete/add` 前校验并抛 `ReindexRevokedException`）+ `CancellationScope.cancel()` 取消在途 Embedding 调用 + `interrupt`。线程在 `REINDEX_JOIN_TIMEOUT_SECONDS`（10s）内退出则立即释放锁；否则进入 `REINDEX_RECOVERY_GRACE_SECONDS`（120s，且 ≥ Qdrant deadline×2）宽限期，到期强制释放任务锁并置 `failed`。因此**卡死不再需要重启**；宽限期内提交新任务返回“已撤销，正在释放任务锁”。硬超时任务最终状态为 `failed`。
-- 锁覆盖范围（已知限制）：MCP 全量重建/全量 reindex 与目录导入通过 `IndexActivityGuard` 互斥；启动自动重切、单篇 reindex、`rag_update`/`rag_ingest` 不经过它（目录导入自身的单篇写入也不额外加锁）；多副本部署时锁不跨进程（Qdrant 状态集合中的锁是读后写，不是分布式 CAS，仍按单实例设计）。
+- 锁覆盖范围（已知限制）：MCP 全量重建/全量 reindex、目录导入与启动自动重切通过 `IndexActivityGuard` 互斥；单篇 reindex、`rag_update`/`rag_ingest` 不经过它。standalone 为进程内锁；distributed 下经 `DistributedLock` 走 Redis 租约锁跨副本互斥，每次写入前校验 `isHeldBy`，续租失败立即停写。任务状态集合里的锁仍是单实例读后写，fencing token 与 owner 接管留 P2。
 - **调用超时与主动取消**：Embedding 用 OpenAI SDK/OkHttp 超时（`EmbeddingConfig`：`EMBEDDING_CONNECT_TIMEOUT_MS=10000`、`EMBEDDING_READ_TIMEOUT_MS=120000`，read 同时作为 write 与单次请求总超时；`spring.http.client.*` 不生效）；同一 customizer 注册 `CancellationScope.interceptor()`，通过 `ThreadLocal` 把任务线程的在途 `okhttp3.Call` 登记到作用域，撤销时 `Call.cancel()` 立即打断。Qdrant gRPC 默认 deadline 改为 `QDRANT_REQUEST_TIMEOUT_MS=30000`（`init-timeout-ms` 只用于启动探活）。
 - `RagService.reindexArchived(clearFirst, listener, skipDocumentIds)` 逐篇上报 `ReindexProgress`，并在 `onCleared()` / `onDocumentFinished()` 回调中落检查点；`rag_reindex`/`rag_rebuild` 同步入口保留（NOOP listener）。清空前校验归档非空，清空后**重读**归档列表以缩小漏重建窗口。`RagService.upsert(documentId, text, metadata)` 供目录导入使用：不存在则创建、存在则覆盖，metadata 为 null 时沿用已有元数据。
 - `rag_search` 可选 `expand`（默认 true，false 返回原始子块且不做 MMR）；`buildContext` 预算超限 continue 跳过；`maxChunkChars=1200` / `maxContextChars=12000` 按全宽字符当量计量。
-- 包结构：`rag/`（RagService、IndexActivityGuard、KnowledgeBaseProbe）+ `rag/reindex/`（ReindexTaskService、ReindexStateStore、ReindexStateBackend、QdrantReindexStateBackend、ReindexProgress、ReindexListener、ReindexRevokedException、CancellationScope、ChunkingReindexRunner）+ `rag/chunking/`（8 类）+ `rag/archive/`（DocumentArchive、ArchivedDocument、ArchivedDocumentSummary）+ `rag/sources/`（SourceSyncService、SourceStateStore）；payload 正文键 `RagService.CONTENT_FIELD="content"`（QdrantConfig 同步引用）。
+- 包结构：`rag/`（RagService、IndexActivityGuard、KnowledgeBaseProbe）+ `rag/reindex/`（ReindexTaskService、ReindexStateStore、ReindexStateBackend、QdrantReindexStateBackend、ReindexProgress、ReindexListener、ReindexRevokedException、CancellationScope、ChunkingReindexRunner）+ `rag/chunking/`（8 类）+ `rag/archive/`（DocumentArchive、ArchivedDocument、ArchivedDocumentSummary）+ `rag/sources/`（SourceSyncService、SourceStateStore）+ `distributed/`（DistributedLock、LockHandle、LocalDistributedLock、RedisDistributedLock）；payload 正文键 `RagService.CONTENT_FIELD="content"`（QdrantConfig 同步引用）。
 
 ## 目录导入（多目录 Markdown）
 
@@ -59,6 +58,15 @@
 - 互斥：`IndexActivityGuard`（`reindex:<taskId>` / `sources`）串行化重建与导入；重建运行中定时/watcher 扫描跳过、手动同步报 busy；导入运行中提交重建报“目录导入正在执行”。`interrupted` 重建任务继续持锁，也会阻止导入，直到 resume/cancel。
 - 容器：源目录只读挂载到 `/data/sources/...`，需 UID 10001 可读；`compose.sources.yaml` + `.env` 的 `SMALL_RAG_SOURCE_HOST`（`make up-sources`）提供单根挂载，分散目录用多条 `docker run -v`；`SMALL_RAG_SOURCE_DIRS` 是容器内路径。
 
+## 分布式模式（P0 已实现）
+
+- 配置：`smallrag.distributed.enabled`（默认 false）、`lock.lease`（30s）、`lock.renew-interval`（10s，下限 10ms）、`lock.key-prefix`；Redis 走 `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD`。`DistributedLockConfig` 按开关装配 `RedisDistributedLock` 或 `LocalDistributedLock`。
+- `DistributedLock` 语义：`tryAcquire(key, owner, lease)` / `renew` / `release` / `currentOwner`；`LockHandle` 携带 owner+token+本地到期时间，续租/释放按 value 匹配，旧持有者不会误删新锁。
+- `IndexActivityGuard`：持锁期间后台每 `renew-interval` 续租；续租失败或异常 → `lockLost=true`、清空 owner、停止续租；`isHeldBy(label)` 返回 false 后重建任务（`Task.isWritable()`）、目录导入、启动重切立即停止写入。`@PreDestroy` 只停止续租，不主动释放租约，避免优雅停机时过早接管。
+- 容器：`SMALL_RAG_RUNTIME=all-in-one`（默认，supervisord 三进程）或 `app-only`（`docker/supervisord-app-only.conf` 只跑应用）；`docker/entrypoint.sh` 选择配置；`start-app.sh` 在 app-only 下跳过本地 Qdrant 等待。
+- Overlay：`compose.distributed.yaml` 引入外部 Qdrant/Redis/Embedding + HAProxy gateway（`docker/haproxy.cfg`，`server-template` 发现副本），应用端口用 `!reset []` 去掉；需 Compose v2.24+。`small_rag_data` 为多副本共享归档卷。
+- 已知边界：仍保留每副本的启动/定时扫描触发，由锁串行化；Consul/熔断/Gateway 与任务接管未接入。
+
 ## 已知纰漏 / 风险
 
 - `rag_ingest` 失败时已补“尽力清理残留片段”，但 Qdrant 部分写入无法完全保证原子。
@@ -66,7 +74,7 @@
 - `rag_rebuild` 只清理 `chunk_type=chunk/child/parent`；旧版本无 `chunk_type` 的片段不会被清理。
 - 归档摘要索引 `.archive/index.json` 解决 `rag_list`/启动重切全量读原文的问题；索引缺失/版本不符/id 集合不一致时全量重建一次。索引内容陈旧但 id 集合一致时可能保留旧签名。
 - `ChunkingReindexRunner`（ApplicationRunner）先于 `ApplicationReadyEvent` 执行；若 `ReindexTaskService.hasRecoveredTask()` 为 true 则跳过自动重切，交给续接任务统一处理，避免同一批文档重复重建。
-- 多副本不互斥；Qdrant 状态锁是单实例读后写，不是 CAS。
+- 多副本：distributed 模式下索引写入已由 Redis 租约锁互斥；但任务快照锁仍是单实例读后写、无 fencing token，持有者被 kill 后的任务接管与 leader-only 扫描留 P2。
 - 目录导入 watcher 受平台 inotify/事件队列限制，失败时退化为定时扫描；label 变化会生成新文档 id，旧 label 需 `delete-orphan-roots=true` 才会清理；`lastRun` 不持久化（重启后为空）。
 - 切分算法变更必须同步提升 `ChunkingSignature` 版本，否则旧索引不会自动重切。
 - `MarkdownChunker` 已知取舍：段落后 `---` 按 Setext H2；未闭合围栏吞到文末；超大表格/代码按行切分并补表头/围栏。

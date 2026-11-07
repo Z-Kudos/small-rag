@@ -731,7 +731,8 @@ public class ReindexTaskService {
 
         @Override
         public synchronized boolean isWritable() {
-            return !revoked && !suspendedForRestart;
+            // 分布式模式下租约丢失后，即使本线程尚未被中断也必须立刻停止写入
+            return !revoked && !suspendedForRestart && activity.isHeldBy(activityLabel(taskId));
         }
 
         private synchronized void bindWorker(Thread thread) {

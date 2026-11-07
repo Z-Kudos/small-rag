@@ -357,6 +357,10 @@ public class SourceSyncService {
         int limit = force ? 0 : Math.max(0, sources.getMaxFilesPerScan());
 
         for (Candidate candidate : candidates) {
+            if (!activity.isHeldBy(ACTIVITY_LABEL)) {
+                // 分布式模式下租约可能已被其他副本接管；立即停止，避免双写
+                throw new IllegalStateException("索引活动锁已丢失，停止目录导入");
+            }
             if (limit > 0 && processed >= limit) {
                 truncated = true;
                 break;

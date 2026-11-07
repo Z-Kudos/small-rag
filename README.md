@@ -115,6 +115,21 @@ make up-sources
 - 换容器内模型：修改 `EMBEDDING_MODEL_URL`（GGUF 下载地址）与 `EMBEDDING_DIMENSION`，并换新的 `QDRANT_COLLECTION`；`EMBEDDING_MODEL` 只是 API 侧名称，llama-server 不校验。
 - 外部 Embedding：`SMALL_RAG_ENSURE_EMBEDDING_MODEL=false`，配置 `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`。
 
+## 分布式模式（可选，v0.0.2 开发中）
+
+默认仍是单容器 standalone。需要多副本时使用 overlay：Qdrant / Redis / Embedding 独立部署，应用以 `app-only` 模式运行，HAProxy gateway 统一暴露 18080。
+
+```bash
+docker compose -f compose.yaml -f compose.distributed.yaml build
+docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-rag=2
+```
+
+- 需要 Docker Compose v2.24+（overlay 使用 `!reset []` 去掉应用自身的端口映射）。
+- 两个副本共享 `small_rag_data:/data` 作为归档卷；多主机部署需换成 NFS/CephFS 等 RWX 存储。
+- 应用通过 `SMALL_RAG_DISTRIBUTED_ENABLED=true` 启用 Redis 租约锁；重建任务、目录导入、启动自动重切共用一把跨副本锁，同一时刻只有一个副本写入。
+- 锁租约默认 30s、每 10s 续租；持有者失联后，其他副本在租约过期后接管。续租失败会立即停止本地写入（`IndexActivityGuard.isHeldBy=false`）。
+- 当前 P0 仍保留每副本的启动/定时扫描触发，由锁负责串行化；leader-only 扫描与 Consul/Gateway/熔断在 P1/P2/P3 完成。详见 [ROADMAP.md](ROADMAP.md)。
+
 ## 配置
 
 | 变量 | 默认值 | 说明 |

@@ -4,6 +4,12 @@ server:
 spring:
   application:
     name: small-rag
+  # standalone 模式不会连接 Redis；distributed 模式才使用
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
   ai:
     # 仅使用向量（Embedding）模型，不装配 Chat / 生成模型
     model:
@@ -29,6 +35,17 @@ spring:
           任务快照与任务锁持久化在 Qdrant 的独立状态集合中；进程重启后未完成任务为 interrupted 并继续持锁，默认自动续接，也可用 rag_task_resume 手动续接或 rag_task_cancel 放弃。
           配置 rag.sources 后会自动导入多个 Markdown 源目录：rag_sync_sources 异步触发增量同步（force=true 全量重切），rag_sync_status 查询运行状态与最近一次统计。
           知识库为空时 rag_query 会返回“未检索到相关内容”。
+
+smallrag:
+  distributed:
+    # 默认 false：保持单容器 standalone；distributed profile 或环境变量打开
+    enabled: ${SMALL_RAG_DISTRIBUTED_ENABLED:false}
+    lock:
+      # 实例失联后，其他副本需等待该租约过期才能接管
+      lease: ${SMALL_RAG_LOCK_LEASE:30s}
+      # 必须明显小于 lease；每次续租失败即停止本地写入
+      renew-interval: ${SMALL_RAG_LOCK_RENEW_INTERVAL:10s}
+      key-prefix: ${SMALL_RAG_LOCK_PREFIX:smallrag:lock:}
 
 rag:
   # 原始文档归档目录：自动重切的原文来源；目录不可写时降级为只入库

@@ -1,5 +1,6 @@
 package com.smallrag.ragmcp.rag.reindex;
 
+import com.smallrag.ragmcp.rag.IndexActivityGuard;
 import com.smallrag.ragmcp.rag.RagService;
 
 import com.smallrag.ragmcp.config.QdrantProperties;
@@ -39,6 +40,7 @@ public class ChunkingReindexRunner implements ApplicationRunner {
     private final RagService ragService;
     private final RagProperties properties;
     private final QdrantProperties qdrantProperties;
+    private final IndexActivityGuard activity;
     private final ReindexTaskService reindexTaskService;
 
     @Override
@@ -67,32 +69,46 @@ public class ChunkingReindexRunner implements ApplicationRunner {
             return;
         }
 
-        log.info("检测到切分配置变化，开始自动重切: {} 篇（当前策略 {}）",
-                pending.size(), properties.getChunking().getStrategy());
-        int succeeded = 0;
-        int failed = 0;
-        int consecutiveFailures = 0;
-        for (ArchivedDocumentSummary summary : pending) {
-            try {
-                ArchivedDocument document = documentArchive.find(summary.documentId())
-                        .orElseThrow(() -> new IllegalStateException(
-                                "归档文档不存在: " + summary.documentId()));
-                ragService.reindex(document.documentId(), document.text(), document.metadata());
-                documentArchive.markIndexed(document.documentId(), signature);
-                succeeded++;
-                consecutiveFailures = 0;
-            } catch (Exception e) {
-                failed++;
-                consecutiveFailures++;
-                log.warn("自动重切失败，将在下次启动重试: docId={}, 原因={}",
-                        summary.documentId(), e.toString());
-                if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-                    log.error("连续 {} 篇重切失败，停止本次自动重切（可能是 Qdrant 或 Embedding 服务不可用）",
-                            consecutiveFailures);
+        String label = IndexActivityGuard.reindex("startup-rechunk");
+        if (!activity.tryAcquire(label)) {
+            log.warn("其他索引活动正在运行，跳过启动自动重切: owner={}",
+                    activity.owner().orElse("unknown"));
+            return;
+        }
+        try {
+            log.info("检测到切分配置变化，开始自动重切: {} 篇（当前策略 {}）",
+                    pending.size(), properties.getChunking().getStrategy());
+            int succeeded = 0;
+            int failed = 0;
+            int consecutiveFailures = 0;
+            for (ArchivedDocumentSummary summary : pending) {
+                if (!activity.isHeldBy(label)) {
+                    log.error("索引活动锁已丢失，停止启动自动重切，剩余文档留到下次启动");
                     break;
                 }
+                try {
+                    ArchivedDocument document = documentArchive.find(summary.documentId())
+                            .orElseThrow(() -> new IllegalStateException(
+                                    "归档文档不存在: " + summary.documentId()));
+                    ragService.reindex(document.documentId(), document.text(), document.metadata());
+                    documentArchive.markIndexed(document.documentId(), signature);
+                    succeeded++;
+                    consecutiveFailures = 0;
+                } catch (Exception e) {
+                    failed++;
+                    consecutiveFailures++;
+                    log.warn("自动重切失败，将在下次启动重试: docId={}, 原因={}",
+                            summary.documentId(), e.toString());
+                    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                        log.error("连续 {} 篇重切失败，停止本次自动重切（可能是 Qdrant 或 Embedding 服务不可用）",
+                                consecutiveFailures);
+                        break;
+                    }
+                }
             }
+            log.info("自动重切完成: 成功={}, 失败={}", succeeded, failed);
+        } finally {
+            activity.release(label);
         }
-        log.info("自动重切完成: 成功={}, 失败={}", succeeded, failed);
     }
 }
