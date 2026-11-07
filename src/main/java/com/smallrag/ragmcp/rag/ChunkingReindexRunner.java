@@ -2,6 +2,7 @@ package com.smallrag.ragmcp.rag;
 
 import com.smallrag.ragmcp.config.QdrantProperties;
 import com.smallrag.ragmcp.rag.archive.ArchivedDocument;
+import com.smallrag.ragmcp.rag.archive.ArchivedDocumentSummary;
 import com.smallrag.ragmcp.rag.archive.DocumentArchive;
 import com.smallrag.ragmcp.rag.chunking.ChunkingSignature;
 import com.smallrag.ragmcp.config.RagProperties;
@@ -54,8 +55,8 @@ public class ChunkingReindexRunner implements ApplicationRunner {
         }
 
         String signature = ChunkingSignature.of(properties, qdrantProperties.getCollectionName());
-        List<ArchivedDocument> documents = documentArchive.listAll();
-        List<ArchivedDocument> pending = documents.stream()
+        List<ArchivedDocumentSummary> documents = documentArchive.listSummaries();
+        List<ArchivedDocumentSummary> pending = documents.stream()
                 .filter(document -> !signature.equals(document.chunkSignature()))
                 .toList();
 
@@ -69,8 +70,11 @@ public class ChunkingReindexRunner implements ApplicationRunner {
         int succeeded = 0;
         int failed = 0;
         int consecutiveFailures = 0;
-        for (ArchivedDocument document : pending) {
+        for (ArchivedDocumentSummary summary : pending) {
             try {
+                ArchivedDocument document = documentArchive.find(summary.documentId())
+                        .orElseThrow(() -> new IllegalStateException(
+                                "归档文档不存在: " + summary.documentId()));
                 ragService.reindex(document.documentId(), document.text(), document.metadata());
                 documentArchive.markIndexed(document.documentId(), signature);
                 succeeded++;
@@ -79,7 +83,7 @@ public class ChunkingReindexRunner implements ApplicationRunner {
                 failed++;
                 consecutiveFailures++;
                 log.warn("自动重切失败，将在下次启动重试: docId={}, 原因={}",
-                        document.documentId(), e.toString());
+                        summary.documentId(), e.toString());
                 if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                     log.error("连续 {} 篇重切失败，停止本次自动重切（可能是 Qdrant 或 Embedding 服务不可用）",
                             consecutiveFailures);

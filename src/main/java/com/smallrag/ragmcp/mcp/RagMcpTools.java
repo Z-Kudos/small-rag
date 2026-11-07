@@ -274,17 +274,18 @@ public class RagMcpTools {
     }
 
     /**
-     * 手动触发一次目录导入：扫描配置的多个 Markdown 源目录，按文件指纹增量解析、切分并建立索引。
+     * 异步触发一次目录导入：扫描配置的多个 Markdown 源目录，按文件指纹增量解析、切分并建立索引。
+     * 立即返回受理结果，用 {@code rag_sync_status} 查询进度与统计。
      *
      * @param force true 时忽略文件指纹，重新切分所有源文件；默认 false
-     * @return 本次扫描统计（discovered/indexed/updated/skipped/deleted/failed/truncated）
+     * @return 受理结果（accepted/runId/message）
      */
-    @McpTool(name = "rag_sync_sources", description = "手动扫描配置的多个 Markdown 源目录：按文件指纹增量解析、切分并建立索引；force=true 忽略指纹重新切分全部文件")
+    @McpTool(name = "rag_sync_sources", description = "异步扫描配置的多个 Markdown 源目录：按文件指纹增量解析、切分并建立索引；force=true 忽略指纹重新切分全部文件；立即返回，用 rag_sync_status 查询进度")
     public String ragSyncSources(
             @McpToolParam(description = "true 时忽略文件指纹强制重新切分；默认 false（仅处理新增/变更文件）", required = false) Boolean force) {
         log.debug("MCP rag_sync_sources 调用，force={}", force);
         try {
-            return objectMapper.writeValueAsString(sourceSyncService.sync(Boolean.TRUE.equals(force)));
+            return objectMapper.writeValueAsString(sourceSyncService.syncAsync(Boolean.TRUE.equals(force)));
         } catch (Exception e) {
             log.warn("MCP rag_sync_sources 失败: 原因={}", e.toString());
             return error("目录导入失败: " + rootMessage(e));
@@ -292,11 +293,11 @@ public class RagMcpTools {
     }
 
     /**
-     * 查询目录导入状态：是否启用/运行、最近一次扫描统计与错误。
+     * 查询目录导入状态：是否启用/运行/排队、最近一次触发与扫描统计、错误。
      *
      * @return 状态 JSON；未启用时 {@code enabled=false}
      */
-    @McpTool(name = "rag_sync_status", description = "查询目录导入状态：是否启用/运行、配置的目录、最近一次扫描统计与错误")
+    @McpTool(name = "rag_sync_status", description = "查询目录导入状态：是否启用/运行/排队、最近一次触发、扫描统计与错误")
     public String ragSyncStatus() {
         log.debug("MCP rag_sync_status 调用");
         try {

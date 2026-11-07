@@ -2,6 +2,7 @@ package com.smallrag.ragmcp.rag;
 
 import com.smallrag.ragmcp.config.QdrantProperties;
 import com.smallrag.ragmcp.rag.archive.ArchivedDocument;
+import com.smallrag.ragmcp.rag.archive.ArchivedDocumentSummary;
 import com.smallrag.ragmcp.rag.archive.DocumentArchive;
 import com.smallrag.ragmcp.rag.chunking.ChunkingSignature;
 import com.smallrag.ragmcp.rag.chunking.ChunkingStrategy;
@@ -11,6 +12,7 @@ import org.springframework.boot.ApplicationArguments;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -41,7 +43,10 @@ class ChunkingReindexRunnerTest {
                 UUID.randomUUID().toString(), "旧策略原文", Map.of("source", "handbook"), null, "t1");
         ArchivedDocument upToDate = new ArchivedDocument(
                 UUID.randomUUID().toString(), "新策略原文", Map.of("source", "faq"), currentSignature, "t2");
-        when(archive.listAll()).thenReturn(List.of(outdated, upToDate));
+        when(archive.listSummaries()).thenReturn(List.of(
+                ArchivedDocumentSummary.of(outdated),
+                ArchivedDocumentSummary.of(upToDate)));
+        when(archive.find(outdated.documentId())).thenReturn(Optional.of(outdated));
 
         new ChunkingReindexRunner(archive, ragService, properties, new QdrantProperties(), taskService).run(mock(ApplicationArguments.class));
 

@@ -102,26 +102,28 @@ class RagMcpToolsTest {
 
     @Test
     void syncSourcesDelegates() {
-        SourceSyncService.Summary summary = new SourceSyncService.Summary(
-                "2026-11-07T10:00:00Z", "2026-11-07T10:00:01Z", 1000, 2, 5, 1, 2, 2, 0, 0, false);
-        when(sourceSyncService.sync(true)).thenReturn(summary);
+        when(sourceSyncService.syncAsync(true)).thenReturn(
+                new SourceSyncService.Accepted(true, "run-1", "已提交"));
 
         assertThat(tools.ragSyncSources(true))
-                .contains("\"indexed\":1")
-                .contains("\"updated\":2")
-                .contains("\"discovered\":5");
+                .contains("\"accepted\":true")
+                .contains("\"runId\":\"run-1\"");
     }
 
     @Test
     void syncStatusDelegates() {
+        SourceSyncService.Summary summary = new SourceSyncService.Summary(
+                "2026-11-07T10:00:00Z", "2026-11-07T10:00:01Z", 1000, 2, 5, 1, 2, 2, 0, 0, false);
         SourceSyncService.Status status = new SourceSyncService.Status(
-                true, false, List.of("/docs"), 300, null, null);
+                true, false, false, List.of("/docs"), 300, "定时", null, summary);
         when(sourceSyncService.status()).thenReturn(status);
 
         assertThat(tools.ragSyncStatus())
                 .contains("\"enabled\":true")
+                .contains("\"queued\":false")
                 .contains("\"directories\":[\"/docs\"]")
-                .contains("\"scanIntervalSeconds\":300");
+                .contains("\"scanIntervalSeconds\":300")
+                .contains("\"lastTrigger\":\"定时\"");
     }
 
     @Test

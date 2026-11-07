@@ -233,7 +233,7 @@ public class ReindexTaskService {
         if (!documentArchive.isEnabled()) {
             throw new IllegalStateException("原始文档归档不可用，无法执行该管理操作");
         }
-        int total = documentArchive.listAll().size();
+        int total = documentArchive.listSummaries().size();
         if (total == 0 && clearFirst) {
             throw new IllegalStateException("没有归档文档，拒绝清空向量库");
         }

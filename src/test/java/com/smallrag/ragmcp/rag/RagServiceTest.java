@@ -3,12 +3,14 @@ package com.smallrag.ragmcp.rag;
 import com.smallrag.ragmcp.config.QdrantProperties;
 import io.qdrant.client.PointIdFactory;
 import io.qdrant.client.QdrantClient;
+import io.qdrant.client.grpc.Common.PointId;
 import io.qdrant.client.grpc.JsonWithInt.Value;
 import com.google.common.util.concurrent.Futures;
 import io.qdrant.client.grpc.Points;
 import io.qdrant.client.grpc.Points.RetrievedPoint;
 import io.qdrant.client.grpc.Points.VectorsOutput;
 import com.smallrag.ragmcp.rag.archive.ArchivedDocument;
+import com.smallrag.ragmcp.rag.archive.ArchivedDocumentSummary;
 import com.smallrag.ragmcp.rag.archive.DocumentArchive;
 import com.smallrag.ragmcp.rag.chunking.ChunkingService;
 import com.smallrag.ragmcp.rag.chunking.ChunkingStrategy;
@@ -39,6 +41,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -51,6 +54,15 @@ class RagServiceTest {
 
     private static ChunkingService chunkingService(RagProperties properties) {
         return new ChunkingService(properties, mock(EmbeddingModel.class));
+    }
+
+    private static void stubArchive(DocumentArchive archive, ArchivedDocument... documents) {
+        when(archive.listSummaries()).thenReturn(List.of(documents).stream()
+                .map(ArchivedDocumentSummary::of)
+                .toList());
+        for (ArchivedDocument document : documents) {
+            when(archive.find(document.documentId())).thenReturn(Optional.of(document));
+        }
     }
 
     @Test
@@ -426,6 +438,40 @@ class RagServiceTest {
     }
 
     @Test
+    void reindexWritesNewChunksBeforeDeletingOldOnesWhenIdsAreKnown() throws Exception {
+        VectorStore vectorStore = mock(VectorStore.class);
+        QdrantClient qdrantClient = mock(QdrantClient.class);
+        RagProperties properties = new RagProperties();
+        QdrantProperties qdrantProperties = new QdrantProperties();
+        UUID oldPointId = UUID.randomUUID();
+        when(qdrantClient.scrollAsync(any(Points.ScrollPoints.class)))
+                .thenReturn(Futures.immediateFuture(Points.ScrollResponse.newBuilder()
+                        .addResult(RetrievedPoint.newBuilder()
+                                .setId(PointIdFactory.id(oldPointId))
+                                .build())
+                        .build()));
+        when(qdrantClient.deleteAsync(anyString(), anyList()))
+                .thenReturn(Futures.immediateFuture(Points.UpdateResult.getDefaultInstance()));
+        RagService service = new RagService(vectorStore, properties, qdrantProperties, () -> false,
+                chunkingService(properties), mock(DocumentArchive.class), qdrantClient,
+                mock(EmbeddingModel.class));
+        String documentId = UUID.randomUUID().toString();
+
+        service.reindex(documentId, "a".repeat(2000), Map.of());
+
+        var ordered = inOrder(vectorStore, qdrantClient);
+        ordered.verify(vectorStore).add(anyList());
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        ArgumentCaptor<List<PointId>> deleted = ArgumentCaptor.forClass((Class) List.class);
+        ordered.verify(qdrantClient).deleteAsync(
+                eq(qdrantProperties.getCollectionName()), deleted.capture());
+        assertThat(deleted.getValue())
+                .extracting(PointId::getUuid)
+                .containsExactly(oldPointId.toString());
+        verify(vectorStore, never()).delete(any(Filter.Expression.class));
+    }
+
+    @Test
     void updateUsesArchivedMetadataAndReindexes() {
         VectorStore vectorStore = mock(VectorStore.class);
         RagProperties properties = new RagProperties();
@@ -510,7 +556,7 @@ class RagServiceTest {
                 UUID.randomUUID().toString(), "第一篇文章", Map.of("source", "a"), "sig", "t1");
         ArchivedDocument second = new ArchivedDocument(
                 UUID.randomUUID().toString(), "第二篇文章", Map.of("source", "b"), "sig", "t2");
-        when(archive.listAll()).thenReturn(List.of(first, second));
+        stubArchive(archive, first, second);
 
         RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
                 chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
@@ -536,7 +582,7 @@ class RagServiceTest {
                 UUID.randomUUID().toString(), "第一篇文章", Map.of("source", "a"), "sig", "t1");
         ArchivedDocument second = new ArchivedDocument(
                 UUID.randomUUID().toString(), "第二篇文章", Map.of("source", "b"), "sig", "t2");
-        when(archive.listAll()).thenReturn(List.of(first, second));
+        stubArchive(archive, first, second);
 
         RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
                 chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
@@ -567,7 +613,7 @@ class RagServiceTest {
                 UUID.randomUUID().toString(), "第一篇文章", Map.of("source", "a"), "sig", "t1");
         ArchivedDocument second = new ArchivedDocument(
                 UUID.randomUUID().toString(), "第二篇文章", Map.of("source", "b"), "sig", "t2");
-        when(archive.listAll()).thenReturn(List.of(first, second));
+        stubArchive(archive, first, second);
 
         RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
                 chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
@@ -607,7 +653,7 @@ class RagServiceTest {
                 UUID.randomUUID().toString(), "第一篇文章", Map.of("source", "a"), "sig", "t1");
         ArchivedDocument second = new ArchivedDocument(
                 UUID.randomUUID().toString(), "第二篇文章", Map.of("source", "b"), "sig", "t2");
-        when(archive.listAll()).thenReturn(List.of(first, second));
+        stubArchive(archive, first, second);
 
         RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
                 chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
@@ -645,7 +691,7 @@ class RagServiceTest {
                 UUID.randomUUID().toString(), "第一篇文章", Map.of("source", "a"), "sig", "t1");
         ArchivedDocument second = new ArchivedDocument(
                 UUID.randomUUID().toString(), "第二篇文章", Map.of("source", "b"), "sig", "t2");
-        when(archive.listAll()).thenReturn(List.of(first, second));
+        stubArchive(archive, first, second);
 
         RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
                 chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
@@ -679,7 +725,7 @@ class RagServiceTest {
         RagProperties properties = new RagProperties();
         DocumentArchive archive = mock(DocumentArchive.class);
         when(archive.isEnabled()).thenReturn(true);
-        when(archive.listAll()).thenReturn(List.of());
+        when(archive.listSummaries()).thenReturn(List.of());
 
         RagService service = new RagService(mock(VectorStore.class), properties, new QdrantProperties(), () -> false,
                 chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
@@ -697,10 +743,13 @@ class RagServiceTest {
         String firstId = UUID.randomUUID().toString();
         String secondId = UUID.randomUUID().toString();
         String thirdId = UUID.randomUUID().toString();
-        when(archive.listAll()).thenReturn(List.of(
-                new ArchivedDocument(firstId, "a", Map.of(), "sig", "t1"),
-                new ArchivedDocument(secondId, "bb", Map.of(), "sig", "t2"),
-                new ArchivedDocument(thirdId, "ccc", Map.of(), "sig", "t3")));
+        when(archive.listSummaries()).thenReturn(List.of(
+                ArchivedDocumentSummary.of(new ArchivedDocument(
+                        firstId, "a", Map.of(), "sig", "t1")),
+                ArchivedDocumentSummary.of(new ArchivedDocument(
+                        secondId, "bb", Map.of(), "sig", "t2")),
+                ArchivedDocumentSummary.of(new ArchivedDocument(
+                        thirdId, "ccc", Map.of(), "sig", "t3"))));
 
         RagService service = new RagService(mock(VectorStore.class), properties, new QdrantProperties(), () -> false,
                 chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));

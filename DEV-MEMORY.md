@@ -5,7 +5,7 @@
 ## 项目状态（2026-11-07）
 
 - 版本：`0.0.2`（pom.xml、application.yml MCP server version、README docker tag、ChunkingSignature 签名版本四处统一；签名版本与项目版本同步，但切分算法/存储布局变更需单独提升）。
-- 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；119 测试全绿。
+- 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；126 测试全绿。
 - Dockerfile 无 `# syntax=` 指令（国内网络拉不到 docker.io 的 frontend 镜像；所用特性内置 BuildKit 全支持）；compose/.env 镜像 tag 随项目版本走 `APP_IMAGE_TAG`。
 - 配置文件：`.env` 直接入库（由 .env.example 改名，仅模板值，.gitignore 已取消忽略；真实密钥禁止写入，.dockerignore 仍排除）。
 - 容器迁移端到端验证通过（2026-11-05）：镜像构建 24 分钟（含首次 Maven 依赖下载与 llama.cpp 编译）；三进程（qdrant/llama-server/app）全部就绪；容器内 llama.cpp 与宿主机 Ollama 同文本向量余弦 = 1.0000（pooling last 正确）；MCP 全链路 rag_ingest→rag_query→rag_search(expand=false)→rag_delete 冒烟通过。**教训：docker/*.sh 工作区曾出现 CRLF 导致 exec ENOENT，已加 .gitattributes 强制 LF**。
@@ -32,27 +32,27 @@
 - **调用超时与主动取消**：Embedding 用 OpenAI SDK/OkHttp 超时（`EmbeddingConfig`：`EMBEDDING_CONNECT_TIMEOUT_MS=10000`、`EMBEDDING_READ_TIMEOUT_MS=120000`，read 同时作为 write 与单次请求总超时；`spring.http.client.*` 不生效）；同一 customizer 注册 `CancellationScope.interceptor()`，通过 `ThreadLocal` 把任务线程的在途 `okhttp3.Call` 登记到作用域，撤销时 `Call.cancel()` 立即打断。Qdrant gRPC 默认 deadline 改为 `QDRANT_REQUEST_TIMEOUT_MS=30000`（`init-timeout-ms` 只用于启动探活）。
 - `RagService.reindexArchived(clearFirst, listener, skipDocumentIds)` 逐篇上报 `ReindexProgress`，并在 `onCleared()` / `onDocumentFinished()` 回调中落检查点；`rag_reindex`/`rag_rebuild` 同步入口保留（NOOP listener）。清空前校验归档非空，清空后**重读**归档列表以缩小漏重建窗口。`RagService.upsert(documentId, text, metadata)` 供目录导入使用：不存在则创建、存在则覆盖，metadata 为 null 时沿用已有元数据。
 - `rag_search` 可选 `expand`（默认 true，false 返回原始子块且不做 MMR）；`buildContext` 预算超限 continue 跳过；`maxChunkChars=1200` / `maxContextChars=12000` 按全宽字符当量计量。
-- 包结构：`rag/`（RagService、ReindexTaskService、ReindexStateStore、QdrantReindexStateBackend、IndexActivityGuard、ReindexProgress/ReindexListener、CancellationScope、KnowledgeBaseProbe、ChunkingReindexRunner）+ `rag/chunking/`（8 类）+ `rag/archive/` + `rag/sources/`（SourceSyncService、SourceStateStore）；payload 正文键 `RagService.CONTENT_FIELD="content"`（QdrantConfig 同步引用）。
+- 包结构：`rag/`（RagService、ReindexTaskService、ReindexStateStore、QdrantReindexStateBackend、IndexActivityGuard、ReindexProgress/ReindexListener、CancellationScope、KnowledgeBaseProbe、ChunkingReindexRunner）+ `rag/chunking/`（8 类）+ `rag/archive/`（DocumentArchive、ArchivedDocument、ArchivedDocumentSummary）+ `rag/sources/`（SourceSyncService、SourceStateStore）；payload 正文键 `RagService.CONTENT_FIELD="content"`（QdrantConfig 同步引用）。
 
 ## 目录导入（多目录 Markdown）
 
-- `rag.sources.*`：`enabled`、逗号分隔 `directories`、`extensions`（默认 `.md,.markdown`）、`exclude` glob、`skip-hidden`、`follow-symlinks`、`scan-on-startup`、`scan-interval-seconds`（默认 300，0 关闭）、`max-file-bytes`（默认 2 MiB）、`max-files-per-scan`（0 不限）、`delete-missing`、`state-file`（默认 `<archive-dir>/.sources/state.json`）、`metadata`。
-- `SourceSyncService`：文档 id = `UUID.nameUUIDFromBytes("small-rag-source:" + 根目录绝对路径 + "::" + 相对路径)`；先比 `mtime + size`，再比 SHA-256；内容变化才 `RagService.upsert`（归档 + 切分 + Embedding），未变化只更新时间戳。跳过隐藏目录/文件、非配置扩展名、排除 glob、超大文件、空白文件。
-- 触发：`ApplicationReadyEvent` 后启动扫描（后台线程），然后按 `scan-interval-seconds` 固定延迟扫描；MCP `rag_sync_sources(force)` 同步触发；`force=true` 忽略指纹（且不再受 `max-files-per-scan` 限制）。`rag_sync_status` 返回 enabled/running/directories/lastRun/lastError。
-- 状态：`SourceStateStore` 原子写 JSON；丢失/损坏时从归档 `source_key`/`source_root`/`source_file`/`source_size`/`source_mtime`/`source_sha256` 元数据重建，最坏多一次幂等重建。状态文件放在 `.sources/` 子目录，避免被 `DocumentArchive.listAll` 当成归档 JSON。
-- 删除：`delete-missing=true` 时只删除“当前仍配置且本轮成功扫描（无访问失败）”的根目录下已消失文件；根目录暂时不可读不会误删。`rag_delete` 会同时移除状态条目；源文件仍在时下次扫描会重新导入。
-- 互斥：`IndexActivityGuard`（`reindex:<taskId>` / `sources`）串行化重建与导入；重建运行中定时扫描跳过、手动同步报错；导入运行中提交重建报“目录导入正在执行”。`interrupted` 重建任务继续持锁，也会阻止导入，直到 resume/cancel。
+- `rag.sources.*`：`enabled`、逗号分隔 `directories`（支持 `label=/path`，label 默认取目录名）、`extensions`（默认 `.md,.markdown`）、`exclude` glob、`skip-hidden`、`follow-symlinks`、`scan-on-startup`、`scan-interval-seconds`（默认 300，0 关闭）、`watch-enabled`（默认 true）、`watch-debounce-seconds`（默认 5）、`max-file-bytes`（默认 2 MiB）、`max-files-per-scan`（0 不限）、`delete-missing`、`delete-orphan-roots`、`state-file`（默认 `<archive-dir>/.sources/state.json`）、`metadata`。
+- `SourceSyncService`：文档 id = `UUID.nameUUIDFromBytes("small-rag-source:" + label + "::" + 相对路径)`；label 稳定则目录移动不换 id，label 重复拒绝扫描。先比 `mtime + size`，再比 SHA-256；内容变化才 `RagService.upsert`（归档 + 切分 + Embedding），未变化只更新时间戳。跳过隐藏目录/文件、非配置扩展名、排除 glob、超大文件、空白文件。
+- 触发：`ApplicationReadyEvent` 后启动扫描（后台线程）；`scan-interval-seconds` 固定延迟扫描；`watch-enabled` 时用 `WatchService` 监听（递归注册、事件防抖、OVERFLOW 触发全量扫描，失败自动退化为定时扫描）；MCP `rag_sync_sources(force)` **异步**触发，`rag_sync_status` 返回 enabled/running/queued/directories/lastTrigger/lastRun/lastError。`force=true` 忽略指纹且不再受 `max-files-per-scan` 限制。
+- 状态：`SourceStateStore` 原子写 JSON（`files` + `ignored` 墓碑）；丢失/损坏时从归档 `source_key`/`source_root`/`source_root_path`/`source_file`/`source_size`/`source_mtime`/`source_sha256` 元数据重建。旧状态 `root` 为绝对路径时自动迁移为 `rootPath + label`。状态文件放在 `.sources/` 子目录，避免被归档扫描当成原文。
+- 删除：`delete-missing=true` 时只删除“当前仍配置且本轮成功扫描（无访问失败）”的根目录下已消失文件；根目录暂时不可读不会误删。`delete-orphan-roots=true` 时按 label 删除已从配置移除的根目录下文档（默认关闭）。`rag_delete` 会移除状态并写墓碑（记录删除时的 SHA-256），源文件内容不变时不再重新导入；内容变化后墓碑失效并重新导入。
+- 互斥：`IndexActivityGuard`（`reindex:<taskId>` / `sources`）串行化重建与导入；重建运行中定时/watcher 扫描跳过、手动同步报 busy；导入运行中提交重建报“目录导入正在执行”。`interrupted` 重建任务继续持锁，也会阻止导入，直到 resume/cancel。
 - 容器：源目录只读挂载到 `/data/sources/...`，需 UID 10001 可读；`compose.yaml`/`.env` 有示例。
 
 ## 已知纰漏 / 风险
 
-- `rag_ingest` 失败时已补“尽力清理残留片段”，但 Qdrant 部分写入无法完全保证原子；`reindex` 先删后写，失败窗口内该文档不可检索，依赖签名为空在下次启动重切。
+- `rag_ingest` 失败时已补“尽力清理残留片段”，但 Qdrant 部分写入无法完全保证原子。
+- 单篇 `reindex` 已改为“能枚举旧 point id 时先写新片段、再按 id 删旧片段”，失败时旧数据仍可检索；无法枚举时回退先删后写。写入窗口内可能短暂返回新旧重复片段；删除旧片段失败会保留重复，由下次重切清理。
 - `rag_rebuild` 只清理 `chunk_type=chunk/child/parent`；旧版本无 `chunk_type` 的片段不会被清理。
-- `rag_list`/启动重切读取全部归档 JSON，文档量大时内存/IO 开销明显；没有归档分页索引。
+- 归档摘要索引 `.archive/index.json` 解决 `rag_list`/启动重切全量读原文的问题；索引缺失/版本不符/id 集合不一致时全量重建一次。索引内容陈旧但 id 集合一致时可能保留旧签名。
 - `ChunkingReindexRunner`（ApplicationRunner）先于 `ApplicationReadyEvent` 执行；若 `ReindexTaskService.hasRecoveredTask()` 为 true 则跳过自动重切，交给续接任务统一处理，避免同一批文档重复重建。
-- 重启时若状态集合里任务存在但锁 point 丢失：按单实例假设由最近一个未完成/未撤销任务重新持锁并标 `interrupted`；多副本下可能误抢（本身不支持多副本）。
 - 多副本不互斥；Qdrant 状态锁是单实例读后写，不是 CAS。
-- 目录导入无文件 watcher；根路径变化会导致新文档 id；手动同步可能超过 MCP 客户端超时；`lastRun` 不持久化（重启后为空）。
+- 目录导入 watcher 受平台 inotify/事件队列限制，失败时退化为定时扫描；label 变化会生成新文档 id，旧 label 需 `delete-orphan-roots=true` 才会清理；`lastRun` 不持久化（重启后为空）。
 - 切分算法变更必须同步提升 `ChunkingSignature` 版本，否则旧索引不会自动重切。
 - `MarkdownChunker` 已知取舍：段落后 `---` 按 Setext H2；未闭合围栏吞到文末；超大表格/代码按行切分并补表头/围栏。
 

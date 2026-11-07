@@ -79,6 +79,38 @@ class DocumentArchiveTest {
     }
 
     @Test
+    void listSummariesUsesIndexAndSurvivesIndexLoss() throws Exception {
+        Path documents = tempDir.resolve("documents");
+        DocumentArchive archive = archive();
+        String firstId = "66666666-6666-6666-6666-666666666666";
+        String secondId = "77777777-7777-7777-7777-777777777777";
+        archive.save(firstId, "第一段原文", Map.of("source", "handbook"), "signature-1");
+        archive.save(secondId, "第二段原文", Map.of("source", "faq"), "signature-1");
+
+        assertThat(archive.listSummaries()).hasSize(2);
+        assertThat(archive.listSummaries()).allSatisfy(summary ->
+                assertThat(summary.textLength()).isPositive());
+
+        // 重新打开应直接读取摘要索引（而不是重建）
+        DocumentArchive reopenedWithIndex = archive();
+        assertThat(reopenedWithIndex.listSummaries()).hasSize(2);
+
+        archive.markIndexed(firstId, "signature-2");
+        assertThat(archive.listSummaries()).anySatisfy(summary -> {
+            if (summary.documentId().equals(firstId)) {
+                assertThat(summary.chunkSignature()).isEqualTo("signature-2");
+            }
+        });
+
+        // 删掉摘要索引后应能从原文文件重建
+        java.nio.file.Files.deleteIfExists(documents.resolve(".archive").resolve("index.json"));
+        DocumentArchive reopened = archive();
+        assertThat(reopened.listSummaries())
+                .extracting(ArchivedDocumentSummary::documentId)
+                .containsExactlyInAnyOrder(firstId, secondId);
+    }
+
+    @Test
     void rejectsNonUuidDocumentId() {
         assertThatThrownBy(() -> archive().save("../escape", "text", Map.of(), "signature"))
                 .isInstanceOf(IllegalArgumentException.class)

@@ -3,6 +3,7 @@ package com.smallrag.ragmcp.rag;
 import com.smallrag.ragmcp.config.QdrantProperties;
 import com.smallrag.ragmcp.config.RagProperties;
 import com.smallrag.ragmcp.rag.archive.ArchivedDocument;
+import com.smallrag.ragmcp.rag.archive.ArchivedDocumentSummary;
 import com.smallrag.ragmcp.rag.archive.DocumentArchive;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -66,7 +67,7 @@ class ReindexTaskServiceTest {
     @Test
     void rebuildRejectsEmptyArchive() {
         when(archive.isEnabled()).thenReturn(true);
-        when(archive.listAll()).thenReturn(List.of());
+        when(archive.listSummaries()).thenReturn(List.of());
         service = newService();
 
         assertThatThrownBy(() -> service.submit("rebuild", true))
@@ -77,7 +78,7 @@ class ReindexTaskServiceTest {
     @Test
     void rejectsWhenDirectoryImportIsRunning() {
         when(archive.isEnabled()).thenReturn(true);
-        when(archive.listAll()).thenReturn(List.of(document("doc-1")));
+        when(archive.listSummaries()).thenReturn(List.of(ArchivedDocumentSummary.of(document("doc-1"))));
         IndexActivityGuard guard = new IndexActivityGuard();
         guard.tryAcquire(IndexActivityGuard.SOURCES);
         service = new ReindexTaskService(ragService, archive, properties, qdrantProperties,
@@ -94,7 +95,7 @@ class ReindexTaskServiceTest {
     @Test
     void reportsProgressAndRejectsConcurrentTask() throws Exception {
         when(archive.isEnabled()).thenReturn(true);
-        when(archive.listAll()).thenReturn(List.of(document("doc-1")));
+        when(archive.listSummaries()).thenReturn(List.of(ArchivedDocumentSummary.of(document("doc-1"))));
 
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -150,7 +151,7 @@ class ReindexTaskServiceTest {
     @Test
     void cancelStopsAtDocumentBoundary() throws Exception {
         when(archive.isEnabled()).thenReturn(true);
-        when(archive.listAll()).thenReturn(List.of(document("doc-1"), document("doc-2")));
+        when(archive.listSummaries()).thenReturn(List.of(ArchivedDocumentSummary.of(document("doc-1")), ArchivedDocumentSummary.of(document("doc-2"))));
 
         CountDownLatch started = new CountDownLatch(1);
         when(ragService.reindexArchived(anyBoolean(), any(), any())).thenAnswer(invocation -> {
@@ -183,7 +184,7 @@ class ReindexTaskServiceTest {
         properties.getReindex().setStallTimeoutSeconds(1);
         properties.getReindex().setCheckIntervalSeconds(1);
         when(archive.isEnabled()).thenReturn(true);
-        when(archive.listAll()).thenReturn(List.of(document("doc-1")));
+        when(archive.listSummaries()).thenReturn(List.of(ArchivedDocumentSummary.of(document("doc-1"))));
 
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -222,7 +223,7 @@ class ReindexTaskServiceTest {
         properties.getReindex().setCheckIntervalSeconds(1);
         properties.getReindex().setJoinTimeoutSeconds(2);
         when(archive.isEnabled()).thenReturn(true);
-        when(archive.listAll()).thenReturn(List.of(document("doc-1")));
+        when(archive.listSummaries()).thenReturn(List.of(ArchivedDocumentSummary.of(document("doc-1"))));
 
         CountDownLatch started = new CountDownLatch(1);
         when(ragService.reindexArchived(anyBoolean(), any(), any())).thenAnswer(invocation -> {
@@ -261,7 +262,7 @@ class ReindexTaskServiceTest {
         // Qdrant deadline 500ms → 宽限期下限 1s，允许测试用 2s 宽限期
         qdrantProperties.setRequestTimeoutMs(500);
         when(archive.isEnabled()).thenReturn(true);
-        when(archive.listAll()).thenReturn(List.of(document("doc-1")));
+        when(archive.listSummaries()).thenReturn(List.of(ArchivedDocumentSummary.of(document("doc-1"))));
 
         AtomicBoolean releaseFirst = new AtomicBoolean(false);
         AtomicInteger invocations = new AtomicInteger();
@@ -378,7 +379,7 @@ class ReindexTaskServiceTest {
         stateStore.writeOwner(taskId);
 
         when(archive.isEnabled()).thenReturn(true);
-        when(archive.listAll()).thenReturn(List.of(document("doc-1")));
+        when(archive.listSummaries()).thenReturn(List.of(ArchivedDocumentSummary.of(document("doc-1"))));
         when(ragService.reindexArchived(anyBoolean(), any(), any()))
                 .thenReturn(new RagService.RebuildResult(1, 1, 0, false));
 
@@ -395,7 +396,7 @@ class ReindexTaskServiceTest {
     @Test
     void shutdownPersistsInterruptedTaskAndKeepsLockForRestart() throws Exception {
         when(archive.isEnabled()).thenReturn(true);
-        when(archive.listAll()).thenReturn(List.of(document("doc-1")));
+        when(archive.listSummaries()).thenReturn(List.of(ArchivedDocumentSummary.of(document("doc-1"))));
 
         CountDownLatch started = new CountDownLatch(1);
         when(ragService.reindexArchived(anyBoolean(), any(), any())).thenAnswer(invocation -> {
@@ -426,7 +427,7 @@ class ReindexTaskServiceTest {
 
     @Test
     void recordsFailureWhenRebuildThrows() throws Exception {        when(archive.isEnabled()).thenReturn(true);
-        when(archive.listAll()).thenReturn(List.of(document("doc-1")));
+        when(archive.listSummaries()).thenReturn(List.of(ArchivedDocumentSummary.of(document("doc-1"))));
         when(ragService.reindexArchived(anyBoolean(), any(), any()))
                 .thenThrow(new IllegalStateException("embedding down"));
 

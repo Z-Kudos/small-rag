@@ -102,16 +102,19 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 | `CHUNK_AUTO_RECHUNK` | `true` | 启动时检测切分配置变化并自动重切已归档文档 |
 | `SMALL_RAG_ARCHIVE_DIR` | `./data/documents`（镜像内 `/data/documents`） | 原文归档目录，自动重切的数据来源 |
 | `SMALL_RAG_SOURCES_ENABLED` | `false` | 是否启用多目录 Markdown 自动导入 |
-| `SMALL_RAG_SOURCE_DIRS` | 空 | 逗号分隔的源目录（建议容器内绝对路径，路径变化会改变文档 id） |
+| `SMALL_RAG_SOURCE_DIRS` | 空 | 逗号分隔的源目录，支持 `label=/path`；label 默认取目录名，是文档 id 的稳定命名空间 |
 | `SMALL_RAG_SOURCE_EXTENSIONS` | `.md,.markdown` | 参与导入的扩展名（大小写不敏感） |
 | `SMALL_RAG_SOURCE_EXCLUDE` | `**/node_modules/**,**/target/**,**/build/**` | 相对源目录的排除 glob |
 | `SMALL_RAG_SOURCES_SKIP_HIDDEN` | `true` | 跳过 `.` 开头的目录/文件（`.git`、`.obsidian` 等） |
 | `SMALL_RAG_SOURCES_FOLLOW_SYMLINKS` | `false` | 是否跟随符号链接 |
 | `SMALL_RAG_SOURCES_SCAN_ON_STARTUP` | `true` | 应用就绪后是否立即扫描一次 |
 | `SMALL_RAG_SOURCES_SCAN_INTERVAL_SECONDS` | `300` | 定时扫描间隔；`0` 关闭定时扫描 |
+| `SMALL_RAG_SOURCES_WATCH_ENABLED` | `true` | 是否启用文件系统 watcher（带防抖） |
+| `SMALL_RAG_SOURCES_WATCH_DEBOUNCE_SECONDS` | `5` | watcher 防抖时间（秒） |
 | `SMALL_RAG_SOURCES_MAX_FILE_BYTES` | `2097152` | 单文件大小上限；`0` 不限制 |
 | `SMALL_RAG_SOURCES_MAX_FILES_PER_SCAN` | `0` | 每轮最多处理多少篇变化文档；`0` 不限制（未变化文件不占额度） |
 | `SMALL_RAG_SOURCES_DELETE_MISSING` | `false` | 源文件删除后是否同时删除对应索引与归档 |
+| `SMALL_RAG_SOURCES_DELETE_ORPHAN_ROOTS` | `false` | 根目录从配置移除后，是否删除该 label 下已导入的文档 |
 | `SMALL_RAG_SOURCES_STATE_FILE` | 空（`<archive-dir>/.sources/state.json`） | 增量状态文件路径 |
 | `QDRANT_HOST` | `localhost` | Qdrant 地址 |
 | `QDRANT_PORT` | `6334` | gRPC 端口 |
@@ -143,8 +146,8 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 | `rag_task_status(taskId)` | 查询重建任务进度；`taskId` 不传返回最近一次任务，从未执行过时返回 `{"status":"IDLE"}` |
 | `rag_task_resume(taskId)` | 续接重启前未完成的重建任务（`status=interrupted`）：跳过已成功文档继续重建，不重新清空；`taskId` 不传表示最近一次任务 |
 | `rag_task_cancel(taskId)` | 取消重建任务：运行中为协作式（当前文档处理完后停止）；`interrupted` 任务立即置为 `cancelled` 并释放任务锁 |
-| `rag_sync_sources(force)` | 手动扫描配置的多个 Markdown 源目录：按文件指纹增量解析、切分并建立索引；`force=true` 忽略指纹重新切分全部文件 |
-| `rag_sync_status()` | 查询目录导入状态：是否启用/运行、配置的目录、最近一次扫描统计与错误 |
+| `rag_sync_sources(force)` | 异步触发多目录 Markdown 扫描：按文件指纹增量解析、切分并建立索引；`force=true` 忽略指纹重新切分全部文件；立即返回，用 `rag_sync_status` 查询 |
+| `rag_sync_status()` | 查询目录导入状态：是否启用/运行/排队、最近一次触发、扫描统计与错误 |
 | `rag_search(query, topK, expand)` | 仅检索，返回命中分块、相似度、来源元数据；Parent-Child 下默认按父块去重返回，`expand=false` 返回原始子块 |
 | `rag_query(query, topK)` | 返回带编号/来源/相似度的增强上下文（不调用生成模型） |
 
@@ -257,15 +260,19 @@ Markdown 感知切分引擎（`semantic` 与 `parent-child` 共用）的行为�
 rag:
   sources:
     enabled: true
-    directories: /data/sources/notes,/data/sources/wiki
+    # label 是稳定的文档 id 命名空间；不写 label 时默认取目录名
+    directories: notes=/data/sources/notes,wiki=/data/sources/wiki
     extensions: .md,.markdown
     exclude: "**/node_modules/**,**/target/**,**/build/**"
     skip-hidden: true
     scan-on-startup: true
     scan-interval-seconds: 300      # 0 = 关闭定时扫描
+    watch-enabled: true             # 文件系统 watcher（带防抖）
+    watch-debounce-seconds: 5
     max-file-bytes: 2097152         # 单文件上限，0 = 不限
     max-files-per-scan: 0           # 每轮最多处理的变化文档数，0 = 不限
     delete-missing: false           # 源文件删除后是否清理索引
+    delete-orphan-roots: false      # 根目录从配置移除后是否清理该 label 下的文档
 ```
 
 容器示例：
@@ -278,7 +285,7 @@ services:
       - /host/wiki:/data/sources/wiki:ro
     environment:
       SMALL_RAG_SOURCES_ENABLED: "true"
-      SMALL_RAG_SOURCE_DIRS: /data/sources/notes,/data/sources/wiki
+      SMALL_RAG_SOURCE_DIRS: notes=/data/sources/notes,wiki=/data/sources/wiki
 ```
 
 **触发方式**
@@ -287,24 +294,27 @@ services:
 | --- | --- |
 | 启动扫描 | `SMALL_RAG_SOURCES_SCAN_ON_STARTUP=true` 时，应用就绪后在后台扫描一次 |
 | 定时扫描 | 每 `SMALL_RAG_SOURCES_SCAN_INTERVAL_SECONDS` 秒增量扫描；`0` 关闭 |
-| 手动触发 | MCP `rag_sync_sources(force)`；`force=true` 忽略指纹重新切分全部文件 |
+| 文件 watcher | `SMALL_RAG_SOURCES_WATCH_ENABLED=true` 时监听新增/修改/删除，按防抖时间合并为一次增量扫描 |
+| 手动触发 | MCP `rag_sync_sources(force)` 异步触发；`force=true` 忽略指纹重新切分全部文件（且不受 `MAX_FILES_PER_SCAN` 限制）；用 `rag_sync_status` 轮询 |
 | 阈值/限流 | `MAX_FILE_BYTES` 控制单文件上限；`MAX_FILES_PER_SCAN` 控制每轮 Embedding 数量 |
 
 **增量与一致性**
 
-- 文档 id 由“源根目录（绝对路径）+ 相对路径”确定性生成；同一文件重复扫描不会产生重复文档。
+- 文档 id 由“根目录 label + 相对路径”确定性生成；目录移动时保持 label 不变即可续用原文档 id。label 重复会拒绝扫描，请用 `label=/path` 显式命名。
 - 先比较 `mtime + size`，再比较内容 SHA-256；只有内容变化才重新切分。仅改 mtime 不会触发重建。
 - 增量状态默认写在 `<archive-dir>/.sources/state.json`（原子替换），缺失或损坏时从归档元数据重建；最坏情况是多一次幂等重建。
 - 源文件删除后，只有 `DELETE_MISSING=true` 才删除对应向量与归档；删除只对“当前仍配置且本轮成功扫描”的根目录生效，避免临时不可读的挂载点误删。
 - 目录导入与重建任务共用进程内索引活动锁：重建运行中会跳过/拒绝导入，导入运行中会拒绝新的重建任务。
-- 导入文档的元数据包含 `source`、`source_root`、`source_file`、`source_path`、`source_size`、`source_mtime`、`source_sha256`；`source` 可直接用于引用。
+- 导入文档的元数据包含 `source`、`source_root`、`source_root_path`、`source_file`、`source_path`、`source_size`、`source_mtime`、`source_sha256`；`source` 可直接用于引用。
+- 归档另维护 `<archive-dir>/.archive/index.json` 摘要索引；`rag_list` 和启动重切只读摘要，按需逐篇读取原文，避免一次性把全部归档 JSON 载入内存。
 
 **注意**
 
-- 源文件是权威数据：对导入文档执行 `rag_update` 后，文件内容不变时下次扫描会保留手工更新；文件一旦变化，扫描会以文件内容覆盖。手动 `rag_delete` 后，若源文件仍在，下次扫描会重新导入（`rag_delete` 会同时移除增量状态）；要永久删除请删除源文件或取消该目录配置。
-- 根目录路径必须稳定（建议容器内绝对路径）；路径变化会生成新的文档 id，旧文档不会自动删除，除非 `DELETE_MISSING=true` 且旧根目录仍在配置中。
+- 源文件是权威数据：对导入文档执行 `rag_update` 后，文件内容不变时下次扫描会保留手工更新；文件一旦变化，扫描会以文件内容覆盖。
+- 手动 `rag_delete` 会留下墓碑：源文件内容不变时不会被自动重新导入；文件内容变化后墓碑失效并重新导入。要永久删除请删除源文件或取消该目录配置。
+- 根目录 label 必须稳定；label 变化会生成新的文档 id。`DELETE_MISSING=true` 清理已消失文件；`DELETE_ORPHAN_ROOTS=true` 清理从配置中移除的 label 下全部文档（默认关闭，避免误删）。
 - 仅支持 UTF-8 文本；超过 `MAX_FILE_BYTES` 的文件会被跳过并告警。默认不跟随符号链接、跳过隐藏目录/文件。
-- 手动 `rag_sync_sources` 是同步调用，首次导入大量文件可能耗时较长；批量首次导入建议依赖启动/定时扫描，或调大 `MAX_FILES_PER_SCAN`。
+- `rag_sync_sources` 是异步调用，立即返回；用 `rag_sync_status` 查看 `running/queued/lastRun`。watcher 受平台 inotify 限额影响，失败时自动退化为启动/定时扫描。
 - 容器内 bind mount 的源目录必须对 UID `10001` 可读（`chmod -R a+rX /path/to/notes` 或对应属主）。
 
 ## 设计要点
@@ -319,7 +329,9 @@ services:
 - **Markdown 结构**：标题分节，代码/表格/callout 受保护，frontmatter、heading_path、wikilink 写入元数据；超长表格/代码切片重复表头或围栏。
 - **中英对齐**：切分长度按全宽字符当量计量（CJK=1、拉丁=0.25），英文硬切回退单词边界，句界识别带缩写白名单；语义断点支持分位数模式。
 - **重切时机**：启动时同步执行，失败不阻断启动，下次启动继续重试。
-- **目录导入**：确定性文档 id（根目录 + 相对路径）+ `mtime/size/SHA-256` 增量；状态文件与归档同卷，丢失时从归档元数据重建；启动/定时/MCP 手动触发，`max-files-per-scan` 限流。
+- **目录导入**：确定性文档 id（根 label + 相对路径）+ `mtime/size/SHA-256` 增量；状态文件与归档同卷，丢失时从归档元数据重建；启动/定时/watcher/MCP 异步触发，`max-files-per-scan` 限流。
+- **归档摘要索引**：`.archive/index.json` 保存 metadata/签名/长度，`rag_list` 与启动重切只读摘要，原文按需 `find`。
+- **重切写入顺序**：能枚举旧 point id 时先写新片段再删旧片段，失败时旧数据仍可检索；无法枚举时回退先删后写。
 - **错误收敛**：MCP 工具把运行期异常转为 `{"error": "..."}`，不抛协议层异常。
 
 ## 架构
@@ -334,7 +346,7 @@ rag/            RagService（入库/检索/上下文/更新删除重建）、Rei
 rag/sources/    SourceSyncService（多目录 Markdown 扫描/增量/定时/手动触发）、SourceStateStore（文件指纹状态）
 rag/chunking/   ChunkingService、ChunkingStrategy、ChunkingSignature、TextChunk、
                 TextChunker、RecursiveTextChunker、MarkdownChunker、SemanticTextChunker
-rag/archive/    DocumentArchive、ArchivedDocument（原文归档与签名记录）
+rag/archive/    DocumentArchive、ArchivedDocument、ArchivedDocumentSummary（原文归档、摘要索引与签名记录）
 config/         QdrantConfig、McpServerConfig、EmbeddingConfig（HTTP 超时）、RagProperties、QdrantProperties
 docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord.conf
 ```
@@ -343,12 +355,12 @@ docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord.co
 
 ## 已知限制与风险
 
-- **索引失败窗口**：单篇重建先删旧片段再写新片段；Embedding/Qdrant 中途失败时该文档会暂时不可检索。归档签名为空，重启后 `ChunkingReindexRunner` 会重试；`rag_ingest` 失败会尽力清理残留片段。
+- **索引失败窗口**：单篇重建能枚举旧 point id 时先写新片段再删旧片段，Embedding/Qdrant 失败不会让文档不可检索；只有无法枚举 id 时才回退为先删后写。写入窗口内可能短暂返回新旧重复片段，删除旧片段失败会保留重复并由下次重切清理。
 - **旧数据清理**：`rag_rebuild` 只按 `chunk_type=chunk/child/parent` 清理；更早版本写入、没有 `chunk_type` 的片段不会被清理，需换新集合。
-- **归档全量读取**：`rag_list` 与启动重切会读取全部归档 JSON；文档量很大时内存/IO 开销明显，目前没有分页索引。
+- **归档索引**：`rag_list`/启动重切使用 `.archive/index.json` 摘要索引，不再加载全部原文；索引丢失、版本不符或文档 id 集合不一致时会全量重建一次。索引内容陈旧但 id 集合一致时可能保留旧签名，异常后建议手动重建索引/重切。
 - **重启续接边界**：Qdrant 状态集合中的锁是单实例读后写，不是分布式 CAS；多副本部署不互斥。锁 point 丢失但任务快照仍在时，按单实例假设由最近一个未完成/未撤销任务重新持锁；多副本下可能误抢。
 - **启动顺序**：`ChunkingReindexRunner` 在 `ApplicationReadyEvent` 之前同步执行；若检测到有重启时中断、待续接的重建任务，则跳过自动重切并交给续接任务处理，避免重复重建。
-- **目录导入**：没有文件系统 watcher，只能等定时扫描/手动触发；根路径变化会生成新文档 id；`rag_sync_sources` 是同步调用，首次大批量导入可能超过 MCP 客户端超时；导入手工更新/删除的语义见上一节。
+- **目录导入**：watcher 依赖平台 inotify/事件队列，超限或注册失败时会退化为启动/定时扫描；`rag_sync_sources` 已改为异步触发，用 `rag_sync_status` 轮询；root label 重复会拒绝扫描；label 变化会生成新文档 id，旧 label 需 `DELETE_ORPHAN_ROOTS=true` 才会清理；墓碑只在源文件内容不变时生效。
 - **切分签名**：签名版本与项目版本同步（当前 `0.0.2`）；只改切分算法而不升版本时，旧索引不会被自动重切，需要手动 `rag_rebuild`。
 - **导入状态**：最近一次扫描统计只在内存中，重启后 `rag_sync_status` 的 `lastRun` 为空；日志仍保留历史。
 

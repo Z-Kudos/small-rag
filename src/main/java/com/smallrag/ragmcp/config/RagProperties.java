@@ -307,9 +307,10 @@ public class RagProperties {
         private boolean enabled = false;
 
         /**
-         * 逗号分隔的目录列表；相对路径按进程工作目录解析。
+         * 逗号分隔的目录列表，支持 {@code label=/absolute/path} 形式；相对路径按进程工作目录解析。
          *
-         * <p>建议使用稳定的绝对路径（容器内挂载点），路径变化会改变确定性文档 id。
+         * <p>label 是文档 id 的稳定命名空间：目录移动时保持 label 不变即可续用原文档 id。
+         * 不写 label 时默认取目录名；label 重复会拒绝扫描。
          */
         private String directories = "";
 
@@ -344,6 +345,16 @@ public class RagProperties {
         private long scanIntervalSeconds = 300;
 
         /**
+         * 是否启用文件系统 watcher；关闭后只依赖启动/定时/手动扫描。
+         */
+        private boolean watchEnabled = true;
+
+        /**
+         * watcher 防抖时间（秒）：同一批写入/重命名事件合并为一次扫描。
+         */
+        private long watchDebounceSeconds = 5;
+
+        /**
          * 单文件大小上限（字节）；超过则跳过并告警，{@code <= 0} 不限制。
          */
         private long maxFileBytes = 2L * 1024 * 1024;
@@ -362,6 +373,13 @@ public class RagProperties {
          * 成功扫描的根目录生效。
          */
         private boolean deleteMissing = false;
+
+        /**
+         * 根目录从配置中移除后，是否删除该根目录下已导入的文档。
+         *
+         * <p>默认关闭，避免临时调整配置误删知识库；开启后按根 label 判断。
+         */
+        private boolean deleteOrphanRoots = false;
 
         /**
          * 导入状态文件路径；留空表示 {@code <archive-dir>/.sources/state.json}。

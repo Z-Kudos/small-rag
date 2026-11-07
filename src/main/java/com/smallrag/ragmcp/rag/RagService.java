@@ -3,6 +3,7 @@ package com.smallrag.ragmcp.rag;
 import com.smallrag.ragmcp.config.QdrantProperties;
 import com.smallrag.ragmcp.config.RagProperties;
 import com.smallrag.ragmcp.rag.archive.ArchivedDocument;
+import com.smallrag.ragmcp.rag.archive.ArchivedDocumentSummary;
 import com.smallrag.ragmcp.rag.archive.DocumentArchive;
 import com.smallrag.ragmcp.rag.chunking.ChunkingService;
 import com.smallrag.ragmcp.rag.chunking.ChunkingSignature;
@@ -13,10 +14,17 @@ import com.smallrag.ragmcp.rag.chunking.TextChunk;
 import com.smallrag.ragmcp.rag.chunking.TextWeights;
 import io.qdrant.client.PointIdFactory;
 import io.qdrant.client.QdrantClient;
-import io.qdrant.client.grpc.JsonWithInt.Value;
+import io.qdrant.client.grpc.Common.Condition;
+import io.qdrant.client.grpc.Common.FieldCondition;
+import io.qdrant.client.grpc.Common.Filter;
+import io.qdrant.client.grpc.Common.Match;
 import io.qdrant.client.grpc.Common.PointId;
+import io.qdrant.client.grpc.JsonWithInt.Value;
 import io.qdrant.client.grpc.Points.RetrievedPoint;
+import io.qdrant.client.grpc.Points.ScrollPoints;
+import io.qdrant.client.grpc.Points.ScrollResponse;
 import io.qdrant.client.grpc.Points.VectorsOutput;
+import io.qdrant.client.grpc.Points.WithPayloadSelector;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -32,10 +40,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -209,8 +219,9 @@ public class RagService {
     /**
      * 使用当前切分配置重建单篇文档的向量。
      *
-     * <p>先完成切分（语义策略可能包含 Embedding 调用），再删除旧片段，
-     * 尽量缩短文档在重切过程中的不可检索窗口。
+     * <p>先完成切分（语义策略可能包含 Embedding 调用），再查询旧 point id：
+     * 能安全枚举时<b>先写入新片段、再删除旧片段</b>，避免 Embedding/Qdrant 失败导致
+     * 文档在重切窗口内不可检索；无法枚举时回退为先删后写。
      *
      * @param documentId 原文档 id
      * @param text       原始全文
@@ -232,13 +243,93 @@ public class RagService {
 
         ChunkingService.ChunkingResult chunked = chunkingService.chunk(text, documentId);
         List<Document> documents = buildDocuments(documentId, metadata, chunked);
-        requireWritable(progress, "删除旧片段");
-        vectorStore.delete(new FilterExpressionBuilder().eq("doc_id", documentId).build());
-        requireWritable(progress, "写入新片段");
-        vectorStore.add(documents);
+        Set<UUID> newPointIds = documentPointIds(documents);
+        Optional<Set<UUID>> oldPointIds = fetchPointIds(documentId);
+
+        if (oldPointIds.isPresent()) {
+            // 先写新片段：写入失败时旧片段仍然可检索
+            requireWritable(progress, "写入新片段");
+            vectorStore.add(documents);
+            Set<UUID> stale = new HashSet<>(oldPointIds.get());
+            stale.removeAll(newPointIds);
+            if (!stale.isEmpty()) {
+                requireWritable(progress, "删除旧片段");
+                deletePoints(stale);
+            }
+        } else {
+            // 无法枚举旧 point id 时退回先删后写，避免新旧片段重复
+            requireWritable(progress, "删除旧片段");
+            vectorStore.delete(new FilterExpressionBuilder().eq("doc_id", documentId).build());
+            requireWritable(progress, "写入新片段");
+            vectorStore.add(documents);
+        }
         log.info("文档已重切: docId={}, strategy={}, chunks={}, parents={}",
                 documentId, chunkingService.strategy(), chunked.chunks().size(), chunked.parentCount());
         return new IngestResult(documentId, chunked.chunks().size(), chunked.parentCount());
+    }
+
+    /**
+     * 查询文档现有 point id；失败时返回 empty，由调用方回退到先删后写。
+     */
+    private Optional<Set<UUID>> fetchPointIds(String documentId) {
+        String collection = qdrantProperties.getCollectionName();
+        long timeout = Math.max(1L, qdrantProperties.getRequestTimeoutMs());
+        try {
+            Set<UUID> ids = new HashSet<>();
+            PointId offset = null;
+            do {
+                ScrollPoints.Builder request = ScrollPoints.newBuilder()
+                        .setCollectionName(collection)
+                        .setFilter(Filter.newBuilder()
+                                .addMust(Condition.newBuilder()
+                                        .setField(FieldCondition.newBuilder()
+                                                .setKey("doc_id")
+                                                .setMatch(Match.newBuilder().setKeyword(documentId))))
+                                .build())
+                        .setLimit(256)
+                        .setWithPayload(WithPayloadSelector.newBuilder().setEnable(false).build());
+                if (offset != null) {
+                    request.setOffset(offset);
+                }
+                ScrollResponse response = qdrantClient.scrollAsync(request.build())
+                        .get(timeout, TimeUnit.MILLISECONDS);
+                for (RetrievedPoint point : response.getResultList()) {
+                    ids.add(UUID.fromString(point.getId().getUuid()));
+                }
+                offset = response.hasNextPageOffset() ? response.getNextPageOffset() : null;
+            } while (offset != null);
+            return Optional.of(ids);
+        } catch (Exception e) {
+            log.debug("读取文档旧片段 point id 失败，回退为先删后写: docId={}, 原因={}",
+                    documentId, e.toString());
+            return Optional.empty();
+        }
+    }
+
+    private void deletePoints(Set<UUID> pointIds) {
+        String collection = qdrantProperties.getCollectionName();
+        long timeout = Math.max(1L, qdrantProperties.getRequestTimeoutMs());
+        List<PointId> ids = pointIds.stream().map(PointIdFactory::id).toList();
+        try {
+            qdrantClient.deleteAsync(collection, ids).get(timeout, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            throw new IllegalStateException("删除旧片段失败: " + ids.size(), e);
+        }
+    }
+
+    private static Set<UUID> documentPointIds(List<Document> documents) {
+        Set<UUID> ids = new HashSet<>();
+        for (Document document : documents) {
+            String id = document.getId();
+            if (id != null) {
+                try {
+                    ids.add(UUID.fromString(id));
+                } catch (IllegalArgumentException ignored) {
+                    // 非 UUID 的显式 id 不会出现在 Qdrant point id 中
+                }
+            }
+        }
+        return ids;
     }
 
     /**
@@ -344,7 +435,7 @@ public class RagService {
         int safeLimit = (limit == null || limit <= 0) ? 20 : Math.min(limit, 100);
         int safeOffset = (offset == null || offset < 0) ? 0 : offset;
 
-        List<ArchivedDocument> all = documentArchive.listAll();
+        List<ArchivedDocumentSummary> all = documentArchive.listSummaries();
         List<DocumentSummary> documents = all.stream()
                 .skip(safeOffset)
                 .limit(safeLimit)
@@ -353,7 +444,7 @@ public class RagService {
                         document.metadata(),
                         document.chunkSignature(),
                         document.updatedAt(),
-                        document.text() == null ? 0 : document.text().length()))
+                        document.textLength()))
                 .toList();
         return new DocumentPage(all.size(), safeOffset, safeLimit, documents);
     }
@@ -394,7 +485,7 @@ public class RagService {
             return new RebuildResult(0, 0, 0, false);
         }
 
-        if (documentArchive.listAll().isEmpty()) {
+        if (documentArchive.listSummaries().isEmpty()) {
             if (clearFirst) {
                 throw new IllegalStateException("没有归档文档，拒绝清空向量库");
             }
@@ -417,7 +508,7 @@ public class RagService {
             log.info("已清空当前集合中由 small-rag 写入的片段，开始全量重建");
         }
 
-        List<ArchivedDocument> documents = documentArchive.listAll();
+        List<ArchivedDocumentSummary> documents = documentArchive.listSummaries();
         int total = documents.size();
         if (total == 0) {
             progress.onProgress(new ReindexProgress(
@@ -439,40 +530,43 @@ public class RagService {
                         total, index, succeeded, failed, null, false));
                 return new RebuildResult(total, succeeded, failed, false);
             }
-            ArchivedDocument document = documents.get(index);
-            if (skip.contains(document.documentId())) {
+            ArchivedDocumentSummary summary = documents.get(index);
+            String documentId = summary.documentId();
+            if (skip.contains(documentId)) {
                 // 续接：上次已成功重建，直接计入进度
                 succeeded++;
                 progress.onProgress(new ReindexProgress(ReindexProgress.Stage.REINDEXING,
-                        total, index + 1, succeeded, failed, document.documentId(), false));
+                        total, index + 1, succeeded, failed, documentId, false));
                 continue;
             }
             progress.onProgress(new ReindexProgress(ReindexProgress.Stage.REINDEXING,
-                    total, index, succeeded, failed, document.documentId(), false));
+                    total, index, succeeded, failed, documentId, false));
             try {
-                reindex(document.documentId(), document.text(), document.metadata(), progress);
-                documentArchive.markIndexed(document.documentId(), signature);
+                ArchivedDocument document = documentArchive.find(documentId)
+                        .orElseThrow(() -> new IllegalStateException("归档文档不存在: " + documentId));
+                reindex(documentId, document.text(), document.metadata(), progress);
+                documentArchive.markIndexed(documentId, signature);
                 succeeded++;
                 consecutiveFailures = 0;
-                progress.onDocumentFinished(document.documentId(), true);
+                progress.onDocumentFinished(documentId, true);
             } catch (ReindexRevokedException e) {
                 // 写权限已被撤销：立即停止，不能把后续文档算作失败
-                log.warn("重建任务写权限已撤销，停止重建: docId={}", document.documentId());
+                log.warn("重建任务写权限已撤销，停止重建: docId={}", documentId);
                 throw e;
             } catch (Exception e) {
                 failed++;
                 consecutiveFailures++;
-                progress.onDocumentFinished(document.documentId(), false);
-                log.warn("重建失败: docId={}, 原因={}", document.documentId(), e.toString());
+                progress.onDocumentFinished(documentId, false);
+                log.warn("重建失败: docId={}, 原因={}", documentId, e.toString());
                 if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                     log.error("连续 {} 篇重建失败，中止本次任务", consecutiveFailures);
                     progress.onProgress(new ReindexProgress(ReindexProgress.Stage.ABORTED,
-                            total, index + 1, succeeded, failed, document.documentId(), true));
+                            total, index + 1, succeeded, failed, documentId, true));
                     return new RebuildResult(total, succeeded, failed, true);
                 }
             }
             progress.onProgress(new ReindexProgress(ReindexProgress.Stage.REINDEXING,
-                    total, index + 1, succeeded, failed, document.documentId(), false));
+                    total, index + 1, succeeded, failed, documentId, false));
         }
         log.info("重建完成: total={}, succeeded={}, failed={}", total, succeeded, failed);
         progress.onProgress(new ReindexProgress(
@@ -537,6 +631,7 @@ public class RagService {
             throw new IllegalArgumentException("text 不能为空");
         }
         String ingestedAt = Instant.now().toString();
+        String generation = UUID.randomUUID().toString();
 
         List<Document> documents = new ArrayList<>(chunks.size() + chunked.parents().size());
         for (int i = 0; i < chunks.size(); i++) {
@@ -544,7 +639,11 @@ public class RagService {
             Map<String, Object> documentMetadata = baseMetadata(metadata, chunk.metadata(), documentId, ingestedAt);
             documentMetadata.put("chunk_index", i);
             documentMetadata.put("chunk_count", chunks.size());
-            documents.add(new Document(chunk.text(), documentMetadata));
+            documents.add(Document.builder()
+                    .id(chunkPointUuid(documentId, generation, i).toString())
+                    .text(chunk.text())
+                    .metadata(documentMetadata)
+                    .build());
         }
         // 父块作为独立 point：id 由 parent_id 确定性生成，重切/更新后保持稳定
         for (TextChunk parent : chunked.parents()) {
@@ -797,6 +896,14 @@ public class RagService {
      */
     public static UUID parentPointUuid(String parentId) {
         return UUID.nameUUIDFromBytes(("parent:" + parentId).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 子块 point id：每次重切使用新的 generation，便于先写新片段再按 id 删除旧片段。
+     */
+    private static UUID chunkPointUuid(String documentId, String generation, int index) {
+        return UUID.nameUUIDFromBytes(("chunk:" + documentId + ":" + generation + ":" + index)
+                .getBytes(StandardCharsets.UTF_8));
     }
 
     /**

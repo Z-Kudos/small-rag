@@ -12,7 +12,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.Map;
-
 /**
  * 目录导入的增量状态：记录每个源文件的指纹与对应文档 id。
  *
@@ -30,7 +29,8 @@ public class SourceStateStore {
      * 单个源文件的已导入状态。
      *
      * @param documentId     文档 id
-     * @param root           源根目录（绝对路径，规范化）
+     * @param root           源根目录的稳定标识（label；默认取目录名）
+     * @param rootPath       源根目录的绝对路径（用于删除检测）
      * @param file           相对源根目录的文件路径（使用 {@code /}）
      * @param size           文件字节数
      * @param modifiedMillis 文件 mtime（毫秒）
@@ -40,26 +40,65 @@ public class SourceStateStore {
     public record FileState(
             String documentId,
             String root,
+            String rootPath,
             String file,
             long size,
             long modifiedMillis,
             String sha256,
             String indexedAt) {
+
+        /**
+         * 兼容旧版状态：旧字段 {@code root} 存的是绝对路径，没有 {@code rootPath}。
+         */
+        public FileState {
+            if ((rootPath == null || rootPath.isBlank()) && root != null && !root.isBlank()) {
+                rootPath = root;
+                Path name = Path.of(root).getFileName();
+                root = name == null ? root : name.toString();
+            }
+        }
+    }
+
+    /**
+     * 手动删除后的“墓碑”：源文件内容未变时不再自动重新导入。
+     *
+     * @param documentId     原文档 id
+     * @param root           源根目录标识
+     * @param rootPath       源根目录绝对路径
+     * @param file           相对文件路径
+     * @param size           删除时文件字节数
+     * @param modifiedMillis 删除时文件 mtime（毫秒）
+     * @param sha256         删除时文件内容 SHA-256
+     */
+    public record IgnoredFile(
+            String documentId,
+            String root,
+            String rootPath,
+            String file,
+            long size,
+            long modifiedMillis,
+            String sha256) {
     }
 
     /**
      * 全部源文件状态；key 为 {@code root::file}。
      *
-     * @param files 源文件状态
+     * @param files   已导入的源文件
+     * @param ignored 手动删除、等待源文件变化的墓碑
      */
-    public record State(Map<String, FileState> files) {
+    public record State(Map<String, FileState> files, Map<String, IgnoredFile> ignored) {
 
         public State {
             files = files == null ? Map.of() : Map.copyOf(files);
+            ignored = ignored == null ? Map.of() : Map.copyOf(ignored);
+        }
+
+        public State(Map<String, FileState> files) {
+            this(files, Map.of());
         }
 
         public static State empty() {
-            return new State(Map.of());
+            return new State(Map.of(), Map.of());
         }
     }
 

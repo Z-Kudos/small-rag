@@ -4,6 +4,7 @@ import com.smallrag.ragmcp.config.RagProperties;
 import com.smallrag.ragmcp.rag.IndexActivityGuard;
 import com.smallrag.ragmcp.rag.RagService;
 import com.smallrag.ragmcp.rag.archive.DocumentArchive;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -69,6 +70,11 @@ class SourceSyncServiceTest {
                 new SourceStateStore(objectMapper, properties), guard);
     }
 
+    @AfterEach
+    void tearDown() {
+        service.shutdown();
+    }
+
     @Test
     void importsMarkdownFromMultipleDirectories() throws Exception {
         write(notes, "a.md", "AAA");
@@ -89,11 +95,12 @@ class SourceSyncServiceTest {
         verify(ragService, times(4)).upsert(anyString(), anyString(), anyMap());
 
         ArgumentCaptor<Map<String, String>> metadata = mapCaptor();
-        verify(ragService).upsert(eq(SourceSyncService.documentIdFor(notes.toString(), "a.md")),
+        verify(ragService).upsert(eq(SourceSyncService.documentIdFor("notes", "a.md")),
                 eq("AAA"), metadata.capture());
         assertThat(metadata.getValue())
                 .containsEntry(SourceSyncService.META_SOURCE_FILE, "a.md")
-                .containsEntry(SourceSyncService.META_SOURCE_ROOT, notes.toString())
+                .containsEntry(SourceSyncService.META_SOURCE_ROOT, "notes")
+                .containsEntry(SourceSyncService.META_SOURCE_ROOT_PATH, notes.toString())
                 .containsEntry("source", "notes/a.md")
                 .containsKey(SourceSyncService.META_SOURCE_SHA256);
     }
@@ -135,8 +142,8 @@ class SourceSyncServiceTest {
         properties.getSources().setDeleteMissing(true);
         SourceSyncService.Summary summary = service.sync(false);
         assertThat(summary.deleted()).isEqualTo(1);
-        verify(ragService).delete(SourceSyncService.documentIdFor(notes.toString(), "a.md"));
-        verify(ragService, never()).delete(SourceSyncService.documentIdFor(notes.toString(), "b.md"));
+        verify(ragService).delete(SourceSyncService.documentIdFor("notes", "a.md"));
+        verify(ragService, never()).delete(SourceSyncService.documentIdFor("notes", "b.md"));
     }
 
     @Test
@@ -191,12 +198,14 @@ class SourceSyncServiceTest {
         long modified = Files.getLastModifiedTime(file).toMillis();
         String sha256 = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                 .digest("AAA".getBytes(StandardCharsets.UTF_8)));
-        String root = notes.toString();
+        String root = "notes";
+        String rootPath = notes.toString();
         String key = root + "::a.md";
         String documentId = SourceSyncService.documentIdFor(root, "a.md");
         Map<String, String> metadata = Map.of(
                 SourceSyncService.META_SOURCE_KEY, key,
                 SourceSyncService.META_SOURCE_ROOT, root,
+                SourceSyncService.META_SOURCE_ROOT_PATH, rootPath,
                 SourceSyncService.META_SOURCE_FILE, "a.md",
                 SourceSyncService.META_SOURCE_SIZE, Long.toString(size),
                 SourceSyncService.META_SOURCE_MTIME, Long.toString(modified),
@@ -208,6 +217,92 @@ class SourceSyncServiceTest {
         assertThat(summary.skipped()).isEqualTo(1);
         assertThat(summary.indexed()).isZero();
         verify(ragService, never()).upsert(anyString(), anyString(), anyMap());
+    }
+
+    @Test
+    void usesExplicitRootLabelForDocumentId() throws Exception {
+        properties.getSources().setDirectories("knowledge=" + notes);
+        write(notes, "a.md", "AAA");
+
+        service.sync(false);
+
+        verify(ragService).upsert(
+                eq(SourceSyncService.documentIdFor("knowledge", "a.md")),
+                eq("AAA"), anyMap());
+    }
+
+    @Test
+    void deleteOrphanRootsRemovesDocumentsFromRemovedLabels() throws Exception {
+        write(notes, "a.md", "AAA");
+        service.sync(false);
+        String documentId = SourceSyncService.documentIdFor("notes", "a.md");
+
+        properties.getSources().setDirectories("wiki=" + wiki);
+        properties.getSources().setDeleteOrphanRoots(true);
+        SourceSyncService.Summary summary = service.sync(false);
+
+        assertThat(summary.deleted()).isEqualTo(1);
+        verify(ragService).delete(documentId);
+    }
+
+    @Test
+    void manualDeleteIsNotReimportedUntilContentChanges() throws Exception {
+        Path file = write(notes, "a.md", "AAA");
+        service.sync(false);
+        String documentId = SourceSyncService.documentIdFor("notes", "a.md");
+        verify(ragService).upsert(eq(documentId), eq("AAA"), anyMap());
+
+        service.removeFromState(documentId);
+        SourceSyncService.Summary afterDelete = service.sync(false);
+        assertThat(afterDelete.indexed()).isZero();
+        assertThat(afterDelete.updated()).isZero();
+        verify(ragService, times(1)).upsert(eq(documentId), anyString(), anyMap());
+
+        Files.writeString(file, "changed", StandardCharsets.UTF_8);
+        Files.setLastModifiedTime(file, FileTime.fromMillis(
+                Files.getLastModifiedTime(file).toMillis() + 2_000));
+        SourceSyncService.Summary afterChange = service.sync(false);
+        assertThat(afterChange.indexed()).isEqualTo(1);
+        verify(ragService, times(2)).upsert(eq(documentId), anyString(), anyMap());
+    }
+
+    @Test
+    void syncAsyncRunsInBackground() throws Exception {
+        write(notes, "a.md", "AAA");
+
+        SourceSyncService.Accepted accepted = service.syncAsync(false);
+
+        assertThat(accepted.accepted()).isTrue();
+        SourceSyncService.Status status = awaitLastRun(5);
+        assertThat(status.lastRun().indexed()).isEqualTo(1);
+        assertThat(status.lastTrigger()).isEqualTo("手动");
+    }
+
+    @Test
+    void watcherTriggersScanOnFileChanges() throws Exception {
+        properties.getSources().setScanOnStartup(false);
+        properties.getSources().setScanIntervalSeconds(0);
+        properties.getSources().setWatchEnabled(true);
+        properties.getSources().setWatchDebounceSeconds(1);
+        service.onApplicationReady();
+
+        write(notes, "a.md", "AAA");
+
+        SourceSyncService.Status status = awaitLastRun(10);
+        assertThat(status.lastRun().indexed()).isEqualTo(1);
+        assertThat(status.lastTrigger()).isEqualTo("文件变化");
+    }
+
+    private SourceSyncService.Status awaitLastRun(int seconds) throws InterruptedException {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(seconds);
+        while (System.nanoTime() < deadline) {
+            SourceSyncService.Status status = service.status();
+            if (status.lastRun() != null) {
+                return status;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("目录导入未在 " + seconds + " 秒内完成");
     }
 
     private Path write(Path root, String relative, String content) throws IOException {
