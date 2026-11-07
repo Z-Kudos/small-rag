@@ -4,6 +4,7 @@ import com.smallrag.ragmcp.rag.chunking.ChunkingStrategy;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -90,6 +91,11 @@ public class RagProperties {
      * 异步重建任务的看门狗参数。
      */
     private Reindex reindex = new Reindex();
+
+    /**
+     * 检索路径的熔断器参数（Embedding 与 Qdrant 查询共用）。
+     */
+    private QueryBreaker queryBreaker = new QueryBreaker();
 
     /**
      * 多目录 Markdown 源文件的自动导入。
@@ -288,6 +294,83 @@ public class RagProperties {
         public long effectiveRecoveryGraceSeconds(long qdrantTimeoutMs) {
             long floor = Math.max(1, (Math.max(0, qdrantTimeoutMs) * 2) / 1000);
             return Math.max(recoveryGraceSeconds, floor);
+        }
+    }
+
+    /**
+     * 检索路径熔断配置。
+     *
+     * <p>只保护 {@code rag_search} / {@code rag_query}：Embedding 或 Qdrant 连续失败时
+     * 快速失败，避免请求线程被慢调用占满；入库与重建不受影响，仍按原重试/续接策略处理。
+     */
+    @Data
+    public static class QueryBreaker {
+
+        /**
+         * 是否启用熔断；关闭后检索直接调用底层并在异常时由调用方处理。
+         */
+        private boolean enabled = true;
+
+        /**
+         * 滑动窗口大小（按调用次数）。
+         */
+        private int slidingWindowSize = 20;
+
+        /**
+         * 计算失败率前至少需要完成的调用次数。
+         */
+        private int minimumNumberOfCalls = 10;
+
+        /**
+         * 失败率阈值（百分比），达到即打开熔断。
+         */
+        private float failureRateThreshold = 50f;
+
+        /**
+         * 熔断打开后等待多久进入半开状态。
+         */
+        private Duration waitDurationInOpenState = Duration.ofSeconds(30);
+
+        /**
+         * 半开状态下允许的探测调用数。
+         */
+        private int permittedNumberOfCallsInHalfOpenState = 3;
+
+        /**
+         * 慢调用判定阈值；超过即按慢调用计入失败率。
+         */
+        private Duration slowCallDurationThreshold = Duration.ofSeconds(10);
+
+        /**
+         * 慢调用率阈值（百分比）；默认 100 表示窗口内全部为慢调用才打开。
+         */
+        private float slowCallRateThreshold = 100f;
+
+        /**
+         * 实际滑动窗口下限，至少 2 次调用。
+         *
+         * @return 滑动窗口大小
+         */
+        public int effectiveSlidingWindowSize() {
+            return Math.max(2, slidingWindowSize);
+        }
+
+        /**
+         * 实际最小调用数，不能超过滑动窗口。
+         *
+         * @return 最小调用数
+         */
+        public int effectiveMinimumNumberOfCalls() {
+            return Math.max(1, Math.min(minimumNumberOfCalls, effectiveSlidingWindowSize()));
+        }
+
+        /**
+         * 实际半开探测调用数，至少 1。
+         *
+         * @return 半开允许调用数
+         */
+        public int effectivePermittedCalls() {
+            return Math.max(1, permittedNumberOfCallsInHalfOpenState);
         }
     }
 

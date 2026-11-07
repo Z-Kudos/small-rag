@@ -128,7 +128,13 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 - 两个副本共享 `small_rag_data:/data` 作为归档卷；多主机部署需换成 NFS/CephFS 等 RWX 存储。
 - 应用通过 `SMALL_RAG_DISTRIBUTED_ENABLED=true` 启用 Redis 租约锁；重建任务、目录导入、启动自动重切共用一把跨副本锁，同一时刻只有一个副本写入。
 - 锁租约默认 30s、每 10s 续租；持有者失联后，其他副本在租约过期后接管。续租失败会立即停止本地写入（`IndexActivityGuard.isHeldBy=false`）。
-- 当前 P0 仍保留每副本的启动/定时扫描触发，由锁负责串行化；leader-only 扫描与 Consul/Gateway/熔断在 P1/P2/P3 完成。详见 [ROADMAP.md](ROADMAP.md)。
+- 当前 P0 仍保留每副本的启动/定时扫描触发，由锁负责串行化；leader-only 扫描与 Consul/Gateway 在 P1/P2/P3 完成。详见 [ROADMAP.md](ROADMAP.md)。
+
+### 熔断与健康检查
+
+- `rag_search` / `rag_query` 经过 Resilience4j 熔断：默认窗口 20 次、最少 10 次调用、失败率 50% 打开、30s 后进入半开。Embedding 或 Qdrant 持续失败时快速返回“知识库检索暂时不可用（熔断已打开）”，不再占用请求线程；入库与重建不受影响。
+- 可用 `RAG_QUERY_BREAKER_*` 环境变量调整，或 `RAG_QUERY_BREAKER_ENABLED=false` 关闭。
+- `GET /actuator/health` 返回实例 id、是否 distributed、活动索引锁、熔断状态与 active profiles，便于确认多副本中谁在写入。
 
 ## 配置
 

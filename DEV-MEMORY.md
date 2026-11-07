@@ -13,13 +13,14 @@
 
 - 保持 standalone 单容器默认运行不变；新增可选 `distributed` 模式：外部 Qdrant/Redis/Consul/Embedding + 多副本。
 - **P0 已完成**：`DistributedLock`（进程内 / Redis `SET NX PX` + Lua）、`IndexActivityGuard` 后台续租与丢失即停写、双运行模式（`SMALL_RAG_RUNTIME=all-in-one|app-only`）、`compose.distributed.yaml` + HAProxy gateway。
-- 待做：P1 Consul discovery/config + Resilience4j；P2 任务 owner/lease/fencing、leader-only 扫描；P3 可选 Gateway；P4 RAG 评测与 Testcontainers。
+- **P1 部分完成**：Resilience4j 检索熔断 + `/actuator/health` 诊断；Consul discovery/config 尚未接入。
+- 待做：P2 任务 owner/lease/fencing、leader-only 扫描；P3 可选 Gateway；P4 RAG 评测与 Testcontainers；P1 剩余 Consul。
 - 详细里程碑与验收见 `ROADMAP.md`。
 
 ## 项目状态（2026-11-07）
 
 - 版本：`0.0.2-SNAPSHOT`（pom.xml、application.yml MCP server version、README docker tag、ChunkingSignature 签名版本四处统一；签名版本与项目版本同步，但切分算法/存储布局变更需单独提升）。
-- 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；136 测试全绿。
+- 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；141 测试全绿（`IndexActivityGuardRedisIT` 默认不参与）。
 - Dockerfile 无 `# syntax=` 指令（国内网络拉不到 docker.io 的 frontend 镜像；所用特性内置 BuildKit 全支持）；compose/.env 镜像 tag 随项目版本走 `APP_IMAGE_TAG`。
 - 配置文件：`.env` 直接入库（由 .env.example 改名，仅模板值，.gitignore 已取消忽略；真实密钥禁止写入，.dockerignore 仍排除）。
 - 容器迁移端到端验证通过（2026-11-05）：镜像构建 24 分钟（含首次 Maven 依赖下载与 llama.cpp 编译）；三进程（qdrant/llama-server/app）全部就绪；容器内 llama.cpp 与宿主机 Ollama 同文本向量余弦 = 1.0000（pooling last 正确）；MCP 全链路 rag_ingest→rag_query→rag_search(expand=false)→rag_delete 冒烟通过。**教训：docker/*.sh 工作区曾出现 CRLF 导致 exec ENOENT，已加 .gitattributes 强制 LF**。
@@ -46,7 +47,7 @@
 - **调用超时与主动取消**：Embedding 用 OpenAI SDK/OkHttp 超时（`EmbeddingConfig`：`EMBEDDING_CONNECT_TIMEOUT_MS=10000`、`EMBEDDING_READ_TIMEOUT_MS=120000`，read 同时作为 write 与单次请求总超时；`spring.http.client.*` 不生效）；同一 customizer 注册 `CancellationScope.interceptor()`，通过 `ThreadLocal` 把任务线程的在途 `okhttp3.Call` 登记到作用域，撤销时 `Call.cancel()` 立即打断。Qdrant gRPC 默认 deadline 改为 `QDRANT_REQUEST_TIMEOUT_MS=30000`（`init-timeout-ms` 只用于启动探活）。
 - `RagService.reindexArchived(clearFirst, listener, skipDocumentIds)` 逐篇上报 `ReindexProgress`，并在 `onCleared()` / `onDocumentFinished()` 回调中落检查点；`rag_reindex`/`rag_rebuild` 同步入口保留（NOOP listener）。清空前校验归档非空，清空后**重读**归档列表以缩小漏重建窗口。`RagService.upsert(documentId, text, metadata)` 供目录导入使用：不存在则创建、存在则覆盖，metadata 为 null 时沿用已有元数据。
 - `rag_search` 可选 `expand`（默认 true，false 返回原始子块且不做 MMR）；`buildContext` 预算超限 continue 跳过；`maxChunkChars=1200` / `maxContextChars=12000` 按全宽字符当量计量。
-- 包结构：`rag/`（RagService、IndexActivityGuard、KnowledgeBaseProbe）+ `rag/reindex/`（ReindexTaskService、ReindexStateStore、ReindexStateBackend、QdrantReindexStateBackend、ReindexProgress、ReindexListener、ReindexRevokedException、CancellationScope、ChunkingReindexRunner）+ `rag/chunking/`（8 类）+ `rag/archive/`（DocumentArchive、ArchivedDocument、ArchivedDocumentSummary）+ `rag/sources/`（SourceSyncService、SourceStateStore）+ `distributed/`（DistributedLock、LockHandle、LocalDistributedLock、RedisDistributedLock）；payload 正文键 `RagService.CONTENT_FIELD="content"`（QdrantConfig 同步引用）。
+- 包结构：`rag/`（RagService、IndexActivityGuard、QueryCircuitBreaker、QueryUnavailableException、KnowledgeBaseProbe）+ `rag/reindex/`（ReindexTaskService、ReindexStateStore、ReindexStateBackend、QdrantReindexStateBackend、ReindexProgress、ReindexListener、ReindexRevokedException、CancellationScope、ChunkingReindexRunner）+ `rag/chunking/`（8 类）+ `rag/archive/`（DocumentArchive、ArchivedDocument、ArchivedDocumentSummary）+ `rag/sources/`（SourceSyncService、SourceStateStore）+ `distributed/`（DistributedLock、LockHandle、LocalDistributedLock、RedisDistributedLock）；payload 正文键 `RagService.CONTENT_FIELD="content"`（QdrantConfig 同步引用）。
 
 ## 目录导入（多目录 Markdown）
 
@@ -65,7 +66,14 @@
 - `IndexActivityGuard`：持锁期间后台每 `renew-interval` 续租；续租失败或异常 → `lockLost=true`、清空 owner、停止续租；`isHeldBy(label)` 返回 false 后重建任务（`Task.isWritable()`）、目录导入、启动重切立即停止写入。`@PreDestroy` 只停止续租，不主动释放租约，避免优雅停机时过早接管。
 - 容器：`SMALL_RAG_RUNTIME=all-in-one`（默认，supervisord 三进程）或 `app-only`（`docker/supervisord-app-only.conf` 只跑应用）；`docker/entrypoint.sh` 选择配置；`start-app.sh` 在 app-only 下跳过本地 Qdrant 等待。
 - Overlay：`compose.distributed.yaml` 引入外部 Qdrant/Redis/Embedding + HAProxy gateway（`docker/haproxy.cfg`，`server-template` 发现副本），应用端口用 `!reset []` 去掉；需 Compose v2.24+。`small_rag_data` 为多副本共享归档卷。
-- 已知边界：仍保留每副本的启动/定时扫描触发，由锁串行化；Consul/熔断/Gateway 与任务接管未接入。
+- 已知边界：仍保留每副本的启动/定时扫描触发，由锁串行化；Consul/Gateway 与任务接管未接入。
+- 集成验证：`IndexActivityGuardRedisIT` 默认跳过；本机 `redis-server --port 6390 --save '' --daemonize yes` 后 `mvn test -Dtest=IndexActivityGuardRedisIT -Dsmallrag.redis.it=true` 验证跨副本互斥、租约续期与持有者失联后的接管。
+
+## 检索熔断与健康检查
+
+- `QueryCircuitBreaker`（Resilience4j，`rag.query-breaker.*`）：只包住 `RagService.search`，即 `rag_search`/`rag_query`；默认窗口 20、最小调用 10、失败率 50%、打开 30s、半开 3 次。打开时抛 `QueryUnavailableException`，两个 MCP 工具返回可读提示；入库/重建不经过熔断。`RAG_QUERY_BREAKER_ENABLED=false` 可关闭。
+- `/actuator/health` 只暴露 health；`IndexLockHealthIndicator` 输出 `instanceId`、`distributed`、`profiles`、`activeLock`、`queryCircuit`、`queryFailureRate`。Redis 健康检查由 data-redis 自动提供。
+- 注意 Spring Boot 4 的 actuator 包名：`org.springframework.boot.health.contributor.Health/HealthIndicator`（不再是 `org.springframework.boot.actuate.health`）。
 
 ## 已知纰漏 / 风险
 

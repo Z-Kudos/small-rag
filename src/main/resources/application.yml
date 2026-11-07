@@ -1,6 +1,17 @@
 server:
   port: 18080
 
+# 只暴露健康检查；多副本排障时可看到实例 id、活动锁与熔断状态
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+
 spring:
   application:
     name: small-rag
@@ -73,6 +84,16 @@ rag:
     connect-timeout-ms: ${EMBEDDING_CONNECT_TIMEOUT_MS:10000}
     # 单次请求 read/write/总超时；本地 llama.cpp 大批量可能较慢
     read-timeout-ms: ${EMBEDDING_READ_TIMEOUT_MS:120000}
+  # 检索熔断（仅 rag_search / rag_query）：Embedding/Qdrant 连续失败时快速失败
+  query-breaker:
+    enabled: ${RAG_QUERY_BREAKER_ENABLED:true}
+    sliding-window-size: ${RAG_QUERY_BREAKER_WINDOW:20}
+    minimum-number-of-calls: ${RAG_QUERY_BREAKER_MIN_CALLS:10}
+    failure-rate-threshold: ${RAG_QUERY_BREAKER_FAILURE_RATE:50}
+    wait-duration-in-open-state: ${RAG_QUERY_BREAKER_OPEN_WAIT:30s}
+    permitted-number-of-calls-in-half-open-state: ${RAG_QUERY_BREAKER_HALF_OPEN_CALLS:3}
+    slow-call-duration-threshold: ${RAG_QUERY_BREAKER_SLOW_CALL:10s}
+    slow-call-rate-threshold: ${RAG_QUERY_BREAKER_SLOW_RATE:100}
   # 异步重建看门狗：停滞只告警，硬超时中断线程；0 表示关闭
   reindex:
     stall-timeout-seconds: ${REINDEX_STALL_TIMEOUT_SECONDS:1800}
