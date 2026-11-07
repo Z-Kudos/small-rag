@@ -47,6 +47,8 @@ MCP 端点：`http://localhost:18080/mcp`。
 
 镜像内同时运行应用、Qdrant、llama.cpp（llama-server Embedding 推理），由 `supervisord` 管理；**只对外暴露 `18080`**，其余服务绑定回环地址。数据统一在 `/data`（Qdrant 向量库与重建任务状态 + Embedding 模型 + 文档归档），建议挂载卷。
 
+> 默认 `SMALL_RAG_RUNTIME=all-in-one`。设为 `app-only` 时镜像只运行应用，Qdrant / Redis / Consul / Embedding 由外部提供（分布式模式，见下文）。
+
 ```bash
 # Docker
 docker compose up -d --build
@@ -60,8 +62,8 @@ podman compose up -d --build   # 或 podman-compose up -d --build
 单独构建/运行：
 
 ```bash
-docker build -t small-rag:0.0.1 .
-docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.1
+docker build -t small-rag:0.0.2 .
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.2
 ```
 
 国内镜像可通过 `.env` 覆盖 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE`，llama.cpp 源码版本用 `LLAMA_CPP_TAG`（默认 `v0.9.0`，镜像内从源码编译 llama-server，与运行时同基底无 glibc 兼容问题）。bind mount 时需保证容器内 UID `10001` 可写：`sudo chown -R 10001:10001 /path/to/data`。
@@ -78,7 +80,7 @@ docker run -d --name small-rag -p 18080:18080 \
   -v /host/wiki:/data/sources/wiki:ro \
   -e SMALL_RAG_SOURCES_ENABLED=true \
   -e SMALL_RAG_SOURCE_DIRS='notes=/data/sources/notes,wiki=/data/sources/wiki' \
-  small-rag:0.0.1
+  small-rag:0.0.2
 ```
 
 ```bash
@@ -88,7 +90,7 @@ docker run -d --name small-rag -p 18080:18080 \
   -v /host/knowledge:/data/sources:ro \
   -e SMALL_RAG_SOURCES_ENABLED=true \
   -e SMALL_RAG_SOURCE_DIRS='notes=/data/sources/notes,wiki=/data/sources/wiki' \
-  small-rag:0.0.1
+  small-rag:0.0.2
 ```
 
 Compose 用户可以直接使用可选的 `compose.sources.yaml`：
@@ -114,6 +116,52 @@ make up-sources
 
 - 换容器内模型：修改 `EMBEDDING_MODEL_URL`（GGUF 下载地址）与 `EMBEDDING_DIMENSION`，并换新的 `QDRANT_COLLECTION`；`EMBEDDING_MODEL` 只是 API 侧名称，llama-server 不校验。
 - 外部 Embedding：`SMALL_RAG_ENSURE_EMBEDDING_MODEL=false`，配置 `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`。
+
+## 分布式模式（可选，v0.0.2 开发中）
+
+默认仍是单容器 standalone。需要多副本时使用 overlay：Qdrant / Redis / Consul / Embedding 独立部署，应用以 `app-only` 模式运行，HAProxy gateway 统一暴露 18080。
+
+```bash
+docker compose -f compose.yaml -f compose.distributed.yaml build
+docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-rag=2
+# 或：make up-distributed
+```
+
+- 需要 Docker Compose v2.24+（overlay 使用 `!reset []` 去掉应用自身的端口映射）。
+- 两个副本共享 `small_rag_data:/data` 作为归档卷；多主机部署需换成 NFS/CephFS 等 RWX 存储。
+- 应用通过 `SMALL_RAG_DISTRIBUTED_ENABLED=true` 启用 Redis 租约锁；重建任务、目录导入、启动自动重切共用一把跨副本锁，同一时刻只有一个副本写入。
+- 锁租约默认 30s、每 10s 续租；持有者失联后，其他副本在租约过期后接管。续租失败会立即停止本地写入（`IndexActivityGuard.isHeldBy=false`）。
+- 目录自动扫描（启动/定时/watcher）只由 leader 执行：各副本竞争 `sources-leader` 租约，leader 失联后由其他副本接管；MCP 手动 `rag_sync_sources` 不受 leader 限制，仍由索引活动锁串行化。
+- `CONSUL_ENABLED=true` 时应用注册到 Consul（`small-rag` 服务，健康检查 `/actuator/health`），并可按需从 Consul KV 读取配置。overlay 内置单节点 Consul server（生产建议三节点）。
+- Consul 配置默认使用 `KEY_VALUE` 格式：每个配置项一个 key，例如
+  ```bash
+  consul kv put config/small-rag/logging.level.com.smallrag.ragmcp DEBUG
+  ```
+  启动时加 `SPRING_CONFIG_IMPORT=optional:consul:`；若要用单个 `data` key 存 YAML，需设置 `spring.cloud.consul.config.format=YAML`。
+- Gateway 目前用 HAProxy 提供，Spring Cloud Gateway 在 P3 评估。详见 [ROADMAP.md](ROADMAP.md)。
+
+### 从 standalone 迁移到 distributed
+
+1. 停止单容器实例，保留 `small_rag_data`（归档）与容器内 `/data/qdrant/storage`（向量数据）。
+2. 用 overlay 启动外部 Qdrant/Redis/Consul/Embedding；`small_rag_data` 直接复用，跨主机时换成 RWX 卷。
+3. 向量数据可复制到新的 `qdrant_data` 卷，或清空后重新 `rag_rebuild`/重新入库；复制时注意 Qdrant 版本一致。
+4. 设置 `SMALL_RAG_DISTRIBUTED_ENABLED=true`、`SMALL_RAG_RUNTIME=app-only`、共享 `SMALL_RAG_ARCHIVE_DIR`，按需打开 `CONSUL_ENABLED`。
+5. 通过 gateway 的 `/mcp` 验证；`/actuator/health` 确认只有一个副本 `sourcesLeader=true`，索引写入由 `activeLock` 指示。
+
+### 容量与故障处理
+
+- **Redis 故障**：索引活动锁与 leader 选举失败，重建/目录导入停止并返回可读错误；检索不受影响。恢复后自动重新竞选。
+- **Embedding 故障**：`rag_search`/`rag_query` 由熔断快速失败；入库/重建按超时失败并在下次重试，不会永久占用线程。
+- **Qdrant 故障**：检索有 gRPC deadline；重建任务可能标记 `stalled`，硬超时后撤销写权限，恢复后可 `rag_task_resume`。
+- **副本失联**：索引活动锁在租约（默认 30s）过期后由其他副本接管；目录扫描 leader 在下一轮选举接管。
+- **Consul 故障**：`CONSUL_CONFIG_FAIL_FAST=false` 允许继续启动；服务发现恢复后重新注册。
+- **归档卷**：必须共享且可写；建议 RWX 存储并纳入备份，否则多副本无法自动重切/续接。
+
+### 熔断与健康检查
+
+- `rag_search` / `rag_query` 经过 Resilience4j 熔断：默认窗口 20 次、最少 10 次调用、失败率 50% 打开、30s 后进入半开。Embedding 或 Qdrant 持续失败时快速返回“知识库检索暂时不可用（熔断已打开）”，不再占用请求线程；入库与重建不受影响。
+- 可用 `RAG_QUERY_BREAKER_*` 环境变量调整，或 `RAG_QUERY_BREAKER_ENABLED=false` 关闭。
+- `GET /actuator/health` 返回实例 id、是否 distributed、活动索引锁、目录扫描 leader、熔断状态与 active profiles，便于确认多副本中谁在写入。
 
 ## 配置
 
@@ -167,6 +215,19 @@ make up-sources
 | `QDRANT_COLLECTION` | `small_rag_text` | 集合名，启动时自动创建 |
 | `QDRANT_USE_TLS` | `false` | 是否启用 TLS |
 | `QDRANT_REQUEST_TIMEOUT_MS` | `30000` | 常规 Qdrant RPC（写入/删除/检索）deadline；与初始化超时分开 |
+| `SMALL_RAG_DISTRIBUTED_ENABLED` | `false` | 启用 distributed 模式（Redis 租约锁）；standalone 不连接 Redis |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | `localhost` / `6379` / 空 | Redis 连接（仅 distributed 使用） |
+| `SMALL_RAG_LOCK_LEASE` | `30s` | 索引活动锁租约 |
+| `SMALL_RAG_LOCK_RENEW_INTERVAL` | `10s` | 续租间隔，必须明显小于租约 |
+| `SMALL_RAG_LOCK_PREFIX` | `smallrag:lock:` | 锁 key 前缀 |
+| `CONSUL_ENABLED` | `false` | 启用 Consul 服务注册与配置（服务名 `small-rag`） |
+| `CONSUL_HOST` / `CONSUL_PORT` | `localhost` / `8500` | Consul agent 地址 |
+| `CONSUL_REGISTER` | `true` | 是否注册到 Consul |
+| `CONSUL_CONFIG_FAIL_FAST` | `false` | Consul 不可达时是否阻止启动 |
+| `SPRING_CONFIG_IMPORT` | 空 | 设为 `optional:consul:` 时从 Consul KV 读取配置 |
+| `RAG_QUERY_BREAKER_ENABLED` | `true` | `rag_search`/`rag_query` 熔断开关 |
+| `RAG_QUERY_BREAKER_FAILURE_RATE` | `50` | 打开熔断的失败率（%） |
+| `RAG_QUERY_BREAKER_OPEN_WAIT` | `30s` | 熔断打开后进入半开的等待时间 |
 | `SMALL_RAG_ENSURE_EMBEDDING_MODEL` | `true`（镜像内） | 启动时等待容器内 Embedding 服务就绪（模型由 `start-llama.sh` 下载） |
 | `EMBEDDING_MODEL_URL` | Qwen3-Embedding-0.6B Q8_0（ModelScope） | GGUF 模型下载地址 |
 | `EMBEDDING_MODEL_PATH` | `/data/models/qwen3-embedding-0.6b-q8_0.gguf` | GGUF 落盘路径（须在持久化卷内） |
@@ -378,7 +439,7 @@ docker compose -f compose.yaml -f compose.sources.yaml up -d --build
 - **MMR 多样性**：候选超出 topK 时按 `λ·score − (1−λ)·与已选结果的最大相似度` 迭代选取（`MMR_LAMBDA`，默认 0.7）；Parent-Child 复用父块存储向量，零额外 Embedding，其余策略对候选文本做一次批量 Embedding。
 - **空库短路**：检索前用 Qdrant `count` 判断，避免无意义 Embedding 调用。
 - **启动韧性**：Qdrant 不可用只告警（fail-soft）；集合维度不一致直接失败（fail-fast）。
-- **自动重切**：原文归档 + 切分配置签名（签名版本与项目版本同步，当前 `0.0.1`），启动时检测到变化自动删旧片段重建。
+- **自动重切**：原文归档 + 切分配置签名（签名版本与项目版本同步，当前 `0.0.2`），启动时检测到变化自动删旧片段重建。
 - **Markdown 结构**：标题分节，代码/表格/callout 受保护，frontmatter、heading_path、wikilink 写入元数据；超长表格/代码切片重复表头或围栏。
 - **中英对齐**：切分长度按全宽字符当量计量（CJK=1、拉丁=0.25），英文硬切回退单词边界，句界识别带缩写白名单；语义断点支持分位数模式。
 - **重切时机**：启动时同步执行，失败不阻断启动，下次启动继续重试。
@@ -416,7 +477,7 @@ docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord.co
 - **重启续接边界**：Qdrant 状态集合中的锁是单实例读后写，不是分布式 CAS；多副本部署不互斥。锁 point 丢失但任务快照仍在时，按单实例假设由最近一个未完成/未撤销任务重新持锁；多副本下可能误抢。
 - **启动顺序**：`ChunkingReindexRunner` 在 `ApplicationReadyEvent` 之前同步执行；若检测到有重启时中断、待续接的重建任务，则跳过自动重切并交给续接任务处理，避免重复重建。
 - **目录导入**：watcher 依赖平台 inotify/事件队列，超限或注册失败时会退化为启动/定时扫描；`rag_sync_sources` 已改为异步触发，用 `rag_sync_status` 轮询；root label 重复会拒绝扫描；label 变化会生成新文档 id，旧 label 需 `DELETE_ORPHAN_ROOTS=true` 才会清理；墓碑只在源文件内容不变时生效。
-- **切分签名**：签名版本与项目版本同步（当前 `0.0.1`）；只改切分算法而不升版本时，旧索引不会被自动重切，需要手动 `rag_rebuild`。
+- **切分签名**：签名版本与项目版本同步（当前 `0.0.2`）；只改切分算法而不升版本时，旧索引不会被自动重切，需要手动 `rag_rebuild`。
 - **导入状态**：最近一次扫描统计只在内存中，重启后 `rag_sync_status` 的 `lastRun` 为空；日志仍保留历史。
 
 ## 分支模型（Git Flow）
@@ -431,8 +492,12 @@ docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord.co
 
 - 不设 `stable` 长期分支；生产版本由 `main` 上的 tag 标识。
 - `develop` 版本号用 `X.Y.Z-SNAPSHOT`，`main` 上的 tag 为正式版本。
-- 生产镜像 tag 与 git tag 对齐（如 `small-rag:v0.0.1`），不要用 `latest` 上生产。
+- 生产镜像 tag 与 git tag 对齐（如 `small-rag:v0.0.2`），不要用 `latest` 上生产。
 - `main`/`develop` 应开启分支保护：只能通过 PR 合并，且 CI 必须通过。
+
+## v0.0.2 规划
+
+v0.0.2 在保持**单容器 standalone 默认运行**的前提下，增加可选的分布式多副本能力（外部 Qdrant / Redis / Consul / Embedding、分布式任务锁、Spring Cloud 服务治理），并补齐 RAG 评测与集成测试。详见 [ROADMAP.md](ROADMAP.md)。
 
 ## 测试
 
@@ -441,3 +506,6 @@ mvn test
 ```
 
 单测不依赖 Qdrant / 模型密钥；端到端需启动 Qdrant 并配置 Embedding 服务。
+
+- 离线评测：`RagPipelineEvaluationTest` 用确定性哈希向量 + `SimpleVectorStore` 跑通“入库 → 切分 → 检索 → 文档级指标”，回归 recall@k / MRR / nDCG 与 MMR；不依赖外部服务，指标不代表真实语义模型效果。
+- Redis 集成测试（默认跳过）：`mvn test -Dtest='*RedisIT' -Dsmallrag.redis.it=true`，需本机 Redis `localhost:6390`。

@@ -89,6 +89,7 @@ public class RagService {
 
     private final VectorStore vectorStore;
     private final RagProperties properties;
+    private final QueryCircuitBreaker queryBreaker;
     private final QdrantProperties qdrantProperties;
     private final KnowledgeBaseProbe knowledgeBaseProbe;
     private final ChunkingService chunkingService;
@@ -154,6 +155,11 @@ public class RagService {
             return List.of();
         }
 
+        // 只保护检索路径：Embedding/Qdrant 连续失败时快速失败，入库与重建不受影响
+        return queryBreaker.execute(() -> searchInternal(query, topK, expandParents));
+    }
+
+    private List<Document> searchInternal(String query, Integer topK, boolean expandParents) {
         boolean parentChild = chunkingService.strategy() == ChunkingStrategy.PARENT_CHILD;
         int requestedTopK = resolveTopK(topK);
         boolean expand = parentChild && expandParents;

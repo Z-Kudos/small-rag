@@ -95,6 +95,7 @@ public class SourceSyncService {
     private final RagProperties properties;
     private final SourceStateStore stateStore;
     private final IndexActivityGuard activity;
+    private final SourcesLeaderElection leaderElection;
     private final ScheduledExecutorService scheduler;
     private final Object runLock = new Object();
 
@@ -108,12 +109,14 @@ public class SourceSyncService {
     private volatile Thread watchThread;
 
     public SourceSyncService(RagService ragService, DocumentArchive documentArchive,
-            RagProperties properties, SourceStateStore stateStore, IndexActivityGuard activity) {
+            RagProperties properties, SourceStateStore stateStore, IndexActivityGuard activity,
+            SourcesLeaderElection leaderElection) {
         this.ragService = ragService;
         this.documentArchive = documentArchive;
         this.properties = properties;
         this.stateStore = stateStore;
         this.activity = activity;
+        this.leaderElection = leaderElection;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "rag-source-sync");
             thread.setDaemon(true);
@@ -156,7 +159,7 @@ public class SourceSyncService {
         }
         if (!activity.tryAcquire(ACTIVITY_LABEL)) {
             throw new IllegalStateException("其他索引任务正在执行，请稍后重试: "
-                    + activity.owner().orElse("unknown"));
+                    + activity.activeOwner().orElse("unknown"));
         }
 
         running = true;
@@ -261,13 +264,22 @@ public class SourceSyncService {
         }
         RagProperties.Sources sources = properties.getSources();
         if (sources.isScanOnStartup()) {
-            scheduleScan("启动");
+            if (leaderElection.isLeader()) {
+                scheduleScan("启动");
+            } else {
+                log.info("本实例不是目录扫描 leader，跳过启动扫描");
+            }
         }
         if (sources.getScanIntervalSeconds() > 0) {
             long interval = sources.getScanIntervalSeconds();
-            scheduler.scheduleWithFixedDelay(() -> scheduleScan("定时"),
-                    interval, interval, TimeUnit.SECONDS);
-            log.info("目录导入已启用: {} 个目录, 每 {} 秒扫描一次",
+            scheduler.scheduleWithFixedDelay(() -> {
+                if (leaderElection.isLeader()) {
+                    scheduleScan("定时");
+                } else {
+                    log.debug("本实例不是目录扫描 leader，跳过定时扫描");
+                }
+            }, interval, interval, TimeUnit.SECONDS);
+            log.info("目录导入已启用: {} 个目录, 每 {} 秒扫描一次（仅 leader 执行）",
                     sources.directoryList().size(), interval);
         }
         if (sources.isWatchEnabled()) {
@@ -357,6 +369,10 @@ public class SourceSyncService {
         int limit = force ? 0 : Math.max(0, sources.getMaxFilesPerScan());
 
         for (Candidate candidate : candidates) {
+            if (!activity.isHeldBy(ACTIVITY_LABEL)) {
+                // 分布式模式下租约可能已被其他副本接管；立即停止，避免双写
+                throw new IllegalStateException("索引活动锁已丢失，停止目录导入");
+            }
             if (limit > 0 && processed >= limit) {
                 truncated = true;
                 break;
@@ -800,6 +816,10 @@ public class SourceSyncService {
                     Thread.currentThread().interrupt();
                     return;
                 }
+            }
+            if (!leaderElection.isLeader()) {
+                log.debug("本实例不是目录扫描 leader，忽略文件变化触发");
+                continue;
             }
             scheduleScan("文件变化");
         }
