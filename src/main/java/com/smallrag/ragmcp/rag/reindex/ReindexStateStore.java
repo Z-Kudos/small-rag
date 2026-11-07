@@ -3,6 +3,7 @@ package com.smallrag.ragmcp.rag.reindex;
 import com.smallrag.ragmcp.config.QdrantProperties;
 import io.qdrant.client.QdrantClient;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
@@ -27,6 +28,7 @@ public class ReindexStateStore {
 
     private final ReindexStateBackend backend;
 
+    @Autowired
     public ReindexStateStore(ObjectMapper objectMapper, QdrantProperties qdrantProperties,
             QdrantClient qdrantClient) {
         this(new QdrantReindexStateBackend(objectMapper, qdrantProperties, qdrantClient));

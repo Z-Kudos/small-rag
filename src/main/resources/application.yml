@@ -11,6 +11,10 @@ management:
     health:
       show-details: always
       show-components: always
+  health:
+    # standalone 模式不连接 Redis；只有 distributed 开启时才纳入健康检查
+    redis:
+      enabled: ${SMALL_RAG_DISTRIBUTED_ENABLED:false}
 
 spring:
   application:

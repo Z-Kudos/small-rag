@@ -5,6 +5,7 @@ import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.function.Supplier;
@@ -32,6 +33,7 @@ public class QueryCircuitBreaker {
     /**
      * @param properties RAG 配置（读取 {@code rag.query-breaker.*}）
      */
+    @Autowired
     public QueryCircuitBreaker(RagProperties properties) {
         this(properties.getQueryBreaker());
     }
