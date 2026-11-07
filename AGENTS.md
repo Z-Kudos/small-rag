@@ -12,7 +12,7 @@
 | Spring AI | 2.0.2（Maven Central 稳定版） |
 
 - **解析现状（2026-11 验证）**：Boot/Cloud GA 未发布，实际组合 `4.2.0-RC1` + `2026.0.0-RC1`，依赖 `https://repo.spring.io/milestone`（pom 已配置）。**禁止降级到 Boot 3.x / Cloud 2025.x 来"修复"解析失败**。
-- 项目版本 `0.0.2`；`ChunkingSignature` 签名版本与项目版本同步（此前演进 v2→0.0.1）。
+- 项目版本 `0.0.1`；`ChunkingSignature` 签名版本与项目版本同步（演进 v2→…→v0.0.1）。
 
 ## 依赖与构建
 
@@ -60,7 +60,7 @@
   - gRPC 默认 deadline 用 `rag.qdrant.request-timeout-ms`（默认 30s）；`init-timeout-ms` 只用于启动期探活/初始化等待，不要复用为常规 RPC 超时。
   - 重建任务状态用**独立集合** `<collection>_reindex_state`（1 维 Dot 哑向量 + payload JSON），不要并入主集合：否则会污染 `count` 空库探活、相似度检索与 `rag_rebuild` 的 `chunk_type` 清理。
 - `McpSyncServerCustomizer` 是单例扩展点且已被 WebMVC 自动配置占用；**不要自定义 customizer**。instructions 等走 `spring.ai.mcp.server.*`。
-- `application.yml` 必须：`protocol=STREAMABLE`、`name=small-rag`、`version=0.0.2`。MCP 端点 `/mcp`。payload 正文字段名共用 `RagService.CONTENT_FIELD`（"content"），改字段名必须同步。
+- `application.yml` 必须：`protocol=STREAMABLE`、`name=small-rag`、`version=0.0.1`。MCP 端点 `/mcp`。payload 正文字段名共用 `RagService.CONTENT_FIELD`（"content"），改字段名必须同步。
 
 ## 代码约束
 
@@ -70,7 +70,8 @@
 
 ## Git 与文档
 
-- 主分支 `main`；`.gitignore` 覆盖 `target/`、`.idea/`、`*.iml`、`.vscode/`、`*.log`、`data/`。
+- **分支模型（Git Flow）**：长期分支 `main`（生产，随时可构建发布）与 `develop`（集成，功能合并目标）；短期分支 `feature/*`（从 `develop` 切出，squash 合回 `develop`）、`release/x.y.z`（从 `develop` 切出收敛发布，只修 bug，`--no-ff` 合入 `main` 并打 `vX.Y.Z` tag，再回灌 `develop`）、`hotfix/*`（从 `main` 或生产 tag 切出，修复合入 `main` 打补丁 tag 后回灌 `develop`）。禁止直接向 `main`/`develop` push；不设 `stable` 长期分支，生产版本由 `main` 上的 tag 标识。
+- `.gitignore` 覆盖 `target/`、`.idea/`、`*.iml`、`.vscode/`、`*.log`、`data/`。
 - 提交信息用 Conventional Commits。首次提交：`chore: bootstrap small-rag with JDK 25 + Spring Cloud 2026.0.0 + Spring AI 2.0.2`。
 - `README.md` 必须含：版本矩阵、启动命令、`/mcp` 端点说明、入库示例、RC/milestone 说明。
 - **开发记忆（强制）**：每次开发都必须同步更新项目根目录的 `DEV-MEMORY.md`（不存在则创建）——简要记录本次开发所做的更改。要求：尽可能精简且实时，只保留当前有效的状态（架构、接口、行为、关键决策），过时的记忆直接覆盖或删除，不做历史归档（历史归档交给 git log）。
