@@ -68,6 +68,8 @@
 
 ## 代码约束
 
+- 测试：默认 `mvn test` 不依赖外部服务；`*RedisIT` 需 `-Dsmallrag.redis.it=true` 且本机 Redis 6390；离线 RAG 评测在 `src/test/java/.../rag/eval/`（`EvalMetrics` + `RagPipelineEvaluationTest`）。
+
 - Lombok：DTO 用 `@Data`/`@Builder`/`@NoArgsConstructor`/`@AllArgsConstructor`，Service 用 `@RequiredArgsConstructor` 构造注入（禁 `@Autowired` 字段注入），日志 `@Slf4j`。
 - **Spring Boot 4 已迁移 Jackson 3**：import 一律 `tools.jackson.*`，`com.fasterxml.jackson.*` 编译失败。
 - 暂不开启 AOT/Native Image。

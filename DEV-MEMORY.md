@@ -15,13 +15,14 @@
 - **P0 已完成**：`DistributedLock`（进程内 / Redis `SET NX PX` + Lua）、`IndexActivityGuard` 后台续租与丢失即停写、双运行模式（`SMALL_RAG_RUNTIME=all-in-one|app-only`）、`compose.distributed.yaml` + HAProxy gateway。
 - **P1 已完成**：Resilience4j 检索熔断、`/actuator/health` 诊断、Consul discovery/config（默认关闭，`CONSUL_ENABLED` 打开）。
 - **P2 进行中**：目录自动扫描已 leader 化（`SourcesLeaderElection`），陈旧写入由活动锁续租失败兜底；任务 fencing token 与幂等清理待做。
-- 待做：P2 剩余任务 owner/lease/fencing；P3 可选 Gateway；P4 RAG 评测与 Testcontainers。
+- **P4 部分完成**：离线 RAG 管线评测（recall@k / MRR / nDCG，确定性哈希向量 + SimpleVectorStore）；真实语料评测与 Testcontainers 待做。
+- 待做：P2 剩余任务 owner/lease/fencing；P3 可选 Gateway；P4 真实语料评测 + Testcontainers。
 - 详细里程碑与验收见 `ROADMAP.md`。
 
 ## 项目状态（2026-11-07）
 
 - 版本：`0.0.2-SNAPSHOT`（pom.xml、application.yml MCP server version、README docker tag、ChunkingSignature 签名版本四处统一；签名版本与项目版本同步，但切分算法/存储布局变更需单独提升）。
-- 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；144 测试全绿（两个 `*RedisIT` 默认不参与）。
+- 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；151 测试全绿（`*RedisIT` 默认不参与）。
 - 启动冒烟（2026-11-07）：`java -jar` 无 Qdrant/Redis/Embedding 也能启动，`/actuator/health` UP、MCP `initialize` 正常；standalone 下 Redis health indicator 关闭（`management.health.redis.enabled` 跟随 distributed 开关），distributed=true 且 Redis 在线时 health 显示 redis UP。
 - Spring 多构造器 bean 必须给 Spring 用的构造器加 `@Autowired`（`IndexActivityGuard`、`QueryCircuitBreaker`、`ReindexStateStore`）；否则 Spring 7.1 RC 报 "No default constructor found"（`mvn test` 不覆盖上下文启动，只有 jar 冒烟能发现）。
 - Dockerfile 无 `# syntax=` 指令（国内网络拉不到 docker.io 的 frontend 镜像；所用特性内置 BuildKit 全支持）；compose/.env 镜像 tag 随项目版本走 `APP_IMAGE_TAG`。
@@ -74,6 +75,11 @@
 - Consul KV 默认 `KEY_VALUE` 格式：**每项一个 key**，如 `config/small-rag/logging.level.com.smallrag.ragmcp=DEBUG`；`config/small-rag/data` 只在 `format=YAML/PROPERTIES` 时使用。启动加 `SPRING_CONFIG_IMPORT=optional:consul:`；不设置 import 时靠 `import-check.enabled=false` 避免启动检查报错。
 - 已知边界：任务快照锁仍是单实例读后写、无 fencing token；真实写入互斥已由 Redis 活动锁保证。leader 仅约束自动扫描，手动同步仍可在任意副本发起。
 - 集成验证：`IndexActivityGuardRedisIT` 与 `SourcesLeaderElectionRedisIT` 默认跳过；本机 `redis-server --port 6390 --save '' --daemonize yes` 后 `mvn test -Dtest='*RedisIT' -Dsmallrag.redis.it=true` 验证跨副本互斥、租约续期、持有者失联后的接管。另用两个 jar 实例（18080/18082，lease=4s）验证只有一个 `sourcesLeader=true`，kill leader 后约 5s 由另一副本接管。Consul 已验证注册、健康检查 passing、停止后自动注销、KV 配置注入。
+
+## RAG 评测
+
+- 离线：`RagPipelineEvaluationTest`（`src/test/java/.../rag/eval/`）使用真实 `ChunkingService` + `SimpleVectorStore` + 确定性 token 哈希 `EmbeddingModel`，灌入 4 篇主题文档，按文档级 recall@k / MRR / nDCG@k 断言检索与 MMR 行为；不依赖 Qdrant/Embedding 服务，指标只用于回归，不代表真实语义效果。`EvalMetrics` 是独立可单测的指标实现。
+- 真实语料评测仍待接入：需要 Qdrant + OpenAI 兼容 Embedding，按相同指标跑标注语料。
 
 ## 检索熔断与健康检查
 

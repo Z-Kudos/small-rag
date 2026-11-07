@@ -486,3 +486,6 @@ mvn test
 ```
 
 单测不依赖 Qdrant / 模型密钥；端到端需启动 Qdrant 并配置 Embedding 服务。
+
+- 离线评测：`RagPipelineEvaluationTest` 用确定性哈希向量 + `SimpleVectorStore` 跑通“入库 → 切分 → 检索 → 文档级指标”，回归 recall@k / MRR / nDCG 与 MMR；不依赖外部服务，指标不代表真实语义模型效果。
+- Redis 集成测试（默认跳过）：`mvn test -Dtest='*RedisIT' -Dsmallrag.redis.it=true`，需本机 Redis `localhost:6390`。

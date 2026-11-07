@@ -49,10 +49,10 @@
 - standalone 模式不启用。
 
 ### P4 RAG 完善与测试
-- 建立小型标注语料（query → 期望 doc/chunk），评测 `recall@k`、`MRR`、`nDCG`。
-- Testcontainers Qdrant + 假 Embedding 服务的端到端测试（入库 → 检索 → 查询 → 重建）。
-- 真实语料回归 MMR `λ` 与 `SEMANTIC_BREAKPOINT_PERCENTILE`。
-- 文档：双模式部署、从 standalone 迁移到 distributed、容量与故障处理。
+- ✅ 离线评测骨架：`EvalMetrics`（recall@k / MRR / nDCG@k）+ `RagPipelineEvaluationTest`（真实切分 + SimpleVectorStore + 确定性哈希向量），不依赖外部服务。
+- ⬜ 真实标注语料评测：接入 Qdrant + OpenAI 兼容 Embedding，跑同一组指标并回归 MMR λ / `SEMANTIC_BREAKPOINT_PERCENTILE`。
+- ⬜ Testcontainers Qdrant + 假 Embedding 服务的端到端测试（入库 → 检索 → 查询 → 重建）。
+- ⬜ 文档：双模式部署、从 standalone 迁移到 distributed、容量与故障处理。
 
 ## 3. 非目标
 
