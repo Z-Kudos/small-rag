@@ -9,19 +9,20 @@
 - 不设 `stable` 长期分支；生产版本由 `main` 上的 tag 标识。
 - 禁止直接 push 到 `main`/`develop`；生产镜像 tag 与 git tag 对齐。
 
-## v0.0.2 目标（进行中）
+## v0.0.2（已发布）/ v0.0.3 目标（进行中）
 
-- 保持 standalone 单容器默认运行不变；新增可选 `distributed` 模式：外部 Qdrant/Redis/Consul/Embedding + 多副本。
-- **P0 已完成**：`DistributedLock`（进程内 / Redis `SET NX PX` + Lua）、`IndexActivityGuard` 后台续租与丢失即停写、双运行模式（`SMALL_RAG_RUNTIME=all-in-one|app-only`）、`compose.distributed.yaml` + HAProxy gateway。
+- **v0.0.2 已于 2026-11-07 发布（tag `v0.0.2`）**：双运行模式 + 分布式多副本 + 检索熔断 + Consul + 离线 RAG 评测；154 测试。
+- 保持 standalone 单容器默认运行不变；可选 `distributed` 模式：外部 Qdrant/Redis/Consul/Embedding + 多副本。
+- **P0 已完成**：`DistributedLock`（进程内 / Redis `SET NX PX` + Lua）、`IndexActivityGuard` 后台续租、远程 token 校验与丢失即停写、双运行模式（`SMALL_RAG_RUNTIME=all-in-one|app-only`）、`compose.distributed.yaml` + HAProxy gateway。
 - **P1 已完成**：Resilience4j 检索熔断、`/actuator/health` 诊断、Consul discovery/config（默认关闭，`CONSUL_ENABLED` 打开）。
-- **P2 进行中**：目录自动扫描已 leader 化（`SourcesLeaderElection`），陈旧写入由活动锁续租失败兜底；任务 fencing token 与幂等清理待做。
+- **P2 部分完成**：目录自动扫描已 leader 化（`SourcesLeaderElection`），写入前远程校验锁归属；任务 fencing token、跨副本任务状态、幂等清理待做。
 - **P4 部分完成**：离线 RAG 管线评测（recall@k / MRR / nDCG，确定性哈希向量 + SimpleVectorStore）；真实语料评测与 Testcontainers 待做。
-- 待做：P2 剩余任务 owner/lease/fencing；P3 可选 Gateway；P4 真实语料评测 + Testcontainers。
+- v0.0.3 待做：P2 剩余任务 owner/lease/fencing；P3 可选 Gateway；P4 真实语料评测 + Testcontainers。
 - 详细里程碑与验收见 `ROADMAP.md`。
 
 ## 项目状态（2026-11-07）
 
-- 版本：`0.0.2`（pom.xml、application.yml MCP server version、README docker tag、ChunkingSignature 签名版本四处统一；签名版本与项目版本同步，但切分算法/存储布局变更需单独提升）。
+- 版本：`0.0.3-SNAPSHOT`（pom.xml、application.yml MCP server version、README docker tag、ChunkingSignature 签名版本四处统一；签名版本与项目版本同步，但切分算法/存储布局变更需单独提升）。
 - 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；154 测试全绿（`*RedisIT` 默认不参与）。
 - 启动冒烟（2026-11-07）：`java -jar` 无 Qdrant/Redis/Embedding 也能启动，`/actuator/health` UP、MCP `initialize` 正常；standalone 下 Redis health indicator 关闭（`management.health.redis.enabled` 跟随 distributed 开关），distributed=true 且 Redis 在线时 health 显示 redis UP。
 - Spring 多构造器 bean 必须给 Spring 用的构造器加 `@Autowired`（`IndexActivityGuard`、`QueryCircuitBreaker`、`ReindexStateStore`）；否则 Spring 7.1 RC 报 "No default constructor found"（`mvn test` 不覆盖上下文启动，只有 jar 冒烟能发现）。

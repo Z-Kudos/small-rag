@@ -80,7 +80,7 @@ services:
       start_period: 10s
 
   embedding:
-    image: small-rag:${APP_IMAGE_TAG:-0.0.2}
+    image: small-rag:${APP_IMAGE_TAG:-0.0.3}
     restart: unless-stopped
     entrypoint: ["/app/start-llama.sh"]
     user: app
