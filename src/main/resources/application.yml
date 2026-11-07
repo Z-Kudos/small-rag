@@ -34,6 +34,8 @@ spring:
       discovery:
         enabled: ${CONSUL_ENABLED:false}
         register: ${CONSUL_REGISTER:true}
+        # 多副本必须唯一：容器 hostname 唯一；同一主机两个 JVM 用端口区分
+        instance-id: ${CONSUL_INSTANCE_ID:${spring.application.name}-${HOSTNAME:unknown}-${server.port}}
         prefer-ip-address: true
         health-check-path: /actuator/health
         health-check-interval: 15s
