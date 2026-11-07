@@ -21,7 +21,7 @@
 
 ## 项目状态（2026-11-07）
 
-- 版本：`0.0.2-SNAPSHOT`（pom.xml、application.yml MCP server version、README docker tag、ChunkingSignature 签名版本四处统一；签名版本与项目版本同步，但切分算法/存储布局变更需单独提升）。
+- 版本：`0.0.2`（pom.xml、application.yml MCP server version、README docker tag、ChunkingSignature 签名版本四处统一；签名版本与项目版本同步，但切分算法/存储布局变更需单独提升）。
 - 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；154 测试全绿（`*RedisIT` 默认不参与）。
 - 启动冒烟（2026-11-07）：`java -jar` 无 Qdrant/Redis/Embedding 也能启动，`/actuator/health` UP、MCP `initialize` 正常；standalone 下 Redis health indicator 关闭（`management.health.redis.enabled` 跟随 distributed 开关），distributed=true 且 Redis 在线时 health 显示 redis UP。
 - Spring 多构造器 bean 必须给 Spring 用的构造器加 `@Autowired`（`IndexActivityGuard`、`QueryCircuitBreaker`、`ReindexStateStore`）；否则 Spring 7.1 RC 报 "No default constructor found"（`mvn test` 不覆盖上下文启动，只有 jar 冒烟能发现）。
