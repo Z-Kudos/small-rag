@@ -30,9 +30,9 @@
 - 多阶段构建：`maven:3.9-eclipse-temurin-25` 构建 → 以 `qdrant/qdrant`（debian:13-slim）为基底**从源码编译 llama-server**（`LLAMA_CPP_TAG`，默认 `v0.9.0`；编译基底=运行基底，无 glibc 兼容问题；源码包走 gh-proxy 加速）→ 拷入 Temurin JRE；基础镜像可用 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE` 替换。**不用 Ollama 镜像**（3.25GB，国内拉取过慢）。
 - 默认向量模型 Qwen3-Embedding-0.6B Q8_0（1024 维），`start-llama.sh` 首次启动从 ModelScope 下载 GGUF（`EMBEDDING_MODEL_URL`→`EMBEDDING_MODEL_PATH`，断点续传）并以 `--embeddings --pooling last` 启动 llama-server（**Qwen3-Embedding 必须 last pooling**）；`start-app.sh` 等待其 `/health` 就绪。
 - 启动脚本：`docker/start-qdrant.sh`、`start-llama.sh`、`start-app.sh`，由 `docker/supervisord.conf` 调度；数据统一 `/data`。
-- 目录导入的源目录建议只读 bind mount 到 `/data/sources/...`（示例如 `compose.yaml`），必须对容器内 UID `10001` 可读；增量状态默认写 `<archive-dir>/.sources/state.json`，随归档卷持久化。
+- 目录导入的源目录用只读 bind mount 挂到 `/data/sources/...`：Compose 用可选 `compose.sources.yaml`（`make up-sources`，宿主机路径由 `.env` 的 `SMALL_RAG_SOURCE_HOST` 控制），或用 `docker run -v /host/notes:/data/sources/notes:ro -e SMALL_RAG_SOURCES_ENABLED=true -e SMALL_RAG_SOURCE_DIRS='notes=/data/sources/notes'`；`SMALL_RAG_SOURCE_DIRS` 必须是容器内路径。源目录必须对容器内 UID `10001` 可读；增量状态默认写 `<archive-dir>/.sources/state.json`，随归档卷持久化。
 - 端口与默认值在 `Dockerfile`、`compose.yaml`、`.env`、`README.md` 间保持一致；`.env` 已入库（仅模板值），**真实密钥不要写入 `.env`**（改用部署环境注入），`.dockerignore` 仍排除它以防进入镜像。
-- Podman：`podman compose up -d --build` 或 `podman-compose up -d --build`，同一份 `compose.yaml`。
+- Podman：`podman compose up -d --build` 或 `podman-compose up -d --build`，同一份 `compose.yaml`；带目录挂载用 `podman compose -f compose.yaml -f compose.sources.yaml up -d --build`。
 
 ## 架构分层
 

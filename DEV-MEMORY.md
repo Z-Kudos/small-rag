@@ -42,7 +42,7 @@
 - 状态：`SourceStateStore` 原子写 JSON（`files` + `ignored` 墓碑）；丢失/损坏时从归档 `source_key`/`source_root`/`source_root_path`/`source_file`/`source_size`/`source_mtime`/`source_sha256` 元数据重建。旧状态 `root` 为绝对路径时自动迁移为 `rootPath + label`。状态文件放在 `.sources/` 子目录，避免被归档扫描当成原文。
 - 删除：`delete-missing=true` 时只删除“当前仍配置且本轮成功扫描（无访问失败）”的根目录下已消失文件；根目录暂时不可读不会误删。`delete-orphan-roots=true` 时按 label 删除已从配置移除的根目录下文档（默认关闭）。`rag_delete` 会移除状态并写墓碑（记录删除时的 SHA-256），源文件内容不变时不再重新导入；内容变化后墓碑失效并重新导入。
 - 互斥：`IndexActivityGuard`（`reindex:<taskId>` / `sources`）串行化重建与导入；重建运行中定时/watcher 扫描跳过、手动同步报 busy；导入运行中提交重建报“目录导入正在执行”。`interrupted` 重建任务继续持锁，也会阻止导入，直到 resume/cancel。
-- 容器：源目录只读挂载到 `/data/sources/...`，需 UID 10001 可读；`compose.yaml`/`.env` 有示例。
+- 容器：源目录只读挂载到 `/data/sources/...`，需 UID 10001 可读；`compose.sources.yaml` + `.env` 的 `SMALL_RAG_SOURCE_HOST`（`make up-sources`）提供单根挂载，分散目录用多条 `docker run -v`；`SMALL_RAG_SOURCE_DIRS` 是容器内路径。
 
 ## 已知纰漏 / 风险
 

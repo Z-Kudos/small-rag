@@ -3,7 +3,7 @@
 COMPOSE ?= docker compose
 SERVICE ?= small-rag
 
-.PHONY: build up down logs ps pull-model
+.PHONY: build up up-sources down logs ps pull-model
 
 # GGUF 模型下载（与容器启动时 start-llama.sh 的逻辑一致，支持断点续传）
 MODEL_URL ?= https://modelscope.cn/models/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/master/Qwen3-Embedding-0.6B-Q8_0.gguf
@@ -13,6 +13,10 @@ build:
 
 up:
 	$(COMPOSE) up -d --build
+
+# 带宿主机 Markdown 目录挂载（compose.sources.yaml）
+up-sources:
+	$(COMPOSE) -f compose.yaml -f compose.sources.yaml up -d --build
 
 down:
 	$(COMPOSE) down

@@ -70,12 +70,12 @@ services:
     volumes:
       # Qdrant 数据 + Embedding 模型 + 文档归档
       - small_rag_data:/data
-      # 多目录 Markdown 导入示例（宿主目录需对容器 UID 10001 可读）：
-      # - /path/to/notes:/data/sources/notes:ro
-      # - /path/to/wiki:/data/sources/wiki:ro
-      # 并在 .env 设置：
-      # SMALL_RAG_SOURCES_ENABLED=true
-      # SMALL_RAG_SOURCE_DIRS=/data/sources/notes,/data/sources/wiki
+      # 需要导入宿主机 Markdown 目录时，用可选 override 启动：
+      #   docker compose -f compose.yaml -f compose.sources.yaml up -d --build
+      # 或在 .env 设置 SMALL_RAG_SOURCE_HOST 后执行 make up-sources。
+      # 分散的多目录可直接加 -v：
+      # - /host/notes:/data/sources/notes:ro
+      # - /host/wiki:/data/sources/wiki:ro
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/18080'"]
       interval: 30s

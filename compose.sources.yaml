@@ -1,0 +1,21 @@
+# 可选覆盖文件：把宿主机 Markdown 目录挂载到容器并启用目录导入。
+#
+# 用法：
+#   docker compose -f compose.yaml -f compose.sources.yaml up -d --build
+#   podman compose -f compose.yaml -f compose.sources.yaml up -d --build
+#
+# 默认把宿主机 ./sources 挂到容器 /data/sources，并导入其中的 notes/、wiki/ 两个子目录。
+# 也可以直接在 .env 里设置：
+#   SMALL_RAG_SOURCE_HOST=/absolute/path/to/markdown
+#   SMALL_RAG_SOURCE_DIRS=notes=/data/sources/notes,wiki=/data/sources/wiki
+#
+# 如果宿主机目录是分散的，删除下面的单根挂载，改成多条 -v 形式的 volumes：
+#   - /host/notes:/data/sources/notes:ro
+#   - /host/wiki:/data/sources/wiki:ro
+services:
+  small-rag:
+    volumes:
+      - ${SMALL_RAG_SOURCE_HOST:-./sources}:/data/sources:ro
+    environment:
+      SMALL_RAG_SOURCES_ENABLED: "true"
+      SMALL_RAG_SOURCE_DIRS: ${SMALL_RAG_SOURCE_DIRS:-notes=/data/sources/notes,wiki=/data/sources/wiki}

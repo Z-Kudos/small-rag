@@ -66,6 +66,50 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 
 国内镜像可通过 `.env` 覆盖 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE`，llama.cpp 源码版本用 `LLAMA_CPP_TAG`（默认 `v0.9.0`，镜像内从源码编译 llama-server，与运行时同基底无 glibc 兼容问题）。bind mount 时需保证容器内 UID `10001` 可写：`sudo chown -R 10001:10001 /path/to/data`。
 
+### 挂载宿主机 Markdown 目录
+
+目录导入的 `SMALL_RAG_SOURCE_DIRS` 使用的是**容器内路径**，所以宿主机目录必须先通过 `-v` / Compose `volumes` 挂进容器。推荐挂到 `/data/sources/...`：
+
+```bash
+# 分散的多个宿主机目录：一条 -v 对应一个目录（只读挂载）
+docker run -d --name small-rag -p 18080:18080 \
+  -v small_rag_data:/data \
+  -v /host/notes:/data/sources/notes:ro \
+  -v /host/wiki:/data/sources/wiki:ro \
+  -e SMALL_RAG_SOURCES_ENABLED=true \
+  -e SMALL_RAG_SOURCE_DIRS='notes=/data/sources/notes,wiki=/data/sources/wiki' \
+  small-rag:0.0.2
+```
+
+```bash
+# 或者只挂一个宿主机根目录，导入其下的多个子目录
+docker run -d --name small-rag -p 18080:18080 \
+  -v small_rag_data:/data \
+  -v /host/knowledge:/data/sources:ro \
+  -e SMALL_RAG_SOURCES_ENABLED=true \
+  -e SMALL_RAG_SOURCE_DIRS='notes=/data/sources/notes,wiki=/data/sources/wiki' \
+  small-rag:0.0.2
+```
+
+Compose 用户可以直接使用可选的 `compose.sources.yaml`：
+
+```bash
+# 默认把 .env 的 SMALL_RAG_SOURCE_HOST（默认 ./sources）挂到 /data/sources
+SMALL_RAG_SOURCE_HOST=/host/knowledge \
+  docker compose -f compose.yaml -f compose.sources.yaml up -d --build
+
+# 或先写入 .env，再执行
+make up-sources
+```
+
+`compose.sources.yaml` 默认启用 `SMALL_RAG_SOURCES_ENABLED=true`，并导入 `/data/sources/notes`、`/data/sources/wiki`。目录不在这两个子目录下时，修改 `.env` 的 `SMALL_RAG_SOURCE_DIRS`（使用 `label=容器内路径` 形式），或编辑 `compose.sources.yaml`。
+
+注意：
+
+- 宿主机目录必须对容器内 UID `10001` 可读；只读挂载用 `:ro` 即可，应用只读取源文件。权限不足时可用 `sudo chmod -R a+rX /host/notes` 或 `sudo chown -R 10001:10001 /host/notes`。
+- `SMALL_RAG_SOURCE_DIRS` 不是宿主机路径，而是容器内路径；宿主机路径只出现在 `-v`/`volumes` 左侧。
+- label 用于稳定文档 id：目录移动时保持 label 不变即可续用原文档；label 重复会拒绝扫描。
+
 ### 换模型 / 外部 Embedding
 
 - 换容器内模型：修改 `EMBEDDING_MODEL_URL`（GGUF 下载地址）与 `EMBEDDING_DIMENSION`，并换新的 `QDRANT_COLLECTION`；`EMBEDDING_MODEL` 只是 API 侧名称，llama-server 不校验。
@@ -102,7 +146,8 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 | `CHUNK_AUTO_RECHUNK` | `true` | 启动时检测切分配置变化并自动重切已归档文档 |
 | `SMALL_RAG_ARCHIVE_DIR` | `./data/documents`（镜像内 `/data/documents`） | 原文归档目录，自动重切的数据来源 |
 | `SMALL_RAG_SOURCES_ENABLED` | `false` | 是否启用多目录 Markdown 自动导入 |
-| `SMALL_RAG_SOURCE_DIRS` | 空 | 逗号分隔的源目录，支持 `label=/path`；label 默认取目录名，是文档 id 的稳定命名空间 |
+| `SMALL_RAG_SOURCE_DIRS` | 空 | 逗号分隔的容器内源目录，支持 `label=/path`；label 默认取目录名，是文档 id 的稳定命名空间 |
+| `SMALL_RAG_SOURCE_HOST` | `./sources` | 仅 `compose.sources.yaml` 使用：挂载到容器 `/data/sources` 的宿主机目录 |
 | `SMALL_RAG_SOURCE_EXTENSIONS` | `.md,.markdown` | 参与导入的扩展名（大小写不敏感） |
 | `SMALL_RAG_SOURCE_EXCLUDE` | `**/node_modules/**,**/target/**,**/build/**` | 相对源目录的排除 glob |
 | `SMALL_RAG_SOURCES_SKIP_HIDDEN` | `true` | 跳过 `.` 开头的目录/文件（`.git`、`.obsidian` 等） |
@@ -286,6 +331,14 @@ services:
     environment:
       SMALL_RAG_SOURCES_ENABLED: "true"
       SMALL_RAG_SOURCE_DIRS: notes=/data/sources/notes,wiki=/data/sources/wiki
+```
+
+也可以直接用仓库提供的可选 override（把 `.env` 的 `SMALL_RAG_SOURCE_HOST` 挂到 `/data/sources`）：
+
+```bash
+make up-sources
+# 等价于：
+docker compose -f compose.yaml -f compose.sources.yaml up -d --build
 ```
 
 **触发方式**
