@@ -9,6 +9,14 @@
 - 不设 `stable` 长期分支；生产版本由 `main` 上的 tag 标识。
 - 禁止直接 push 到 `main`/`develop`；生产镜像 tag 与 git tag 对齐。
 
+## v0.0.2 目标（进行中）
+
+- 保持 standalone 单容器默认运行不变；新增可选 `distributed` 模式：外部 Qdrant/Redis/Consul/Embedding + 多副本。
+- 分布式锁（Redis SET NX PX + Lua）、任务 owner/lease/fencing、目录导入与启动重切 leader 化。
+- Spring Cloud：Consul discovery/config、Resilience4j 熔断；Gateway 可选。
+- RAG：标注语料评测（recall@k / MRR / nDCG）、Testcontainers 端到端测试、MMR 与断点分位数回归。
+- 详细里程碑与验收见 `ROADMAP.md`。
+
 ## 项目状态（2026-11-07）
 
 - 版本：`0.0.2-SNAPSHOT`（pom.xml、application.yml MCP server version、README docker tag、ChunkingSignature 签名版本四处统一；签名版本与项目版本同步，但切分算法/存储布局变更需单独提升）。

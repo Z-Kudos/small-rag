@@ -434,6 +434,10 @@ docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord.co
 - 生产镜像 tag 与 git tag 对齐（如 `small-rag:v0.0.2`），不要用 `latest` 上生产。
 - `main`/`develop` 应开启分支保护：只能通过 PR 合并，且 CI 必须通过。
 
+## v0.0.2 规划
+
+v0.0.2 在保持**单容器 standalone 默认运行**的前提下，增加可选的分布式多副本能力（外部 Qdrant / Redis / Consul / Embedding、分布式任务锁、Spring Cloud 服务治理），并补齐 RAG 评测与集成测试。详见 [ROADMAP.md](ROADMAP.md)。
+
 ## 测试
 
 ```bash
