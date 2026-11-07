@@ -18,7 +18,7 @@ spring:
     mcp:
       server:
         name: small-rag
-        version: 0.0.2
+        version: 0.0.1
         protocol: STREAMABLE
         instructions: |
           基于纯文本知识库的 RAG 检索服务（不调用生成模型）。

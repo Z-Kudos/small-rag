@@ -60,8 +60,8 @@ podman compose up -d --build   # 或 podman-compose up -d --build
 单独构建/运行：
 
 ```bash
-docker build -t small-rag:0.0.2 .
-docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.2
+docker build -t small-rag:0.0.1 .
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.1
 ```
 
 国内镜像可通过 `.env` 覆盖 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE`，llama.cpp 源码版本用 `LLAMA_CPP_TAG`（默认 `v0.9.0`，镜像内从源码编译 llama-server，与运行时同基底无 glibc 兼容问题）。bind mount 时需保证容器内 UID `10001` 可写：`sudo chown -R 10001:10001 /path/to/data`。
@@ -78,7 +78,7 @@ docker run -d --name small-rag -p 18080:18080 \
   -v /host/wiki:/data/sources/wiki:ro \
   -e SMALL_RAG_SOURCES_ENABLED=true \
   -e SMALL_RAG_SOURCE_DIRS='notes=/data/sources/notes,wiki=/data/sources/wiki' \
-  small-rag:0.0.2
+  small-rag:0.0.1
 ```
 
 ```bash
@@ -88,7 +88,7 @@ docker run -d --name small-rag -p 18080:18080 \
   -v /host/knowledge:/data/sources:ro \
   -e SMALL_RAG_SOURCES_ENABLED=true \
   -e SMALL_RAG_SOURCE_DIRS='notes=/data/sources/notes,wiki=/data/sources/wiki' \
-  small-rag:0.0.2
+  small-rag:0.0.1
 ```
 
 Compose 用户可以直接使用可选的 `compose.sources.yaml`：
@@ -378,7 +378,7 @@ docker compose -f compose.yaml -f compose.sources.yaml up -d --build
 - **MMR 多样性**：候选超出 topK 时按 `λ·score − (1−λ)·与已选结果的最大相似度` 迭代选取（`MMR_LAMBDA`，默认 0.7）；Parent-Child 复用父块存储向量，零额外 Embedding，其余策略对候选文本做一次批量 Embedding。
 - **空库短路**：检索前用 Qdrant `count` 判断，避免无意义 Embedding 调用。
 - **启动韧性**：Qdrant 不可用只告警（fail-soft）；集合维度不一致直接失败（fail-fast）。
-- **自动重切**：原文归档 + 切分配置签名（签名版本与项目版本同步，当前 `0.0.2`），启动时检测到变化自动删旧片段重建。
+- **自动重切**：原文归档 + 切分配置签名（签名版本与项目版本同步，当前 `0.0.1`），启动时检测到变化自动删旧片段重建。
 - **Markdown 结构**：标题分节，代码/表格/callout 受保护，frontmatter、heading_path、wikilink 写入元数据；超长表格/代码切片重复表头或围栏。
 - **中英对齐**：切分长度按全宽字符当量计量（CJK=1、拉丁=0.25），英文硬切回退单词边界，句界识别带缩写白名单；语义断点支持分位数模式。
 - **重切时机**：启动时同步执行，失败不阻断启动，下次启动继续重试。
@@ -416,7 +416,7 @@ docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord.co
 - **重启续接边界**：Qdrant 状态集合中的锁是单实例读后写，不是分布式 CAS；多副本部署不互斥。锁 point 丢失但任务快照仍在时，按单实例假设由最近一个未完成/未撤销任务重新持锁；多副本下可能误抢。
 - **启动顺序**：`ChunkingReindexRunner` 在 `ApplicationReadyEvent` 之前同步执行；若检测到有重启时中断、待续接的重建任务，则跳过自动重切并交给续接任务处理，避免重复重建。
 - **目录导入**：watcher 依赖平台 inotify/事件队列，超限或注册失败时会退化为启动/定时扫描；`rag_sync_sources` 已改为异步触发，用 `rag_sync_status` 轮询；root label 重复会拒绝扫描；label 变化会生成新文档 id，旧 label 需 `DELETE_ORPHAN_ROOTS=true` 才会清理；墓碑只在源文件内容不变时生效。
-- **切分签名**：签名版本与项目版本同步（当前 `0.0.2`）；只改切分算法而不升版本时，旧索引不会被自动重切，需要手动 `rag_rebuild`。
+- **切分签名**：签名版本与项目版本同步（当前 `0.0.1`）；只改切分算法而不升版本时，旧索引不会被自动重切，需要手动 `rag_rebuild`。
 - **导入状态**：最近一次扫描统计只在内存中，重启后 `rag_sync_status` 的 `lastRun` 为空；日志仍保留历史。
 
 ## 分支模型（Git Flow）
@@ -431,7 +431,7 @@ docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord.co
 
 - 不设 `stable` 长期分支；生产版本由 `main` 上的 tag 标识。
 - `develop` 版本号用 `X.Y.Z-SNAPSHOT`，`main` 上的 tag 为正式版本。
-- 生产镜像 tag 与 git tag 对齐（如 `small-rag:v0.0.2`），不要用 `latest` 上生产。
+- 生产镜像 tag 与 git tag 对齐（如 `small-rag:v0.0.1`），不要用 `latest` 上生产。
 - `main`/`develop` 应开启分支保护：只能通过 PR 合并，且 CI 必须通过。
 
 ## 测试
