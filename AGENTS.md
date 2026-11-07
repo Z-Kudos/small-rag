@@ -12,7 +12,7 @@
 | Spring AI | 2.0.2（Maven Central 稳定版） |
 
 - **解析现状（2026-11 验证）**：Boot/Cloud GA 未发布，实际组合 `4.2.0-RC1` + `2026.0.0-RC1`，依赖 `https://repo.spring.io/milestone`（pom 已配置）。**禁止降级到 Boot 3.x / Cloud 2025.x 来"修复"解析失败**。
-- 项目版本 `0.0.1`；`ChunkingSignature` 签名版本与项目版本同步（演进 v2→…→v0.0.1）。
+- 项目版本 `0.0.2-SNAPSHOT`；`ChunkingSignature` 签名版本与项目版本同步（演进 v2→…→v0.0.2）。
 
 ## 依赖与构建
 
@@ -60,7 +60,7 @@
   - gRPC 默认 deadline 用 `rag.qdrant.request-timeout-ms`（默认 30s）；`init-timeout-ms` 只用于启动期探活/初始化等待，不要复用为常规 RPC 超时。
   - 重建任务状态用**独立集合** `<collection>_reindex_state`（1 维 Dot 哑向量 + payload JSON），不要并入主集合：否则会污染 `count` 空库探活、相似度检索与 `rag_rebuild` 的 `chunk_type` 清理。
 - `McpSyncServerCustomizer` 是单例扩展点且已被 WebMVC 自动配置占用；**不要自定义 customizer**。instructions 等走 `spring.ai.mcp.server.*`。
-- `application.yml` 必须：`protocol=STREAMABLE`、`name=small-rag`、`version=0.0.1`。MCP 端点 `/mcp`。payload 正文字段名共用 `RagService.CONTENT_FIELD`（"content"），改字段名必须同步。
+- `application.yml` 必须：`protocol=STREAMABLE`、`name=small-rag`、`version=0.0.2-SNAPSHOT`。MCP 端点 `/mcp`。payload 正文字段名共用 `RagService.CONTENT_FIELD`（"content"），改字段名必须同步。
 
 ## 代码约束
 
