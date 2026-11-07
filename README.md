@@ -47,6 +47,8 @@ MCP 端点：`http://localhost:18080/mcp`。
 
 镜像内同时运行应用、Qdrant、llama.cpp（llama-server Embedding 推理），由 `supervisord` 管理；**只对外暴露 `18080`**，其余服务绑定回环地址。数据统一在 `/data`（Qdrant 向量库与重建任务状态 + Embedding 模型 + 文档归档），建议挂载卷。
 
+> 默认 `SMALL_RAG_RUNTIME=all-in-one`。设为 `app-only` 时镜像只运行应用，Qdrant / Redis / Consul / Embedding 由外部提供（分布式模式，见下文）。
+
 ```bash
 # Docker
 docker compose up -d --build
