@@ -1,4 +1,4 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.reindex;
 
 import okhttp3.Call;
 import okhttp3.Interceptor;

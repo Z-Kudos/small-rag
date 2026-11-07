@@ -1,4 +1,7 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.reindex;
+
+import com.smallrag.ragmcp.rag.IndexActivityGuard;
+import com.smallrag.ragmcp.rag.RagService;
 
 import com.smallrag.ragmcp.config.QdrantProperties;
 import com.smallrag.ragmcp.config.RagProperties;

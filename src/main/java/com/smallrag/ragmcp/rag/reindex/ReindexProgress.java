@@ -1,4 +1,6 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.reindex;
+
+import com.smallrag.ragmcp.rag.RagService;
 
 /**
  * 重建任务的一次进度事件。

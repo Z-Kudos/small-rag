@@ -1,4 +1,4 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.reindex;
 
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.Call;

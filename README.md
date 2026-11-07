@@ -391,12 +391,14 @@ docker compose -f compose.yaml -f compose.sources.yaml up -d --build
 
 ```
 mcp/            RagMcpTools：rag_* 共 13 个工具（入库/检索/重建/任务查询/目录导入）
-rag/            RagService（入库/检索/上下文/更新删除重建）、ReindexTaskService（异步重建/看门狗/撤销与宽限期）、
-                IndexActivityGuard（重建与目录导入互斥）、
-                ReindexStateStore（任务快照与锁的门面）、QdrantReindexStateBackend（Qdrant 状态集合）、
+rag/            RagService（入库/检索/上下文/更新删除重建）、IndexActivityGuard（重建与目录导入互斥）、
+                KnowledgeBaseProbe（空库短路）
+rag/reindex/    ReindexTaskService（异步重建/看门狗/撤销与宽限期）、ReindexStateStore（任务快照与锁门面）、
+                ReindexStateBackend、QdrantReindexStateBackend（Qdrant 状态集合）、
                 ReindexProgress、ReindexListener、ReindexRevokedException、CancellationScope（OkHttp 主动取消）、
-                KnowledgeBaseProbe（空库短路）、ChunkingReindexRunner（启动自动重切）
-rag/sources/    SourceSyncService（多目录 Markdown 扫描/增量/定时/手动触发）、SourceStateStore（文件指纹状态）
+                ChunkingReindexRunner（启动自动重切）
+rag/sources/    SourceSyncService（多目录 Markdown 扫描/增量/定时/手动触发/watcher）、
+                SourceStateStore（文件指纹与手动删除墓碑）
 rag/chunking/   ChunkingService、ChunkingStrategy、ChunkingSignature、TextChunk、
                 TextChunker、RecursiveTextChunker、MarkdownChunker、SemanticTextChunker
 rag/archive/    DocumentArchive、ArchivedDocument、ArchivedDocumentSummary（原文归档、摘要索引与签名记录）

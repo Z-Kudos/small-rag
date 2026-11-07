@@ -1,4 +1,4 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.reindex;
 
 import java.util.LinkedHashMap;
 import java.util.List;

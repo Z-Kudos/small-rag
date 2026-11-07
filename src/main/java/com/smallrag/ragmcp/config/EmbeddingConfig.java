@@ -1,7 +1,7 @@
 package com.smallrag.ragmcp.config;
 
 import com.openai.core.Timeout;
-import com.smallrag.ragmcp.rag.CancellationScope;
+import com.smallrag.ragmcp.rag.reindex.CancellationScope;
 import org.springframework.ai.openai.http.okhttp.OpenAiHttpClientBuilderCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

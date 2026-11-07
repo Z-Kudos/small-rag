@@ -2,7 +2,7 @@ package com.smallrag.ragmcp.config;
 
 import com.smallrag.ragmcp.mcp.RagMcpTools;
 import com.smallrag.ragmcp.rag.RagService;
-import com.smallrag.ragmcp.rag.ReindexTaskService;
+import com.smallrag.ragmcp.rag.reindex.ReindexTaskService;
 import com.smallrag.ragmcp.rag.sources.SourceSyncService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

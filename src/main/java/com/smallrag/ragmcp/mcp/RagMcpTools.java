@@ -1,7 +1,7 @@
 package com.smallrag.ragmcp.mcp;
 
 import com.smallrag.ragmcp.rag.RagService;
-import com.smallrag.ragmcp.rag.ReindexTaskService;
+import com.smallrag.ragmcp.rag.reindex.ReindexTaskService;
 import com.smallrag.ragmcp.rag.sources.SourceSyncService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

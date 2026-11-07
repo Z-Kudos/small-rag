@@ -1,4 +1,4 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.reindex;
 
 /**
  * 重建任务的写权限已被撤销，拒绝继续写入索引。

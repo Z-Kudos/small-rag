@@ -1,4 +1,4 @@
-package com.smallrag.ragmcp.rag;
+package com.smallrag.ragmcp.rag.reindex;
 
 import com.google.common.util.concurrent.Futures;
 import com.smallrag.ragmcp.config.QdrantProperties;
