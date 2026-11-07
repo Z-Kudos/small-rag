@@ -43,7 +43,7 @@ class ReindexTaskServiceTest {
 
     private ReindexTaskService newService() {
         return new ReindexTaskService(ragService, archive, properties, qdrantProperties,
-                new ReindexStateStore(stateBackend));
+                new ReindexStateStore(stateBackend), new IndexActivityGuard());
     }
 
     @AfterEach
@@ -72,6 +72,23 @@ class ReindexTaskServiceTest {
         assertThatThrownBy(() -> service.submit("rebuild", true))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("拒绝清空");
+    }
+
+    @Test
+    void rejectsWhenDirectoryImportIsRunning() {
+        when(archive.isEnabled()).thenReturn(true);
+        when(archive.listAll()).thenReturn(List.of(document("doc-1")));
+        IndexActivityGuard guard = new IndexActivityGuard();
+        guard.tryAcquire(IndexActivityGuard.SOURCES);
+        service = new ReindexTaskService(ragService, archive, properties, qdrantProperties,
+                new ReindexStateStore(stateBackend), guard);
+        try {
+            assertThatThrownBy(() -> service.submit("reindex", false))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("目录导入");
+        } finally {
+            guard.release(IndexActivityGuard.SOURCES);
+        }
     }
 
     @Test
@@ -310,6 +327,24 @@ class ReindexTaskServiceTest {
         assertThat(service.resume(taskId).status()).isIn("queued", "reindexing", "completed");
         assertThat(awaitTerminal(taskId, 5).status()).isEqualTo("completed");
         verify(ragService).reindexArchived(eq(false), any(), eq(Set.of("doc-1")));
+    }
+
+    @Test
+    void rebuildsMissingLockFromLatestInterruptedTask() {
+        String taskId = UUID.randomUUID().toString();
+        stateBackend.save(new ReindexStateStore.PersistedTask(
+                view(taskId, "reindex", "reindexing", 2, 1, 1, 0, "doc-1", null),
+                false, Set.of("doc-1")));
+        when(archive.isEnabled()).thenReturn(true);
+
+        service = newService();
+
+        assertThat(service.status(taskId).orElseThrow().status()).isEqualTo("interrupted");
+        assertThatThrownBy(() -> service.submit("reindex", false))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("rag_task_resume");
+
+        service.cancel(taskId);
     }
 
     @Test

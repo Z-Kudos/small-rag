@@ -3,6 +3,7 @@ package com.smallrag.ragmcp.config;
 import com.smallrag.ragmcp.mcp.RagMcpTools;
 import com.smallrag.ragmcp.rag.RagService;
 import com.smallrag.ragmcp.rag.ReindexTaskService;
+import com.smallrag.ragmcp.rag.sources.SourceSyncService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.ObjectMapper;
@@ -23,7 +24,8 @@ public class McpServerConfig {
     @Bean
     public RagMcpTools ragMcpTools(RagService ragService,
             ReindexTaskService reindexTaskService,
+            SourceSyncService sourceSyncService,
             ObjectMapper objectMapper) {
-        return new RagMcpTools(ragService, reindexTaskService, objectMapper);
+        return new RagMcpTools(ragService, reindexTaskService, sourceSyncService, objectMapper);
     }
 }

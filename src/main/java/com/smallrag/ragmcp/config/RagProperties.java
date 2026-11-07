@@ -4,7 +4,11 @@ import com.smallrag.ragmcp.rag.chunking.ChunkingStrategy;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 /**
  * RAG 检索与切分配置，对应 {@code rag.*}。
@@ -86,6 +90,11 @@ public class RagProperties {
      * 异步重建任务的看门狗参数。
      */
     private Reindex reindex = new Reindex();
+
+    /**
+     * 多目录 Markdown 源文件的自动导入。
+     */
+    private Sources sources = new Sources();
 
     /**
      * 切分配置。
@@ -279,6 +288,126 @@ public class RagProperties {
         public long effectiveRecoveryGraceSeconds(long qdrantTimeoutMs) {
             long floor = Math.max(1, (Math.max(0, qdrantTimeoutMs) * 2) / 1000);
             return Math.max(recoveryGraceSeconds, floor);
+        }
+    }
+
+    /**
+     * 多目录 Markdown 源文件导入配置。
+     *
+     * <p>以文件内容（SHA-256）+ 大小 + mtime 做增量判断；启动、定时或 MCP 手动触发扫描。
+     * 导入后的文档与 {@code rag_ingest} 写入的文档等价，只是 id 由“根目录 + 相对路径”
+     * 确定性生成，因此同一文件重复扫描不会产生重复文档。
+     */
+    @Data
+    public static class Sources {
+
+        /**
+         * 是否启用目录导入；关闭时定时任务与手动同步都拒绝执行。
+         */
+        private boolean enabled = false;
+
+        /**
+         * 逗号分隔的目录列表；相对路径按进程工作目录解析。
+         *
+         * <p>建议使用稳定的绝对路径（容器内挂载点），路径变化会改变确定性文档 id。
+         */
+        private String directories = "";
+
+        /**
+         * 逗号分隔的扩展名，缺省 {@code .md,.markdown}；大小写不敏感。
+         */
+        private String extensions = ".md,.markdown";
+
+        /**
+         * 逗号分隔的 glob 排除规则（相对源目录），例如 {@code node_modules/**}。
+         */
+        private String exclude = "**/node_modules/**,**/target/**,**/build/**";
+
+        /**
+         * 是否跳过以 {@code .} 开头的目录/文件（如 {@code .git}、{@code .obsidian}）。
+         */
+        private boolean skipHidden = true;
+
+        /**
+         * 是否跟随符号链接；默认关闭，避免把源目录外的内容导入或形成环。
+         */
+        private boolean followSymlinks = false;
+
+        /**
+         * 应用就绪后是否立即扫描一次。
+         */
+        private boolean scanOnStartup = true;
+
+        /**
+         * 定时扫描间隔（秒）；{@code <= 0} 关闭定时扫描。
+         */
+        private long scanIntervalSeconds = 300;
+
+        /**
+         * 单文件大小上限（字节）；超过则跳过并告警，{@code <= 0} 不限制。
+         */
+        private long maxFileBytes = 2L * 1024 * 1024;
+
+        /**
+         * 每轮最多处理多少篇“有变化”的文档；{@code <= 0} 不限制。
+         *
+         * <p>用于大批量首次导入时限流，剩余文件留到下一轮。未变化的文件不占额度。
+         */
+        private int maxFilesPerScan = 0;
+
+        /**
+         * 源文件被删除后是否同时删除对应文档的向量与归档。
+         *
+         * <p>默认关闭：删除源文件不会自动清理知识库，避免误删。只对当前仍配置且
+         * 成功扫描的根目录生效。
+         */
+        private boolean deleteMissing = false;
+
+        /**
+         * 导入状态文件路径；留空表示 {@code <archive-dir>/.sources/state.json}。
+         */
+        private String stateFile = "";
+
+        /**
+         * 附加到所有导入文档的业务元数据；会与 source_* 内部字段合并。
+         */
+        private Map<String, String> metadata = new LinkedHashMap<>();
+
+        /**
+         * @return 解析后的目录列表
+         */
+        public List<String> directoryList() {
+            return splitCsv(directories);
+        }
+
+        /**
+         * @return 规范化后的扩展名列表（小写、带前导点）
+         */
+        public List<String> extensionList() {
+            List<String> parsed = splitCsv(extensions).stream()
+                    .map(value -> value.toLowerCase(Locale.ROOT))
+                    .map(value -> value.startsWith(".") ? value : "." + value)
+                    .distinct()
+                    .toList();
+            return parsed.isEmpty() ? List.of(".md", ".markdown") : parsed;
+        }
+
+        /**
+         * @return 解析后的排除 glob 列表
+         */
+        public List<String> excludeList() {
+            return splitCsv(exclude);
+        }
+
+        private static List<String> splitCsv(String value) {
+            if (value == null || value.isBlank()) {
+                return List.of();
+            }
+            return Arrays.stream(value.split(","))
+                    .map(String::trim)
+                    .filter(item -> !item.isEmpty())
+                    .distinct()
+                    .toList();
         }
     }
 }

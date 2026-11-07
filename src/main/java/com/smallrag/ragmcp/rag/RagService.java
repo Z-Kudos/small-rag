@@ -194,6 +194,13 @@ public class RagService {
             markIndexedQuietly(documentId);
             return result;
         } catch (RuntimeException e) {
+            // 入库可能已部分写入：尽量清掉该文档的残留片段，再删除归档
+            try {
+                vectorStore.delete(new FilterExpressionBuilder().eq("doc_id", documentId).build());
+            } catch (Exception cleanupError) {
+                log.warn("入库失败后清理残留片段失败: docId={}, 原因={}",
+                        documentId, cleanupError.toString());
+            }
             documentArchive.delete(documentId);
             throw e;
         }
@@ -232,6 +239,36 @@ public class RagService {
         log.info("文档已重切: docId={}, strategy={}, chunks={}, parents={}",
                 documentId, chunkingService.strategy(), chunked.chunks().size(), chunked.parentCount());
         return new IngestResult(documentId, chunked.chunks().size(), chunked.parentCount());
+    }
+
+    /**
+     * 使用指定文档 id 新增或覆盖文档：不存在则创建，存在则沿用/替换元数据并重建向量。
+     *
+     * <p>供目录导入使用：文档 id 由“源根目录 + 相对路径”确定性生成，重复扫描同一文件
+     * 不会产生重复文档；元数据为 null 且文档已存在时沿用原元数据。
+     *
+     * @param documentId 文档 id（UUID）
+     * @param text       完整文本
+     * @param metadata   新元数据；为 null 时沿用已有元数据
+     * @return 写入片段数与父块数
+     */
+    public IngestResult upsert(String documentId, String text, Map<String, String> metadata) {
+        requireDocumentId(documentId);
+        requireText(text);
+        requireArchiveEnabled();
+
+        ArchivedDocument existing = documentArchive.find(documentId).orElse(null);
+        Map<String, String> effectiveMetadata = metadata != null
+                ? metadata
+                : (existing == null ? Map.of() : existing.metadata());
+
+        // 先写归档（签名置空），重切失败时下次启动会按新原文重试
+        documentArchive.save(documentId, text, effectiveMetadata, null);
+        IngestResult result = reindex(documentId, text, effectiveMetadata);
+        markIndexedQuietly(documentId);
+        log.info("文档已写入: docId={}, chunks={}, created={}",
+                documentId, result.chunkCount(), existing == null);
+        return result;
     }
 
     /**

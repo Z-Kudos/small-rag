@@ -447,6 +447,44 @@ class RagServiceTest {
     }
 
     @Test
+    void upsertCreatesNewDocumentWithGivenId() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        DocumentArchive archive = mock(DocumentArchive.class);
+        when(archive.isEnabled()).thenReturn(true);
+        String documentId = UUID.randomUUID().toString();
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+
+        RagService.IngestResult result = service.upsert(
+                documentId, "目录导入的完整文本", Map.of("source", "notes/a.md"));
+
+        verify(archive).save(documentId, "目录导入的完整文本", Map.of("source", "notes/a.md"), null);
+        verify(vectorStore).delete(any(Filter.Expression.class));
+        verify(vectorStore).add(anyList());
+        verify(archive).markIndexed(eq(documentId), anyString());
+        assertThat(result.documentId()).isEqualTo(documentId);
+        assertThat(result.chunkCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void upsertKeepsArchivedMetadataWhenNull() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        DocumentArchive archive = mock(DocumentArchive.class);
+        when(archive.isEnabled()).thenReturn(true);
+        String documentId = UUID.randomUUID().toString();
+        when(archive.find(documentId)).thenReturn(Optional.of(new ArchivedDocument(
+                documentId, "旧文本", Map.of("source", "handbook"), "old-signature", "t1")));
+        RagService service = new RagService(vectorStore, properties, new QdrantProperties(), () -> false,
+                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+
+        service.upsert(documentId, "新的完整文本", null);
+
+        verify(archive).save(documentId, "新的完整文本", Map.of("source", "handbook"), null);
+    }
+
+    @Test
     void deleteRemovesChunksAndArchive() {
         VectorStore vectorStore = mock(VectorStore.class);
         RagProperties properties = new RagProperties();

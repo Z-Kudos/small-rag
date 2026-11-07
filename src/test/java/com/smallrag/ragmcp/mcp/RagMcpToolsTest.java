@@ -2,6 +2,7 @@ package com.smallrag.ragmcp.mcp;
 
 import com.smallrag.ragmcp.rag.RagService;
 import com.smallrag.ragmcp.rag.ReindexTaskService;
+import com.smallrag.ragmcp.rag.sources.SourceSyncService;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
@@ -22,7 +23,9 @@ class RagMcpToolsTest {
 
     private final RagService ragService = mock(RagService.class);
     private final ReindexTaskService reindexTaskService = mock(ReindexTaskService.class);
-    private final RagMcpTools tools = new RagMcpTools(ragService, reindexTaskService, new ObjectMapper());
+    private final SourceSyncService sourceSyncService = mock(SourceSyncService.class);
+    private final RagMcpTools tools =
+            new RagMcpTools(ragService, reindexTaskService, sourceSyncService, new ObjectMapper());
 
     @Test
     void rebuildRequiresExplicitConfirmation() {
@@ -95,6 +98,30 @@ class RagMcpToolsTest {
         assertThat(tools.ragTaskResume("task-5"))
                 .contains("\"taskId\":\"task-5\"")
                 .contains("\"status\":\"reindexing\"");
+    }
+
+    @Test
+    void syncSourcesDelegates() {
+        SourceSyncService.Summary summary = new SourceSyncService.Summary(
+                "2026-11-07T10:00:00Z", "2026-11-07T10:00:01Z", 1000, 2, 5, 1, 2, 2, 0, 0, false);
+        when(sourceSyncService.sync(true)).thenReturn(summary);
+
+        assertThat(tools.ragSyncSources(true))
+                .contains("\"indexed\":1")
+                .contains("\"updated\":2")
+                .contains("\"discovered\":5");
+    }
+
+    @Test
+    void syncStatusDelegates() {
+        SourceSyncService.Status status = new SourceSyncService.Status(
+                true, false, List.of("/docs"), 300, null, null);
+        when(sourceSyncService.status()).thenReturn(status);
+
+        assertThat(tools.ragSyncStatus())
+                .contains("\"enabled\":true")
+                .contains("\"directories\":[\"/docs\"]")
+                .contains("\"scanIntervalSeconds\":300");
     }
 
     @Test

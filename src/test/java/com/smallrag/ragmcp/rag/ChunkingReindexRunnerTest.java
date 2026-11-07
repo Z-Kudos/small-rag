@@ -31,6 +31,7 @@ class ChunkingReindexRunnerTest {
     void reindexesOnlyDocumentsWithOutdatedSignature() {
         DocumentArchive archive = mock(DocumentArchive.class);
         RagService ragService = mock(RagService.class);
+        ReindexTaskService taskService = mock(ReindexTaskService.class);
         RagProperties properties = new RagProperties();
         QdrantProperties qdrantProperties = new QdrantProperties();
         when(archive.isEnabled()).thenReturn(true);
@@ -42,7 +43,7 @@ class ChunkingReindexRunnerTest {
                 UUID.randomUUID().toString(), "新策略原文", Map.of("source", "faq"), currentSignature, "t2");
         when(archive.listAll()).thenReturn(List.of(outdated, upToDate));
 
-        new ChunkingReindexRunner(archive, ragService, properties, new QdrantProperties()).run(mock(ApplicationArguments.class));
+        new ChunkingReindexRunner(archive, ragService, properties, new QdrantProperties(), taskService).run(mock(ApplicationArguments.class));
 
         verify(ragService).reindex(outdated.documentId(), "旧策略原文", Map.of("source", "handbook"));
         verify(archive).markIndexed(outdated.documentId(), currentSignature);
@@ -53,10 +54,25 @@ class ChunkingReindexRunnerTest {
     void skipsWhenAutomaticRechunkIsDisabled() {
         DocumentArchive archive = mock(DocumentArchive.class);
         RagService ragService = mock(RagService.class);
+        ReindexTaskService taskService = mock(ReindexTaskService.class);
         RagProperties properties = new RagProperties();
         properties.getChunking().setAutoRechunk(false);
 
-        new ChunkingReindexRunner(archive, ragService, properties, new QdrantProperties()).run(mock(ApplicationArguments.class));
+        new ChunkingReindexRunner(archive, ragService, properties, new QdrantProperties(), taskService).run(mock(ApplicationArguments.class));
+
+        verifyNoInteractions(archive, ragService);
+    }
+
+    @Test
+    void skipsWhenRecoveredReindexTaskIsPending() {
+        DocumentArchive archive = mock(DocumentArchive.class);
+        RagService ragService = mock(RagService.class);
+        ReindexTaskService taskService = mock(ReindexTaskService.class);
+        RagProperties properties = new RagProperties();
+        when(taskService.hasRecoveredTask()).thenReturn(true);
+
+        new ChunkingReindexRunner(archive, ragService, properties, new QdrantProperties(), taskService)
+                .run(mock(ApplicationArguments.class));
 
         verifyNoInteractions(archive, ragService);
     }
@@ -65,10 +81,11 @@ class ChunkingReindexRunnerTest {
     void skipsWhenArchiveIsUnavailable() {
         DocumentArchive archive = mock(DocumentArchive.class);
         RagService ragService = mock(RagService.class);
+        ReindexTaskService taskService = mock(ReindexTaskService.class);
         RagProperties properties = new RagProperties();
         when(archive.isEnabled()).thenReturn(false);
 
-        new ChunkingReindexRunner(archive, ragService, properties, new QdrantProperties()).run(mock(ApplicationArguments.class));
+        new ChunkingReindexRunner(archive, ragService, properties, new QdrantProperties(), taskService).run(mock(ApplicationArguments.class));
 
         verifyNoInteractions(ragService);
     }

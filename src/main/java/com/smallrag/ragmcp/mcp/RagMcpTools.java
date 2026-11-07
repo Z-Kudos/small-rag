@@ -2,6 +2,7 @@ package com.smallrag.ragmcp.mcp;
 
 import com.smallrag.ragmcp.rag.RagService;
 import com.smallrag.ragmcp.rag.ReindexTaskService;
+import com.smallrag.ragmcp.rag.sources.SourceSyncService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -31,6 +32,7 @@ public class RagMcpTools {
 
     private final RagService ragService;
     private final ReindexTaskService reindexTaskService;
+    private final SourceSyncService sourceSyncService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -140,6 +142,7 @@ public class RagMcpTools {
         log.debug("MCP rag_delete 调用，documentId={}", documentId);
         try {
             ragService.delete(documentId);
+            sourceSyncService.removeFromState(documentId);
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("documentId", documentId);
             data.put("deleted", true);
@@ -267,6 +270,40 @@ public class RagMcpTools {
         } catch (Exception e) {
             log.warn("MCP rag_task_resume 失败: taskId={}, 原因={}", taskId, e.toString());
             return error("续接任务失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 手动触发一次目录导入：扫描配置的多个 Markdown 源目录，按文件指纹增量解析、切分并建立索引。
+     *
+     * @param force true 时忽略文件指纹，重新切分所有源文件；默认 false
+     * @return 本次扫描统计（discovered/indexed/updated/skipped/deleted/failed/truncated）
+     */
+    @McpTool(name = "rag_sync_sources", description = "手动扫描配置的多个 Markdown 源目录：按文件指纹增量解析、切分并建立索引；force=true 忽略指纹重新切分全部文件")
+    public String ragSyncSources(
+            @McpToolParam(description = "true 时忽略文件指纹强制重新切分；默认 false（仅处理新增/变更文件）", required = false) Boolean force) {
+        log.debug("MCP rag_sync_sources 调用，force={}", force);
+        try {
+            return objectMapper.writeValueAsString(sourceSyncService.sync(Boolean.TRUE.equals(force)));
+        } catch (Exception e) {
+            log.warn("MCP rag_sync_sources 失败: 原因={}", e.toString());
+            return error("目录导入失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 查询目录导入状态：是否启用/运行、最近一次扫描统计与错误。
+     *
+     * @return 状态 JSON；未启用时 {@code enabled=false}
+     */
+    @McpTool(name = "rag_sync_status", description = "查询目录导入状态：是否启用/运行、配置的目录、最近一次扫描统计与错误")
+    public String ragSyncStatus() {
+        log.debug("MCP rag_sync_status 调用");
+        try {
+            return objectMapper.writeValueAsString(sourceSyncService.status());
+        } catch (Exception e) {
+            log.warn("MCP rag_sync_status 失败: 原因={}", e.toString());
+            return error("查询目录导入状态失败: " + rootMessage(e));
         }
     }
 

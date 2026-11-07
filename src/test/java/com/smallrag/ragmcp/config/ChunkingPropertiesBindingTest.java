@@ -30,4 +30,22 @@ class ChunkingPropertiesBindingTest {
         assertThat(properties.getChunking().getParentChild().getChildSize()).isEqualTo(256);
         assertThat(properties.getChunking().getMarkdown().getHeadingSeparator()).isEqualTo(" / ");
     }
+
+    @Test
+    void bindsSourcesFromCommaSeparatedValues() {
+        MockEnvironment environment = new MockEnvironment();
+        environment.setProperty("rag.sources.enabled", "true");
+        environment.setProperty("rag.sources.directories", "/notes, /wiki");
+        environment.setProperty("rag.sources.extensions", "md,markdown");
+        environment.setProperty("rag.sources.max-files-per-scan", "5");
+
+        RagProperties properties = Binder.get(environment)
+                .bind("rag", Bindable.of(RagProperties.class))
+                .get();
+
+        assertThat(properties.getSources().isEnabled()).isTrue();
+        assertThat(properties.getSources().directoryList()).containsExactly("/notes", "/wiki");
+        assertThat(properties.getSources().extensionList()).containsExactly(".md", ".markdown");
+        assertThat(properties.getSources().getMaxFilesPerScan()).isEqualTo(5);
+    }
 }

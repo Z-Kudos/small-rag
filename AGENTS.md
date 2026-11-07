@@ -30,13 +30,15 @@
 - 多阶段构建：`maven:3.9-eclipse-temurin-25` 构建 → 以 `qdrant/qdrant`（debian:13-slim）为基底**从源码编译 llama-server**（`LLAMA_CPP_TAG`，默认 `v0.9.0`；编译基底=运行基底，无 glibc 兼容问题；源码包走 gh-proxy 加速）→ 拷入 Temurin JRE；基础镜像可用 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE` 替换。**不用 Ollama 镜像**（3.25GB，国内拉取过慢）。
 - 默认向量模型 Qwen3-Embedding-0.6B Q8_0（1024 维），`start-llama.sh` 首次启动从 ModelScope 下载 GGUF（`EMBEDDING_MODEL_URL`→`EMBEDDING_MODEL_PATH`，断点续传）并以 `--embeddings --pooling last` 启动 llama-server（**Qwen3-Embedding 必须 last pooling**）；`start-app.sh` 等待其 `/health` 就绪。
 - 启动脚本：`docker/start-qdrant.sh`、`start-llama.sh`、`start-app.sh`，由 `docker/supervisord.conf` 调度；数据统一 `/data`。
+- 目录导入的源目录建议只读 bind mount 到 `/data/sources/...`（示例如 `compose.yaml`），必须对容器内 UID `10001` 可读；增量状态默认写 `<archive-dir>/.sources/state.json`，随归档卷持久化。
 - 端口与默认值在 `Dockerfile`、`compose.yaml`、`.env`、`README.md` 间保持一致；`.env` 已入库（仅模板值），**真实密钥不要写入 `.env`**（改用部署环境注入），`.dockerignore` 仍排除它以防进入镜像。
 - Podman：`podman compose up -d --build` 或 `podman-compose up -d --build`，同一份 `compose.yaml`。
 
 ## 架构分层
 
-- `mcp`：`RagMcpTools` 暴露 `rag_ingest`/`rag_update`/`rag_delete`/`rag_list`/`rag_reindex`/`rag_rebuild`/`rag_task_status`/`rag_task_resume`/`rag_task_cancel`/`rag_search`/`rag_query`。**不是** `@Component`，由 `McpServerConfig` 显式注册。工具方法必须写 Javadoc——注解扫描会把它作为工具描述发给客户端。
-- `rag`：`RagService` 负责分块入库、向量检索、上下文拼装、更新/删除/手动重建，**不调用 Chat/生成模型**；`ReindexTaskService` 提供异步重建任务、进度快照与看门狗（每任务独立线程 + 单任务互斥 + 保留最近 20 个；超过 `rag.reindex.stall-timeout-seconds` 标 `stalled` 但保留锁；超过 `hard-timeout-seconds` 撤销写权限、取消在途调用并中断线程，确认退出或宽限期到期后释放锁；`rag_task_cancel` 为文档边界协作式取消）；`ReindexStateStore` 将任务快照 + 检查点（`cleared` / 已完成文档 id）+ 任务锁写入 Qdrant 的独立集合 `<rag.qdrant.collection-name>_reindex_state`（`QdrantReindexStateBackend`，跟随 Qdrant 持久化，不依赖容器文件系统；1 维哑向量 + payload JSON，集合按需创建），重启后恢复为 `interrupted` 并继续持锁，`rag_task_resume` 或 `resume-on-startup` 续接（跳过已完成文档、不重复清空）；`CancellationScope` 负责任务级 OkHttp 调用取消；`KnowledgeBaseProbe` 空库短路；`ChunkingReindexRunner` 启动自动重切。
+- `mcp`：`RagMcpTools` 暴露 `rag_ingest`/`rag_update`/`rag_delete`/`rag_list`/`rag_reindex`/`rag_rebuild`/`rag_task_status`/`rag_task_resume`/`rag_task_cancel`/`rag_sync_sources`/`rag_sync_status`/`rag_search`/`rag_query`（13 个）。**不是** `@Component`，由 `McpServerConfig` 显式注册。工具方法必须写 Javadoc——注解扫描会把它作为工具描述发给客户端。
+- `rag`：`RagService` 负责分块入库、向量检索、上下文拼装、更新/删除/手动重建，**不调用 Chat/生成模型**；`ReindexTaskService` 提供异步重建任务、进度快照与看门狗（每任务独立线程 + 单任务互斥 + 保留最近 20 个；超过 `rag.reindex.stall-timeout-seconds` 标 `stalled` 但保留锁；超过 `hard-timeout-seconds` 撤销写权限、取消在途调用并中断线程，确认退出或宽限期到期后释放锁；`rag_task_cancel` 为文档边界协作式取消）；`ReindexStateStore` 将任务快照 + 检查点（`cleared` / 已完成文档 id）+ 任务锁写入 Qdrant 的独立集合 `<rag.qdrant.collection-name>_reindex_state`（`QdrantReindexStateBackend`，跟随 Qdrant 持久化，不依赖容器文件系统；1 维哑向量 + payload JSON，集合按需创建），重启后恢复为 `interrupted` 并继续持锁（锁 point 丢失但任务快照仍在时，按单实例假设由最近一个未完成任务重建锁），`rag_task_resume` 或 `resume-on-startup` 续接（跳过已完成文档、不重复清空）；`CancellationScope` 负责任务级 OkHttp 调用取消；`IndexActivityGuard` 串行化“重建任务”与“目录导入”两类索引写入；`KnowledgeBaseProbe` 空库短路；`ChunkingReindexRunner` 启动自动重切（存在待续接重建任务时跳过，交给续接任务处理）。
+- `rag/sources`：`SourceSyncService` 扫描 `rag.sources.directories`（逗号分隔）下的 Markdown，文档 id 由“根目录绝对路径 + 相对路径”确定性生成；先比 `mtime + size`，再比 SHA-256，只有内容变化才重新切分。`SourceStateStore` 把文件指纹写到 `<archive-dir>/.sources/state.json`（原子替换），丢失时从归档 `source_*` 元数据重建。触发方式：启动扫描、定时扫描（`scan-interval-seconds`，0 关闭）、MCP `rag_sync_sources(force)`；`max-file-bytes` / `max-files-per-scan` 限流；`delete-missing` 只删除“当前仍配置且本轮成功扫描”的根目录下已消失文件。导入通过 `IndexActivityGuard.SOURCES` 与重建任务互斥，写入走 `RagService.upsert`（归档 + 切分 + Embedding），不使用 `rag_ingest` 的随机 id。
 - `rag/chunking`（切分引擎）：
   - `ChunkingService` 按 `rag.chunking.strategy` 分发 `fixed` / `recursive` / `semantic` / `parent-child`（默认 `parent-child`）。
   - `MarkdownChunker` 是内部结构引擎（标题分节 + 受保护块），**不是独立策略**，由 `semantic` 与 `parent-child` 共用；`chunkSemantic` 提供语义合并入口（节内文本块与累积质心比较，代码/表格独立成块）。
@@ -75,7 +77,7 @@
 ## 验收标准
 
 1. `mvn clean package -DskipTests` 成功；`mvn test` 无外部依赖可跑。
-2. 启动后 `/mcp` 可用，MCP Inspector 能列出全部 11 个工具。
+2. 启动后 `/mcp` 可用，MCP Inspector 能列出全部 13 个工具。
 3. 空知识库下 `rag_query` 返回友好提示而非异常堆栈（依赖 count 短路）。
 4. 端到端（入库→检索）需要 Qdrant + OpenAI 兼容 Embedding；不需要 Chat 模型。
 5. README 步骤可复现，`git log` 至少一条 Conventional Commits。

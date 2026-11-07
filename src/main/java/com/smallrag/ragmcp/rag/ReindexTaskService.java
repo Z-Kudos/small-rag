@@ -7,6 +7,7 @@ import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -75,6 +76,7 @@ public class ReindexTaskService {
     private final RagProperties properties;
     private final QdrantProperties qdrantProperties;
     private final ReindexStateStore stateStore;
+    private final IndexActivityGuard activity;
     private final ScheduledExecutorService watchdog;
     private final Map<String, Task> tasks = new ConcurrentHashMap<>();
     private final Deque<String> taskOrder = new ConcurrentLinkedDeque<>();
@@ -86,12 +88,14 @@ public class ReindexTaskService {
     private volatile Task recoveredTask;
 
     public ReindexTaskService(RagService ragService, DocumentArchive documentArchive,
-            RagProperties properties, QdrantProperties qdrantProperties, ReindexStateStore stateStore) {
+            RagProperties properties, QdrantProperties qdrantProperties, ReindexStateStore stateStore,
+            IndexActivityGuard activity) {
         this.ragService = ragService;
         this.documentArchive = documentArchive;
         this.properties = properties;
         this.qdrantProperties = qdrantProperties;
         this.stateStore = stateStore;
+        this.activity = activity;
         this.watchdog = Executors.newSingleThreadScheduledExecutor(
                 runnable -> daemonThread(runnable, "rag-reindex-watchdog"));
         RagProperties.Reindex config = properties.getReindex();
@@ -118,8 +122,7 @@ public class ReindexTaskService {
 
         String owner = stateStore.readOwner().orElse(null);
         if (owner == null) {
-            tasks.values().stream().filter(task -> !task.isTerminal())
-                    .forEach(Task::markInterrupted);
+            recoverWithoutOwner();
             return;
         }
 
@@ -142,6 +145,10 @@ public class ReindexTaskService {
         }
 
         runningTaskId.set(owner);
+        if (!activity.tryAcquire(activityLabel(owner))) {
+            log.warn("恢复重建任务时其他索引活动仍在运行，将在其结束后再操作: owner={}",
+                    activity.owner().orElse("unknown"));
+        }
         task.markInterrupted();
         recoveredTask = task;
         log.warn("恢复未完成的重建任务并续接任务锁: taskId={}, mode={}, processed={}/{}",
@@ -149,9 +156,48 @@ public class ReindexTaskService {
     }
 
     /**
+     * 锁 point 丢失但任务快照仍在时的恢复：按单实例假设，由最近一个未撤销/未取消的
+     * 未完成任务重新持有锁，避免任务永久卡在 interrupted 且无法 resume。
+     */
+    private void recoverWithoutOwner() {
+        Task latest = null;
+        for (String taskId : taskOrder) {
+            Task candidate = tasks.get(taskId);
+            if (candidate == null || candidate.isTerminal()
+                    || candidate.isRevoked() || candidate.isCancelRequested()) {
+                continue;
+            }
+            latest = candidate;
+        }
+        if (latest != null) {
+            runningTaskId.set(latest.taskId);
+            if (!activity.tryAcquire(activityLabel(latest.taskId))) {
+                log.warn("恢复重建任务锁失败，其他索引活动正在运行: owner={}",
+                        activity.owner().orElse("unknown"));
+            }
+            latest.markInterrupted();
+            recoveredTask = latest;
+            persistOwner(latest.taskId);
+            log.warn("任务锁缺失，按单实例假设重建任务锁: taskId={}", latest.taskId);
+        }
+        Task recovered = latest;
+        tasks.values().stream()
+                .filter(task -> task != recovered && !task.isTerminal())
+                .forEach(Task::markInterrupted);
+    }
+
+    /**
+     * @return 是否存在重启时恢复出来、等待续接的重建任务
+     */
+    public boolean hasRecoveredTask() {
+        return recoveredTask != null;
+    }
+
+    /**
      * 应用就绪后按配置自动续接重启前未完成的任务。
      */
     @EventListener(ApplicationReadyEvent.class)
+    @Order(0)
     public void onApplicationReady() {
         Task task = recoveredTask;
         if (task == null) {
@@ -193,7 +239,17 @@ public class ReindexTaskService {
         }
 
         String taskId = UUID.randomUUID().toString();
+        String label = activityLabel(taskId);
+        if (!activity.tryAcquire(label)) {
+            String owner = activity.owner().orElse("unknown");
+            if (owner.equals(IndexActivityGuard.SOURCES)) {
+                throw new IllegalStateException("目录导入正在执行，请稍后重试");
+            }
+            throw new IllegalStateException(busyMessage(
+                    owner.startsWith("reindex:") ? owner.substring("reindex:".length()) : owner));
+        }
         if (!runningTaskId.compareAndSet(null, taskId)) {
+            activity.release(label);
             throw new IllegalStateException(busyMessage(runningTaskId.get()));
         }
 
@@ -346,6 +402,7 @@ public class ReindexTaskService {
             task.markLockReleased();
             stateStore.clearOwner(task.taskId);
         }
+        activity.release(activityLabel(task.taskId));
     }
 
     /**
@@ -454,6 +511,7 @@ public class ReindexTaskService {
             task.markLockReleased();
             task.abortRevoked();
             stateStore.clearOwner(task.taskId);
+            activity.release(activityLabel(task.taskId));
             trim();
         } catch (Exception e) {
             log.warn("重建任务宽限期释放锁失败: taskId={}, 原因={}", task.taskId, e.toString());
@@ -511,6 +569,10 @@ public class ReindexTaskService {
 
     private static String shortId(String taskId) {
         return taskId.length() <= 8 ? taskId : taskId.substring(0, 8);
+    }
+
+    private static String activityLabel(String taskId) {
+        return IndexActivityGuard.reindex(taskId);
     }
 
     /**

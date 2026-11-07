@@ -36,11 +36,16 @@ public class ChunkingReindexRunner implements ApplicationRunner {
     private final RagService ragService;
     private final RagProperties properties;
     private final QdrantProperties qdrantProperties;
+    private final ReindexTaskService reindexTaskService;
 
     @Override
     public void run(ApplicationArguments args) {
         if (!properties.getChunking().isAutoRechunk()) {
             log.info("自动重切已关闭（rag.chunking.auto-rechunk=false）");
+            return;
+        }
+        if (reindexTaskService.hasRecoveredTask()) {
+            log.warn("存在重启时中断、待续接的重建任务，跳过启动自动重切以避免重复写入");
             return;
         }
         if (!documentArchive.isEnabled()) {
