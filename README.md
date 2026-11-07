@@ -122,6 +122,7 @@ make up-sources
 ```bash
 docker compose -f compose.yaml -f compose.distributed.yaml build
 docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-rag=2
+# 或：make up-distributed
 ```
 
 - 需要 Docker Compose v2.24+（overlay 使用 `!reset []` 去掉应用自身的端口映射）。
@@ -135,7 +136,24 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
   consul kv put config/small-rag/logging.level.com.smallrag.ragmcp DEBUG
   ```
   启动时加 `SPRING_CONFIG_IMPORT=optional:consul:`；若要用单个 `data` key 存 YAML，需设置 `spring.cloud.consul.config.format=YAML`。
-- 当前 P0 仍保留每副本的启动/定时扫描触发，由锁负责串行化；leader-only 扫描与 Gateway 在 P2/P3 完成。详见 [ROADMAP.md](ROADMAP.md)。
+- Gateway 目前用 HAProxy 提供，Spring Cloud Gateway 在 P3 评估。详见 [ROADMAP.md](ROADMAP.md)。
+
+### 从 standalone 迁移到 distributed
+
+1. 停止单容器实例，保留 `small_rag_data`（归档）与容器内 `/data/qdrant/storage`（向量数据）。
+2. 用 overlay 启动外部 Qdrant/Redis/Consul/Embedding；`small_rag_data` 直接复用，跨主机时换成 RWX 卷。
+3. 向量数据可复制到新的 `qdrant_data` 卷，或清空后重新 `rag_rebuild`/重新入库；复制时注意 Qdrant 版本一致。
+4. 设置 `SMALL_RAG_DISTRIBUTED_ENABLED=true`、`SMALL_RAG_RUNTIME=app-only`、共享 `SMALL_RAG_ARCHIVE_DIR`，按需打开 `CONSUL_ENABLED`。
+5. 通过 gateway 的 `/mcp` 验证；`/actuator/health` 确认只有一个副本 `sourcesLeader=true`，索引写入由 `activeLock` 指示。
+
+### 容量与故障处理
+
+- **Redis 故障**：索引活动锁与 leader 选举失败，重建/目录导入停止并返回可读错误；检索不受影响。恢复后自动重新竞选。
+- **Embedding 故障**：`rag_search`/`rag_query` 由熔断快速失败；入库/重建按超时失败并在下次重试，不会永久占用线程。
+- **Qdrant 故障**：检索有 gRPC deadline；重建任务可能标记 `stalled`，硬超时后撤销写权限，恢复后可 `rag_task_resume`。
+- **副本失联**：索引活动锁在租约（默认 30s）过期后由其他副本接管；目录扫描 leader 在下一轮选举接管。
+- **Consul 故障**：`CONSUL_CONFIG_FAIL_FAST=false` 允许继续启动；服务发现恢复后重新注册。
+- **归档卷**：必须共享且可写；建议 RWX 存储并纳入备份，否则多副本无法自动重切/续接。
 
 ### 熔断与健康检查
 
