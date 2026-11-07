@@ -117,7 +117,7 @@ make up-sources
 
 ## 分布式模式（可选，v0.0.2 开发中）
 
-默认仍是单容器 standalone。需要多副本时使用 overlay：Qdrant / Redis / Embedding 独立部署，应用以 `app-only` 模式运行，HAProxy gateway 统一暴露 18080。
+默认仍是单容器 standalone。需要多副本时使用 overlay：Qdrant / Redis / Consul / Embedding 独立部署，应用以 `app-only` 模式运行，HAProxy gateway 统一暴露 18080。
 
 ```bash
 docker compose -f compose.yaml -f compose.distributed.yaml build
@@ -128,7 +128,13 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 - 两个副本共享 `small_rag_data:/data` 作为归档卷；多主机部署需换成 NFS/CephFS 等 RWX 存储。
 - 应用通过 `SMALL_RAG_DISTRIBUTED_ENABLED=true` 启用 Redis 租约锁；重建任务、目录导入、启动自动重切共用一把跨副本锁，同一时刻只有一个副本写入。
 - 锁租约默认 30s、每 10s 续租；持有者失联后，其他副本在租约过期后接管。续租失败会立即停止本地写入（`IndexActivityGuard.isHeldBy=false`）。
-- 当前 P0 仍保留每副本的启动/定时扫描触发，由锁负责串行化；leader-only 扫描与 Consul/Gateway 在 P1/P2/P3 完成。详见 [ROADMAP.md](ROADMAP.md)。
+- `CONSUL_ENABLED=true` 时应用注册到 Consul（`small-rag` 服务，健康检查 `/actuator/health`），并可按需从 Consul KV 读取配置。overlay 内置单节点 Consul server（生产建议三节点）。
+- Consul 配置默认使用 `KEY_VALUE` 格式：每个配置项一个 key，例如
+  ```bash
+  consul kv put config/small-rag/logging.level.com.smallrag.ragmcp DEBUG
+  ```
+  启动时加 `SPRING_CONFIG_IMPORT=optional:consul:`；若要用单个 `data` key 存 YAML，需设置 `spring.cloud.consul.config.format=YAML`。
+- 当前 P0 仍保留每副本的启动/定时扫描触发，由锁负责串行化；leader-only 扫描与 Gateway 在 P2/P3 完成。详见 [ROADMAP.md](ROADMAP.md)。
 
 ### 熔断与健康检查
 
@@ -188,6 +194,19 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 | `QDRANT_COLLECTION` | `small_rag_text` | 集合名，启动时自动创建 |
 | `QDRANT_USE_TLS` | `false` | 是否启用 TLS |
 | `QDRANT_REQUEST_TIMEOUT_MS` | `30000` | 常规 Qdrant RPC（写入/删除/检索）deadline；与初始化超时分开 |
+| `SMALL_RAG_DISTRIBUTED_ENABLED` | `false` | 启用 distributed 模式（Redis 租约锁）；standalone 不连接 Redis |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | `localhost` / `6379` / 空 | Redis 连接（仅 distributed 使用） |
+| `SMALL_RAG_LOCK_LEASE` | `30s` | 索引活动锁租约 |
+| `SMALL_RAG_LOCK_RENEW_INTERVAL` | `10s` | 续租间隔，必须明显小于租约 |
+| `SMALL_RAG_LOCK_PREFIX` | `smallrag:lock:` | 锁 key 前缀 |
+| `CONSUL_ENABLED` | `false` | 启用 Consul 服务注册与配置（服务名 `small-rag`） |
+| `CONSUL_HOST` / `CONSUL_PORT` | `localhost` / `8500` | Consul agent 地址 |
+| `CONSUL_REGISTER` | `true` | 是否注册到 Consul |
+| `CONSUL_CONFIG_FAIL_FAST` | `false` | Consul 不可达时是否阻止启动 |
+| `SPRING_CONFIG_IMPORT` | 空 | 设为 `optional:consul:` 时从 Consul KV 读取配置 |
+| `RAG_QUERY_BREAKER_ENABLED` | `true` | `rag_search`/`rag_query` 熔断开关 |
+| `RAG_QUERY_BREAKER_FAILURE_RATE` | `50` | 打开熔断的失败率（%） |
+| `RAG_QUERY_BREAKER_OPEN_WAIT` | `30s` | 熔断打开后进入半开的等待时间 |
 | `SMALL_RAG_ENSURE_EMBEDDING_MODEL` | `true`（镜像内） | 启动时等待容器内 Embedding 服务就绪（模型由 `start-llama.sh` 下载） |
 | `EMBEDDING_MODEL_URL` | Qwen3-Embedding-0.6B Q8_0（ModelScope） | GGUF 模型下载地址 |
 | `EMBEDDING_MODEL_PATH` | `/data/models/qwen3-embedding-0.6b-q8_0.gguf` | GGUF 落盘路径（须在持久化卷内） |

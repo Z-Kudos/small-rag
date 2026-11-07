@@ -17,7 +17,7 @@
 ## 依赖与构建
 
 - parent 用 `spring-boot-starter-parent`；`spring-cloud-dependencies` 与 `spring-ai-bom` 均以 `import` 引入。
-- Starter 清单：`spring-ai-starter-mcp-server-webmvc`、`spring-ai-starter-model-openai`（**不存在 `spring-ai-starter-model-embedding`**）、`spring-ai-starter-vector-store-qdrant`、`spring-boot-starter-web`、`spring-boot-starter-data-redis`（distributed 模式锁；standalone 不会连接）、`spring-boot-starter-actuator`（仅 `/actuator/health`）、`resilience4j-circuitbreaker`（检索熔断）、`lombok`（optional）。
+- Starter 清单：`spring-ai-starter-mcp-server-webmvc`、`spring-ai-starter-model-openai`（**不存在 `spring-ai-starter-model-embedding`**）、`spring-ai-starter-vector-store-qdrant`、`spring-boot-starter-web`、`spring-boot-starter-data-redis`（distributed 模式锁；standalone 不会连接）、`spring-cloud-starter-consul-discovery` / `spring-cloud-starter-consul-config`（默认关闭）、`spring-boot-starter-actuator`（仅 `/actuator/health`）、`resilience4j-circuitbreaker`（检索熔断）、`lombok`（optional）。
 - **不要**同时引入 STDIO 的 `spring-ai-starter-mcp-server` 与 webmvc starter——自动配置冲突。只用 webmvc + `protocol=STREAMABLE`。
 - **JDK 23+ 默认不自动发现注解处理器**：必须 `<maven.compiler.proc>full</maven.compiler.proc>`，否则 Lombok "找不到符号"。
 - 本机构建（默认 JAVA_HOME 是 JDK 21，编不了 release=25）：`JAVA_HOME='D:\java\jdk-27.0.1.0.3' mvn clean package`。
@@ -51,7 +51,7 @@
 - `rag/archive`：`DocumentArchive` 按 `doc_id` 归档原文到 `rag.archive-dir`；另维护 `<archive-dir>/.archive/index.json` 摘要索引（metadata/签名/长度），`rag_list`、启动重切、全文重建只读摘要并按需 `find` 原文，避免一次性载入全部 JSON；索引缺失/版本不符/id 集合不一致时重建。`ChunkingSignature` 记录影响切分结果的配置，启动时 `ChunkingReindexRunner` 对签名不一致的文档删旧片段重建。归档目录不可写时降级关闭自动重切，不阻断入库。未归档的历史数据不会自动重切。
 - `distributed`：`DistributedLock`（跨副本互斥抽象）、`LockHandle`（owner + token + 租约）、`LocalDistributedLock`（standalone 进程内）、`RedisDistributedLock`（`SET NX PX` + Lua 续租/释放）。`IndexActivityGuard` 在两种实现之间由 `DistributedLockConfig` 按 `smallrag.distributed.enabled` 选择。
 - `config`：`QdrantConfig`（QdrantClient / QdrantVectorStore / 集合初始化 / 探活）、`McpServerConfig`、`EmbeddingConfig`（OpenAI SDK/OkHttp 超时）、`DistributedLockConfig`、`DistributedProperties`、`IndexLockHealthIndicator`、`RagProperties`、`QdrantProperties`。
-- **分布式配置**：`smallrag.distributed.enabled`（默认 `false`）、`lock.lease`（30s）、`lock.renew-interval`（10s）、`lock.key-prefix`；Redis 连接走 `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD`。distributed 模式必须配 `SMALL_RAG_RUNTIME=app-only`，多副本共享 `SMALL_RAG_ARCHIVE_DIR`；Consul/Gateway 属于 P1/P3，尚未接入。
+- **分布式配置**：`smallrag.distributed.enabled`（默认 `false`）、`lock.lease`（30s）、`lock.renew-interval`（10s）、`lock.key-prefix`；Redis 连接走 `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD`。distributed 模式必须配 `SMALL_RAG_RUNTIME=app-only`，多副本共享 `SMALL_RAG_ARCHIVE_DIR`；Consul 由 `CONSUL_ENABLED`（默认 `false`）开关，注册服务 `small-rag`、健康检查 `/actuator/health`，配置从 Consul KV 读取需 `SPRING_CONFIG_IMPORT=optional:consul:`（默认 `KEY_VALUE` 格式，每项一个 key）；Consul config watch 默认关闭（属性未加 `@RefreshScope`）。Gateway 属于 P3。
 - **检索熔断**：`rag.query-breaker.*`（`RAG_QUERY_BREAKER_ENABLED` 等），只保护 `rag_search`/`rag_query`；默认窗口 20、最小调用 10、失败率 50%、打开 30s。`/actuator/health` 暴露 `instanceId`、`activeLock`、`queryCircuit`、profile，便于多副本排障。
 - 手工管理：`rag_update` 更新归档并重建单篇；`rag_delete` 删除向量与归档；`rag_list` 分页查看；`rag_reindex` 重建单篇（同步）/全部（异步）；`rag_rebuild(confirm=true)` 清理本服务写入的片段后全量异步重建；`rag_task_status` 查进度，`rag_task_resume` 续接重启时中断的任务，`rag_task_cancel` 取消/放弃任务。
 - **只使用向量模型**：`spring.ai.model.chat=none`；不新增 `ChatClient`/`ChatModel`。`rag_query` 只返回增强上下文，生成由调用方 Agent 完成。

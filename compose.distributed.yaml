@@ -19,6 +19,9 @@ services:
       QDRANT_PORT: "6334"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      CONSUL_ENABLED: "true"
+      CONSUL_HOST: consul
+      CONSUL_PORT: "8500"
       EMBEDDING_BASE_URL: http://embedding:11434/v1
       SMALL_RAG_ARCHIVE_DIR: /data/documents
     # 端口由 gateway 统一暴露；多副本不能各自绑定宿主机端口
@@ -27,6 +30,8 @@ services:
       qdrant:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      consul:
         condition: service_healthy
       embedding:
         condition: service_healthy
@@ -54,6 +59,25 @@ services:
       interval: 10s
       timeout: 3s
       retries: 12
+
+  consul:
+    image: ${CONSUL_IMAGE:-docker.io/hashicorp/consul:1.20}
+    restart: unless-stopped
+    # 单节点 server（bootstrap-expect=1），数据落在命名卷；生产建议三节点
+    command:
+      - agent
+      - -server
+      - -bootstrap-expect=1
+      - -client=0.0.0.0
+      - -data-dir=/consul/data
+    volumes:
+      - consul_data:/consul/data
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
 
   embedding:
     image: small-rag:${APP_IMAGE_TAG:-0.0.2}
@@ -87,4 +111,5 @@ services:
 volumes:
   qdrant_data:
   redis_data:
+  consul_data:
   embedding_models:

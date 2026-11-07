@@ -32,8 +32,8 @@
 ### P1 Spring Cloud 服务治理
 - ✅ Resilience4j CircuitBreaker 包住 Embedding 与 Qdrant 查询路径（仅 `rag_search`/`rag_query`），阈值/半开/fallback 可配置；入库与重建不受影响。
 - ✅ 健康检查暴露：`/actuator/health` 提供实例 id、任务持有者/活动锁、熔断状态与当前 profile。
-- ⬜ Consul discovery（`spring-cloud-starter-consul-discovery`）。
-- ⬜ Consul config（`spring-cloud-starter-consul-config`，`spring.config.import=optional:consul:`）。
+- ✅ Consul discovery（`spring-cloud-starter-consul-discovery`）：`CONSUL_ENABLED=true` 时注册 `small-rag`，健康检查 `/actuator/health`；默认关闭。
+- ✅ Consul config（`spring-cloud-starter-consul-config`）：`SPRING_CONFIG_IMPORT=optional:consul:` 时读取 KV；默认 `KEY_VALUE` 格式，`fail-fast=false`，config watch 默认关闭。
 
 ### P2 多副本正确性
 - 任务 owner + lease + fencing token：owner 失联后由其他副本接管。

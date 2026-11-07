@@ -13,8 +13,8 @@
 
 - 保持 standalone 单容器默认运行不变；新增可选 `distributed` 模式：外部 Qdrant/Redis/Consul/Embedding + 多副本。
 - **P0 已完成**：`DistributedLock`（进程内 / Redis `SET NX PX` + Lua）、`IndexActivityGuard` 后台续租与丢失即停写、双运行模式（`SMALL_RAG_RUNTIME=all-in-one|app-only`）、`compose.distributed.yaml` + HAProxy gateway。
-- **P1 部分完成**：Resilience4j 检索熔断 + `/actuator/health` 诊断；Consul discovery/config 尚未接入。
-- 待做：P2 任务 owner/lease/fencing、leader-only 扫描；P3 可选 Gateway；P4 RAG 评测与 Testcontainers；P1 剩余 Consul。
+- **P1 已完成**：Resilience4j 检索熔断、`/actuator/health` 诊断、Consul discovery/config（默认关闭，`CONSUL_ENABLED` 打开）。
+- 待做：P2 任务 owner/lease/fencing、leader-only 扫描；P3 可选 Gateway；P4 RAG 评测与 Testcontainers。
 - 详细里程碑与验收见 `ROADMAP.md`。
 
 ## 项目状态（2026-11-07）
@@ -61,15 +61,17 @@
 - 互斥：`IndexActivityGuard`（`reindex:<taskId>` / `sources`）串行化重建与导入；重建运行中定时/watcher 扫描跳过、手动同步报 busy；导入运行中提交重建报“目录导入正在执行”。`interrupted` 重建任务继续持锁，也会阻止导入，直到 resume/cancel。
 - 容器：源目录只读挂载到 `/data/sources/...`，需 UID 10001 可读；`compose.sources.yaml` + `.env` 的 `SMALL_RAG_SOURCE_HOST`（`make up-sources`）提供单根挂载，分散目录用多条 `docker run -v`；`SMALL_RAG_SOURCE_DIRS` 是容器内路径。
 
-## 分布式模式（P0 已实现）
+## 分布式模式（P0/P1 已实现）
 
 - 配置：`smallrag.distributed.enabled`（默认 false）、`lock.lease`（30s）、`lock.renew-interval`（10s，下限 10ms）、`lock.key-prefix`；Redis 走 `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD`。`DistributedLockConfig` 按开关装配 `RedisDistributedLock` 或 `LocalDistributedLock`。
 - `DistributedLock` 语义：`tryAcquire(key, owner, lease)` / `renew` / `release` / `currentOwner`；`LockHandle` 携带 owner+token+本地到期时间，续租/释放按 value 匹配，旧持有者不会误删新锁。
 - `IndexActivityGuard`：持锁期间后台每 `renew-interval` 续租；续租失败或异常 → `lockLost=true`、清空 owner、停止续租；`isHeldBy(label)` 返回 false 后重建任务（`Task.isWritable()`）、目录导入、启动重切立即停止写入。`@PreDestroy` 只停止续租，不主动释放租约，避免优雅停机时过早接管。
 - 容器：`SMALL_RAG_RUNTIME=all-in-one`（默认，supervisord 三进程）或 `app-only`（`docker/supervisord-app-only.conf` 只跑应用）；`docker/entrypoint.sh` 选择配置；`start-app.sh` 在 app-only 下跳过本地 Qdrant 等待。
-- Overlay：`compose.distributed.yaml` 引入外部 Qdrant/Redis/Embedding + HAProxy gateway（`docker/haproxy.cfg`，`server-template` 发现副本），应用端口用 `!reset []` 去掉；需 Compose v2.24+。`small_rag_data` 为多副本共享归档卷。
-- 已知边界：仍保留每副本的启动/定时扫描触发，由锁串行化；Consul/Gateway 与任务接管未接入。
-- 集成验证：`IndexActivityGuardRedisIT` 默认跳过；本机 `redis-server --port 6390 --save '' --daemonize yes` 后 `mvn test -Dtest=IndexActivityGuardRedisIT -Dsmallrag.redis.it=true` 验证跨副本互斥、租约续期与持有者失联后的接管。
+- Overlay：`compose.distributed.yaml` 引入外部 Qdrant/Redis/Consul/Embedding + HAProxy gateway（`docker/haproxy.cfg`，`server-template` 发现副本），应用端口用 `!reset []` 去掉；需 Compose v2.24+。`small_rag_data` 为多副本共享归档卷。Consul 为单节点 server（`bootstrap-expect=1` + `consul_data` 卷）。
+- Consul：`CONSUL_ENABLED`（默认 false）同时控制 discovery/config；注册服务 `small-rag`，健康检查 `http://<ip>:18080/actuator/health`（15s）。`CONSUL_CONFIG_FAIL_FAST=false`；config watch 默认关闭（`CONSUL_CONFIG_WATCH_ENABLED`），因为 `RagProperties` 未加 `@RefreshScope`。
+- Consul KV 默认 `KEY_VALUE` 格式：**每项一个 key**，如 `config/small-rag/logging.level.com.smallrag.ragmcp=DEBUG`；`config/small-rag/data` 只在 `format=YAML/PROPERTIES` 时使用。启动加 `SPRING_CONFIG_IMPORT=optional:consul:`；不设置 import 时靠 `import-check.enabled=false` 避免启动检查报错。
+- 已知边界：仍保留每副本的启动/定时扫描触发，由锁串行化；任务接管（fencing）与 leader-only 扫描未接入。
+- 集成验证：`IndexActivityGuardRedisIT` 默认跳过；本机 `redis-server --port 6390 --save '' --daemonize yes` 后 `mvn test -Dtest=IndexActivityGuardRedisIT -Dsmallrag.redis.it=true` 验证跨副本互斥、租约续期与持有者失联后的接管。Consul 已验证注册、健康检查 passing、停止后自动注销、KV 配置注入。
 
 ## 检索熔断与健康检查
 

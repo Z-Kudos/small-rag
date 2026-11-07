@@ -25,6 +25,36 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
+  cloud:
+    consul:
+      # 默认关闭：standalone 不依赖 Consul；distributed 部署显式打开
+      enabled: ${CONSUL_ENABLED:false}
+      host: ${CONSUL_HOST:localhost}
+      port: ${CONSUL_PORT:8500}
+      discovery:
+        enabled: ${CONSUL_ENABLED:false}
+        register: ${CONSUL_REGISTER:true}
+        prefer-ip-address: true
+        health-check-path: /actuator/health
+        health-check-interval: 15s
+      config:
+        enabled: ${CONSUL_ENABLED:false}
+        # Consul 配置通过 SPRING_CONFIG_IMPORT=optional:consul: 显式启用，
+        # 默认不做 import 检查，避免 standalone 启动报错
+        import-check:
+          enabled: false
+        # Consul 暂时不可达时允许启动，避免配置中心故障放大为服务不可用
+        fail-fast: ${CONSUL_CONFIG_FAIL_FAST:false}
+        # 配置仅在启动时读取（属性未加 @RefreshScope），关闭长轮询避免无意义请求
+        watch:
+          enabled: ${CONSUL_CONFIG_WATCH_ENABLED:false}
+    discovery:
+      client:
+        # standalone 没有服务发现时，不把 UNKNOWN 的 discovery 组件塞进健康检查
+        health-indicator:
+          enabled: ${CONSUL_ENABLED:false}
+        composite-indicator:
+          enabled: ${CONSUL_ENABLED:false}
   ai:
     # 仅使用向量（Embedding）模型，不装配 Chat / 生成模型
     model:
