@@ -2,6 +2,13 @@
 
 > 每次开发同步更新：只记录当前有效的状态，过时内容直接覆盖/删除，不做历史归档（历史看 git log）。
 
+## 分支模型（Git Flow）
+
+- 长期分支：`main`（生产，随时可构建；发布打 `vX.Y.Z` tag）、`develop`（集成开发）。
+- 短期分支：`feature/*`（从 `develop` 切出，squash 回合 `develop`）、`release/x.y.z`（从 `develop` 切出收敛发布，`--no-ff` 合 `main` 打 tag 后回灌 `develop`）、`hotfix/*`（从 `main`/生产 tag 切出，合 `main` 打补丁 tag 后回灌 `develop`）。
+- 不设 `stable` 长期分支；生产版本由 `main` 上的 tag 标识。
+- 禁止直接 push 到 `main`/`develop`；生产镜像 tag 与 git tag 对齐。
+
 ## 项目状态（2026-11-07）
 
 - 版本：`0.0.2`（pom.xml、application.yml MCP server version、README docker tag、ChunkingSignature 签名版本四处统一；签名版本与项目版本同步，但切分算法/存储布局变更需单独提升）。

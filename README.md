@@ -419,6 +419,21 @@ docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord.co
 - **切分签名**：签名版本与项目版本同步（当前 `0.0.2`）；只改切分算法而不升版本时，旧索引不会被自动重切，需要手动 `rag_rebuild`。
 - **导入状态**：最近一次扫描统计只在内存中，重启后 `rag_sync_status` 的 `lastRun` 为空；日志仍保留历史。
 
+## 分支模型（Git Flow）
+
+| 分支 | 用途 | 合并方向 |
+|---|---|---|
+| `main` | 生产，随时可构建发布；发布打 `vX.Y.Z` tag | ← `release/*` / `hotfix/*` |
+| `develop` | 集成开发 | ← `feature/*` |
+| `feature/*` | 单个功能 | → `develop`（squash） |
+| `release/x.y.z` | 发布收敛，只修 bug | `develop` → `release/*` → `main` + tag → 回灌 `develop` |
+| `hotfix/*` | 生产缺陷 | `main` → `hotfix/*` → `main` + tag → 回灌 `develop` |
+
+- 不设 `stable` 长期分支；生产版本由 `main` 上的 tag 标识。
+- `develop` 版本号用 `X.Y.Z-SNAPSHOT`，`main` 上的 tag 为正式版本。
+- 生产镜像 tag 与 git tag 对齐（如 `small-rag:v0.0.2`），不要用 `latest` 上生产。
+- `main`/`develop` 应开启分支保护：只能通过 PR 合并，且 CI 必须通过。
+
 ## 测试
 
 ```bash
