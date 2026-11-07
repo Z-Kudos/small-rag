@@ -52,6 +52,19 @@ class LocalDistributedLockTest {
         assertThat(lock.tryAcquire("k", "b", Duration.ofSeconds(30))).isPresent();
     }
 
+    @Test
+    void isHeldReflectsOwnershipAndExpiry() {
+        LockHandle handle = lock.tryAcquire("k", "a", Duration.ofMillis(20)).orElseThrow();
+
+        assertThat(lock.isHeld(handle)).isTrue();
+        sleep(40);
+        assertThat(lock.isHeld(handle)).isFalse();
+
+        LockHandle fresh = lock.tryAcquire("k", "b", Duration.ofSeconds(30)).orElseThrow();
+        assertThat(lock.isHeld(handle)).isFalse();
+        assertThat(lock.isHeld(fresh)).isTrue();
+    }
+
     private static void sleep(long millis) {
         try {
             Thread.sleep(millis);

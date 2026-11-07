@@ -80,6 +80,19 @@ class IndexActivityGuardTest {
         assertThat(first.owner()).isEmpty();
     }
 
+    @Test
+    void failedRemoteCheckMarksLockLost() {
+        FailingRenewLock lock = new FailingRenewLock();
+        first = new IndexActivityGuard(lock, properties());
+
+        assertThat(first.tryAcquire(IndexActivityGuard.SOURCES)).isTrue();
+        lock.held = false;
+
+        // 本地续租尚未失败，但远程校验发现锁已被接管/过期
+        assertThat(first.isHeldBy(IndexActivityGuard.SOURCES)).isFalse();
+        assertThat(first.owner()).isEmpty();
+    }
+
     private static DistributedProperties properties() {
         DistributedProperties properties = new DistributedProperties();
         properties.getLock().setLease(Duration.ofSeconds(30));
@@ -91,6 +104,7 @@ class IndexActivityGuardTest {
 
         private final LocalDistributedLock delegate = new LocalDistributedLock();
         private boolean renewable = true;
+        private boolean held = true;
 
         @Override
         public Optional<LockHandle> tryAcquire(String key, String owner, Duration lease) {
@@ -105,6 +119,11 @@ class IndexActivityGuardTest {
         @Override
         public void release(LockHandle handle) {
             delegate.release(handle);
+        }
+
+        @Override
+        public boolean isHeld(LockHandle handle) {
+            return held && delegate.isHeld(handle);
         }
 
         @Override

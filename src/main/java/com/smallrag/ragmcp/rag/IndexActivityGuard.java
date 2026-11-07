@@ -139,13 +139,30 @@ public class IndexActivityGuard {
     /**
      * 当前实例是否仍安全持有该活动锁。
      *
-     * <p>重建循环与目录导入在每次写入前检查；返回 false 表示必须立即停止写入。
+     * <p>重建循环与目录导入在每次写入前检查；除了本地续租状态，还会向锁存储
+     * 校验 owner + token，避免续租线程尚未发现租约丢失时旧副本继续写入。
+     * 返回 false 表示必须立即停止写入。
      *
      * @param label 活动标识
-     * @return true 表示本地持有且租约未丢失
+     * @return true 表示本地持有且远程校验通过
      */
-    public boolean isHeldBy(String label) {
-        return !lockLost && Objects.equals(owner.get(), label);
+    public synchronized boolean isHeldBy(String label) {
+        if (lockLost || !Objects.equals(owner.get(), label)) {
+            return false;
+        }
+        LockHandle current = handle;
+        if (current == null) {
+            return false;
+        }
+        try {
+            if (lock.isHeld(current)) {
+                return true;
+            }
+            markLost(current, "远程校验失败（锁已过期或被其他副本接管）");
+        } catch (Exception e) {
+            markLost(current, "远程校验异常: " + e);
+        }
+        return false;
     }
 
     /**

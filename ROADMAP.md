@@ -37,7 +37,7 @@
 
 ### P2 多副本正确性
 - ✅ 目录导入与定时/启动扫描只由 leader 执行：`SourcesLeaderElection` 持有 `sources-leader` 租约，leader 失联后自动接管；手动同步任意副本可发起，仍由活动锁串行化。
-- ✅ 陈旧写入兜底：活动锁续租失败即 `isHeldBy=false`，重建任务、目录导入与启动重切在每次写入前校验。
+- ✅ 陈旧写入兜底：活动锁续租失败即 `isHeldBy=false`，且每次写入前调用 `DistributedLock.isHeld(handle)` 远程校验 owner+token；重建任务、目录导入与启动重切均受保护。
 - ✅ 双实例验证：两个 jar 实例只有一个 `sourcesLeader=true`；kill leader 后租约过期由另一副本接管；真实 Redis IT 覆盖锁互斥/续租/接管。
 - ⬜ 任务 owner + lease + fencing token：Qdrant 任务状态锁仍是单实例读后写，需要与 Redis 锁对齐。
 - ⬜ 归档共享存储校验；幂等写入与重复片段清理；Qdrant 状态集合与 Redis 锁的一致性校验。

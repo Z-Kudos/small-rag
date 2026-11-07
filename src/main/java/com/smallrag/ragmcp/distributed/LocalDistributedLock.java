@@ -54,6 +54,14 @@ public final class LocalDistributedLock implements DistributedLock {
     }
 
     @Override
+    public synchronized boolean isHeld(LockHandle handle) {
+        Entry current = locks.get(handle.key());
+        return current != null
+                && current.handle().expiresAtMillis() > System.currentTimeMillis()
+                && current.handle().value().equals(handle.value());
+    }
+
+    @Override
     public synchronized Optional<String> currentOwner(String key) {
         Entry current = locks.get(key);
         if (current == null || current.handle().expiresAtMillis() <= System.currentTimeMillis()) {

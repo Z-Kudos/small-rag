@@ -71,6 +71,8 @@ class IndexActivityGuardRedisIT {
         sleep(2600);
         assertThat(second.tryAcquire(IndexActivityGuard.SOURCES)).isTrue();
         assertThat(second.isHeldBy(IndexActivityGuard.SOURCES)).isTrue();
+        // 旧持有者的本地状态尚未清理，但远程校验能立即发现租约已被接管
+        assertThat(first.isHeldBy(IndexActivityGuard.SOURCES)).isFalse();
     }
 
     @Test

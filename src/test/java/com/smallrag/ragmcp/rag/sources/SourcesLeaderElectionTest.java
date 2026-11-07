@@ -77,6 +77,11 @@ class SourcesLeaderElectionTest {
             }
 
             @Override
+            public boolean isHeld(LockHandle handle) {
+                return false;
+            }
+
+            @Override
             public Optional<String> currentOwner(String key) {
                 return Optional.empty();
             }
@@ -113,6 +118,11 @@ class SourcesLeaderElectionTest {
         @Override
         public void release(LockHandle handle) {
             delegate.release(handle);
+        }
+
+        @Override
+        public boolean isHeld(LockHandle handle) {
+            return delegate.isHeld(handle);
         }
 
         @Override

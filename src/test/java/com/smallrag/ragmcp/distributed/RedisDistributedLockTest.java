@@ -74,4 +74,20 @@ class RedisDistributedLockTest {
 
         assertThat(lock.currentOwner("k")).contains("sources");
     }
+
+    @Test
+    void isHeldComparesOwnerAndToken() {
+        when(redis.opsForValue()).thenReturn(valueOperations);
+        RedisDistributedLock lock = new RedisDistributedLock(redis);
+        LockHandle handle = LockHandle.create("k", "sources", Duration.ofSeconds(30));
+        when(valueOperations.get("k")).thenReturn(handle.value());
+
+        assertThat(lock.isHeld(handle)).isTrue();
+
+        when(valueOperations.get("k")).thenReturn("sources|other-token");
+        assertThat(lock.isHeld(handle)).isFalse();
+
+        when(valueOperations.get("k")).thenReturn(null);
+        assertThat(lock.isHeld(handle)).isFalse();
+    }
 }

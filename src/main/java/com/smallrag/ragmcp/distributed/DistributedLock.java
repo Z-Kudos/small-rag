@@ -40,6 +40,17 @@ public interface DistributedLock {
     void release(LockHandle handle);
 
     /**
+     * 远程校验凭证是否仍有效（持有者 + token 完全匹配）。
+     *
+     * <p>写栅栏在每次写入前调用：本地续租线程可能尚未发现租约丢失，
+     * 直接问存储可以避免旧持有者在租约过期后继续写入。
+     *
+     * @param handle 凭证
+     * @return true 表示仍由该凭证持有
+     */
+    boolean isHeld(LockHandle handle);
+
+    /**
      * 查询当前持有者（用于诊断/接管判断）。
      *
      * @param key 锁 key

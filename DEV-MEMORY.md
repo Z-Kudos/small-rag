@@ -22,7 +22,7 @@
 ## 项目状态（2026-11-07）
 
 - 版本：`0.0.2-SNAPSHOT`（pom.xml、application.yml MCP server version、README docker tag、ChunkingSignature 签名版本四处统一；签名版本与项目版本同步，但切分算法/存储布局变更需单独提升）。
-- 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；151 测试全绿（`*RedisIT` 默认不参与）。
+- 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；154 测试全绿（`*RedisIT` 默认不参与）。
 - 启动冒烟（2026-11-07）：`java -jar` 无 Qdrant/Redis/Embedding 也能启动，`/actuator/health` UP、MCP `initialize` 正常；standalone 下 Redis health indicator 关闭（`management.health.redis.enabled` 跟随 distributed 开关），distributed=true 且 Redis 在线时 health 显示 redis UP。
 - Spring 多构造器 bean 必须给 Spring 用的构造器加 `@Autowired`（`IndexActivityGuard`、`QueryCircuitBreaker`、`ReindexStateStore`）；否则 Spring 7.1 RC 报 "No default constructor found"（`mvn test` 不覆盖上下文启动，只有 jar 冒烟能发现）。
 - Dockerfile 无 `# syntax=` 指令（国内网络拉不到 docker.io 的 frontend 镜像；所用特性内置 BuildKit 全支持）；compose/.env 镜像 tag 随项目版本走 `APP_IMAGE_TAG`。
@@ -66,8 +66,8 @@
 ## 分布式模式（P0/P1 已实现）
 
 - 配置：`smallrag.distributed.enabled`（默认 false）、`lock.lease`（30s）、`lock.renew-interval`（10s，下限 10ms）、`lock.key-prefix`；Redis 走 `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD`。`DistributedLockConfig` 按开关装配 `RedisDistributedLock` 或 `LocalDistributedLock`。
-- `DistributedLock` 语义：`tryAcquire(key, owner, lease)` / `renew` / `release` / `currentOwner`；`LockHandle` 携带 owner+token+本地到期时间，续租/释放按 value 匹配，旧持有者不会误删新锁。
-- `IndexActivityGuard`：持锁期间后台每 `renew-interval` 续租；续租失败或异常 → `lockLost=true`、清空 owner、停止续租；`isHeldBy(label)` 返回 false 后重建任务（`Task.isWritable()`）、目录导入、启动重切立即停止写入。`@PreDestroy` 只停止续租，不主动释放租约，避免优雅停机时过早接管。
+- `DistributedLock` 语义：`tryAcquire(key, owner, lease)` / `renew` / `release` / `isHeld(handle)` / `currentOwner`；`LockHandle` 携带 owner+token+本地到期时间，续租/释放/校验按 value 匹配，旧持有者不会误删或误写。
+- `IndexActivityGuard`：持锁期间后台每 `renew-interval` 续租；续租失败或异常 → `lockLost=true`、清空 owner、停止续租；`isHeldBy(label)` 除本地状态外，还会调用 `DistributedLock.isHeld(handle)` 远程校验 owner+token（Redis GET / 本地 map），发现过期或被接管立即 `markLost`。重建任务（`Task.isWritable()`）、目录导入、启动重切在每次写入前校验，因此旧副本即使续租线程尚未苏醒也无法继续写入。`@PreDestroy` 只停止续租，不主动释放租约，避免优雅停机时过早接管。
 - `SourcesLeaderElection`：各副本竞争 `smallrag:lock:sources-leader` 租约（`ApplicationRunner` 先选一次，之后按 `renew-interval` 续租/重选）；启动/定时/watcher 自动扫描仅 leader 执行，手动 `rag_sync_sources` 任意副本可执行。leader 丢失后下一轮选主接管；旧 leader 在下次续租失败前可能短暂认为自己是 leader，但实际写入仍由 `IndexActivityGuard` 兜底，不会双写。`@PreDestroy` 主动释放 leader 锁。`/actuator/health` 的 `sourcesLeader` 可确认当前 leader。
 - 容器：`SMALL_RAG_RUNTIME=all-in-one`（默认，supervisord 三进程）或 `app-only`（`docker/supervisord-app-only.conf` 只跑应用）；`docker/entrypoint.sh` 选择配置；`start-app.sh` 在 app-only 下跳过本地 Qdrant 等待。
 - Overlay：`compose.distributed.yaml` 引入外部 Qdrant/Redis/Consul/Embedding + HAProxy gateway（`docker/haproxy.cfg`，`server-template` 发现副本），应用端口用 `!reset []` 去掉；需 Compose v2.24+。`small_rag_data` 为多副本共享归档卷。Consul 为单节点 server（`bootstrap-expect=1` + `consul_data` 卷）。

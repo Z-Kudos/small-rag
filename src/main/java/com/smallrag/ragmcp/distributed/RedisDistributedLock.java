@@ -53,6 +53,12 @@ public final class RedisDistributedLock implements DistributedLock {
     }
 
     @Override
+    public boolean isHeld(LockHandle handle) {
+        String value = redis.opsForValue().get(handle.key());
+        return handle.value().equals(value);
+    }
+
+    @Override
     public Optional<String> currentOwner(String key) {
         String value = redis.opsForValue().get(key);
         return value == null ? Optional.empty() : Optional.of(LockHandle.ownerOf(value));
