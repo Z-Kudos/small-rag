@@ -75,6 +75,7 @@
 - Consul KV 默认 `KEY_VALUE` 格式：**每项一个 key**，如 `config/small-rag/logging.level.com.smallrag.ragmcp=DEBUG`；`config/small-rag/data` 只在 `format=YAML/PROPERTIES` 时使用。启动加 `SPRING_CONFIG_IMPORT=optional:consul:`；不设置 import 时靠 `import-check.enabled=false` 避免启动检查报错。
 - 已知边界：任务快照锁仍是单实例读后写、无 fencing token；真实写入互斥已由 Redis 活动锁保证。leader 仅约束自动扫描，手动同步仍可在任意副本发起。
 - 集成验证：`IndexActivityGuardRedisIT` 与 `SourcesLeaderElectionRedisIT` 默认跳过；本机 `redis-server --port 6390 --save '' --daemonize yes` 后 `mvn test -Dtest='*RedisIT' -Dsmallrag.redis.it=true` 验证跨副本互斥、租约续期、持有者失联后的接管。另用两个 jar 实例（18080/18082，lease=4s）验证只有一个 `sourcesLeader=true`，kill leader 后约 5s 由另一副本接管。Consul 已验证注册、健康检查 passing、停止后自动注销、KV 配置注入。
+- 分布式端到端（2026-11-07）：本机 Qdrant + Redis + Consul + 假 OpenAI Embedding（1024 维）+ 两个 jar 副本；A 入库后 B 能检索到同一文档；A 全量重建（31 篇）期间 B 的 `rag_rebuild` 返回“已有重建任务正在执行”（抢锁失败时通过 `IndexActivityGuard.activeOwner()` 查询真正持有者）；kill leader 后另一副本接管 `sourcesLeader`。未跑通：跨副本 `rag_task_status`/`rag_task_resume` 仍只看到本实例内存中的任务（P2 已知边界）。
 
 ## RAG 评测
 

@@ -159,7 +159,7 @@ public class SourceSyncService {
         }
         if (!activity.tryAcquire(ACTIVITY_LABEL)) {
             throw new IllegalStateException("其他索引任务正在执行，请稍后重试: "
-                    + activity.owner().orElse("unknown"));
+                    + activity.activeOwner().orElse("unknown"));
         }
 
         running = true;

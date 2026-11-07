@@ -72,7 +72,7 @@ public class ChunkingReindexRunner implements ApplicationRunner {
         String label = IndexActivityGuard.reindex("startup-rechunk");
         if (!activity.tryAcquire(label)) {
             log.warn("其他索引活动正在运行，跳过启动自动重切: owner={}",
-                    activity.owner().orElse("unknown"));
+                    activity.activeOwner().orElse("unknown"));
             return;
         }
         try {

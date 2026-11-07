@@ -173,6 +173,27 @@ public class IndexActivityGuard {
     }
 
     /**
+     * 当前活动锁的持有者（本地优先，其次查询锁存储）。
+     *
+     * <p>多副本下本实例可能只是“抢锁失败者”，本地 {@link #owner()} 为空；
+     * 用于把真正持有者写进错误信息/日志。
+     *
+     * @return 持有者标识；无法确定时为空
+     */
+    public Optional<String> activeOwner() {
+        String local = owner.get();
+        if (local != null) {
+            return Optional.of(local);
+        }
+        try {
+            return lock.currentOwner(lockKey());
+        } catch (Exception e) {
+            log.debug("查询索引活动锁持有者失败: {}", e.toString());
+            return Optional.empty();
+        }
+    }
+
+    /**
      * 续租一次；失败则标记锁丢失。包级可见，便于单元测试直接触发。
      */
     synchronized void renewLock() {

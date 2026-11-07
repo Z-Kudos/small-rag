@@ -151,7 +151,7 @@ public class ReindexTaskService {
         runningTaskId.set(owner);
         if (!activity.tryAcquire(activityLabel(owner))) {
             log.warn("恢复重建任务时其他索引活动仍在运行，将在其结束后再操作: owner={}",
-                    activity.owner().orElse("unknown"));
+                    activity.activeOwner().orElse("unknown"));
         }
         task.markInterrupted();
         recoveredTask = task;
@@ -177,7 +177,7 @@ public class ReindexTaskService {
             runningTaskId.set(latest.taskId);
             if (!activity.tryAcquire(activityLabel(latest.taskId))) {
                 log.warn("恢复重建任务锁失败，其他索引活动正在运行: owner={}",
-                        activity.owner().orElse("unknown"));
+                        activity.activeOwner().orElse("unknown"));
             }
             latest.markInterrupted();
             recoveredTask = latest;
@@ -245,7 +245,7 @@ public class ReindexTaskService {
         String taskId = UUID.randomUUID().toString();
         String label = activityLabel(taskId);
         if (!activity.tryAcquire(label)) {
-            String owner = activity.owner().orElse("unknown");
+            String owner = activity.activeOwner().orElse("unknown");
             if (owner.equals(IndexActivityGuard.SOURCES)) {
                 throw new IllegalStateException("目录导入正在执行，请稍后重试");
             }

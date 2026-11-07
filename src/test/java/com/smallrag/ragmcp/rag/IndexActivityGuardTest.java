@@ -49,6 +49,9 @@ class IndexActivityGuardTest {
         assertThat(first.isHeldBy(IndexActivityGuard.SOURCES)).isTrue();
         assertThat(second.tryAcquire(IndexActivityGuard.SOURCES)).isFalse();
         assertThat(second.isHeldBy(IndexActivityGuard.SOURCES)).isFalse();
+        // 抢锁失败的副本仍能报告真正持有者
+        assertThat(second.owner()).isEmpty();
+        assertThat(second.activeOwner()).contains(IndexActivityGuard.SOURCES);
 
         first.release(IndexActivityGuard.SOURCES);
         assertThat(second.tryAcquire(IndexActivityGuard.SOURCES)).isTrue();
