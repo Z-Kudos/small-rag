@@ -2,6 +2,7 @@ package com.smallrag.ragmcp.config;
 
 import com.smallrag.ragmcp.rag.IndexActivityGuard;
 import com.smallrag.ragmcp.rag.QueryCircuitBreaker;
+import com.smallrag.ragmcp.rag.sources.SourcesLeaderElection;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.Status;
@@ -22,10 +23,12 @@ class IndexLockHealthIndicatorTest {
         properties.setInstanceId("replica-1");
         IndexActivityGuard guard = mock(IndexActivityGuard.class);
         when(guard.owner()).thenReturn(Optional.of(IndexActivityGuard.SOURCES));
+        SourcesLeaderElection leaderElection = mock(SourcesLeaderElection.class);
+        when(leaderElection.isLeader()).thenReturn(true);
 
         QueryCircuitBreaker breaker = new QueryCircuitBreaker(new RagProperties());
         IndexLockHealthIndicator indicator = new IndexLockHealthIndicator(
-                properties, guard, breaker, new MockEnvironment());
+                properties, guard, leaderElection, breaker, new MockEnvironment());
 
         Health health = indicator.health();
 
@@ -34,6 +37,7 @@ class IndexLockHealthIndicatorTest {
                 .containsEntry("instanceId", "replica-1")
                 .containsEntry("distributed", true)
                 .containsEntry("activeLock", IndexActivityGuard.SOURCES)
+                .containsEntry("sourcesLeader", true)
                 .containsEntry("queryCircuit", "CLOSED");
     }
 }

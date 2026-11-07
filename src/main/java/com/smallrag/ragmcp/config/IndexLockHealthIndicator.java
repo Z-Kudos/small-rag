@@ -2,6 +2,7 @@ package com.smallrag.ragmcp.config;
 
 import com.smallrag.ragmcp.rag.IndexActivityGuard;
 import com.smallrag.ragmcp.rag.QueryCircuitBreaker;
+import com.smallrag.ragmcp.rag.sources.SourcesLeaderElection;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
@@ -25,6 +26,7 @@ public class IndexLockHealthIndicator implements HealthIndicator {
 
     private final DistributedProperties distributedProperties;
     private final IndexActivityGuard activityGuard;
+    private final SourcesLeaderElection leaderElection;
     private final QueryCircuitBreaker queryCircuitBreaker;
     private final Environment environment;
 
@@ -36,6 +38,7 @@ public class IndexLockHealthIndicator implements HealthIndicator {
                 .withDetail("distributed", distributedProperties.isEnabled())
                 .withDetail("profiles", profiles)
                 .withDetail("activeLock", activityGuard.owner().orElse("none"))
+                .withDetail("sourcesLeader", leaderElection.isLeader())
                 .withDetail("queryCircuit", queryCircuitBreaker.state())
                 .withDetail("queryFailureRate", queryCircuitBreaker.failureRate())
                 .build();

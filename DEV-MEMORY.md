@@ -14,13 +14,14 @@
 - 保持 standalone 单容器默认运行不变；新增可选 `distributed` 模式：外部 Qdrant/Redis/Consul/Embedding + 多副本。
 - **P0 已完成**：`DistributedLock`（进程内 / Redis `SET NX PX` + Lua）、`IndexActivityGuard` 后台续租与丢失即停写、双运行模式（`SMALL_RAG_RUNTIME=all-in-one|app-only`）、`compose.distributed.yaml` + HAProxy gateway。
 - **P1 已完成**：Resilience4j 检索熔断、`/actuator/health` 诊断、Consul discovery/config（默认关闭，`CONSUL_ENABLED` 打开）。
-- 待做：P2 任务 owner/lease/fencing、leader-only 扫描；P3 可选 Gateway；P4 RAG 评测与 Testcontainers。
+- **P2 进行中**：目录自动扫描已 leader 化（`SourcesLeaderElection`），陈旧写入由活动锁续租失败兜底；任务 fencing token 与幂等清理待做。
+- 待做：P2 剩余任务 owner/lease/fencing；P3 可选 Gateway；P4 RAG 评测与 Testcontainers。
 - 详细里程碑与验收见 `ROADMAP.md`。
 
 ## 项目状态（2026-11-07）
 
 - 版本：`0.0.2-SNAPSHOT`（pom.xml、application.yml MCP server version、README docker tag、ChunkingSignature 签名版本四处统一；签名版本与项目版本同步，但切分算法/存储布局变更需单独提升）。
-- 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；141 测试全绿（`IndexActivityGuardRedisIT` 默认不参与）。
+- 构建：本机默认 JDK 21 编不了 release=25，用 `JAVA_HOME='D://java//jdk-27.0.1.0.3' mvn clean package`（JDK 27）；144 测试全绿（两个 `*RedisIT` 默认不参与）。
 - 启动冒烟（2026-11-07）：`java -jar` 无 Qdrant/Redis/Embedding 也能启动，`/actuator/health` UP、MCP `initialize` 正常；standalone 下 Redis health indicator 关闭（`management.health.redis.enabled` 跟随 distributed 开关），distributed=true 且 Redis 在线时 health 显示 redis UP。
 - Spring 多构造器 bean 必须给 Spring 用的构造器加 `@Autowired`（`IndexActivityGuard`、`QueryCircuitBreaker`、`ReindexStateStore`）；否则 Spring 7.1 RC 报 "No default constructor found"（`mvn test` 不覆盖上下文启动，只有 jar 冒烟能发现）。
 - Dockerfile 无 `# syntax=` 指令（国内网络拉不到 docker.io 的 frontend 镜像；所用特性内置 BuildKit 全支持）；compose/.env 镜像 tag 随项目版本走 `APP_IMAGE_TAG`。
@@ -66,12 +67,13 @@
 - 配置：`smallrag.distributed.enabled`（默认 false）、`lock.lease`（30s）、`lock.renew-interval`（10s，下限 10ms）、`lock.key-prefix`；Redis 走 `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD`。`DistributedLockConfig` 按开关装配 `RedisDistributedLock` 或 `LocalDistributedLock`。
 - `DistributedLock` 语义：`tryAcquire(key, owner, lease)` / `renew` / `release` / `currentOwner`；`LockHandle` 携带 owner+token+本地到期时间，续租/释放按 value 匹配，旧持有者不会误删新锁。
 - `IndexActivityGuard`：持锁期间后台每 `renew-interval` 续租；续租失败或异常 → `lockLost=true`、清空 owner、停止续租；`isHeldBy(label)` 返回 false 后重建任务（`Task.isWritable()`）、目录导入、启动重切立即停止写入。`@PreDestroy` 只停止续租，不主动释放租约，避免优雅停机时过早接管。
+- `SourcesLeaderElection`：各副本竞争 `smallrag:lock:sources-leader` 租约（`ApplicationRunner` 先选一次，之后按 `renew-interval` 续租/重选）；启动/定时/watcher 自动扫描仅 leader 执行，手动 `rag_sync_sources` 任意副本可执行。leader 丢失后下一轮选主接管；旧 leader 在下次续租失败前可能短暂认为自己是 leader，但实际写入仍由 `IndexActivityGuard` 兜底，不会双写。`@PreDestroy` 主动释放 leader 锁。`/actuator/health` 的 `sourcesLeader` 可确认当前 leader。
 - 容器：`SMALL_RAG_RUNTIME=all-in-one`（默认，supervisord 三进程）或 `app-only`（`docker/supervisord-app-only.conf` 只跑应用）；`docker/entrypoint.sh` 选择配置；`start-app.sh` 在 app-only 下跳过本地 Qdrant 等待。
 - Overlay：`compose.distributed.yaml` 引入外部 Qdrant/Redis/Consul/Embedding + HAProxy gateway（`docker/haproxy.cfg`，`server-template` 发现副本），应用端口用 `!reset []` 去掉；需 Compose v2.24+。`small_rag_data` 为多副本共享归档卷。Consul 为单节点 server（`bootstrap-expect=1` + `consul_data` 卷）。
 - Consul：`CONSUL_ENABLED`（默认 false）同时控制 discovery/config；注册服务 `small-rag`，健康检查 `http://<ip>:18080/actuator/health`（15s）。`CONSUL_CONFIG_FAIL_FAST=false`；config watch 默认关闭（`CONSUL_CONFIG_WATCH_ENABLED`），因为 `RagProperties` 未加 `@RefreshScope`。
 - Consul KV 默认 `KEY_VALUE` 格式：**每项一个 key**，如 `config/small-rag/logging.level.com.smallrag.ragmcp=DEBUG`；`config/small-rag/data` 只在 `format=YAML/PROPERTIES` 时使用。启动加 `SPRING_CONFIG_IMPORT=optional:consul:`；不设置 import 时靠 `import-check.enabled=false` 避免启动检查报错。
-- 已知边界：仍保留每副本的启动/定时扫描触发，由锁串行化；任务接管（fencing）与 leader-only 扫描未接入。
-- 集成验证：`IndexActivityGuardRedisIT` 默认跳过；本机 `redis-server --port 6390 --save '' --daemonize yes` 后 `mvn test -Dtest=IndexActivityGuardRedisIT -Dsmallrag.redis.it=true` 验证跨副本互斥、租约续期与持有者失联后的接管。Consul 已验证注册、健康检查 passing、停止后自动注销、KV 配置注入。
+- 已知边界：任务快照锁仍是单实例读后写、无 fencing token；真实写入互斥已由 Redis 活动锁保证。leader 仅约束自动扫描，手动同步仍可在任意副本发起。
+- 集成验证：`IndexActivityGuardRedisIT` 与 `SourcesLeaderElectionRedisIT` 默认跳过；本机 `redis-server --port 6390 --save '' --daemonize yes` 后 `mvn test -Dtest='*RedisIT' -Dsmallrag.redis.it=true` 验证跨副本互斥、租约续期、持有者失联后的接管。另用两个 jar 实例（18080/18082，lease=4s）验证只有一个 `sourcesLeader=true`，kill leader 后约 5s 由另一副本接管。Consul 已验证注册、健康检查 passing、停止后自动注销、KV 配置注入。
 
 ## 检索熔断与健康检查
 

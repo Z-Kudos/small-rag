@@ -36,10 +36,12 @@
 - ✅ Consul config（`spring-cloud-starter-consul-config`）：`SPRING_CONFIG_IMPORT=optional:consul:` 时读取 KV；默认 `KEY_VALUE` 格式，`fail-fast=false`，config watch 默认关闭。
 
 ### P2 多副本正确性
-- 任务 owner + lease + fencing token：owner 失联后由其他副本接管。
-- 归档共享存储校验；目录导入与定时扫描只由 leader 执行。
-- 幂等写入与重复片段清理；任务状态集合与 Redis 锁的一致性校验。
-- 测试：双实例并发 `reindex` / `sync` 的互斥、续租、接管与释放。
+- ✅ 目录导入与定时/启动扫描只由 leader 执行：`SourcesLeaderElection` 持有 `sources-leader` 租约，leader 失联后自动接管；手动同步任意副本可发起，仍由活动锁串行化。
+- ✅ 陈旧写入兜底：活动锁续租失败即 `isHeldBy=false`，重建任务、目录导入与启动重切在每次写入前校验。
+- ✅ 双实例验证：两个 jar 实例只有一个 `sourcesLeader=true`；kill leader 后租约过期由另一副本接管；真实 Redis IT 覆盖锁互斥/续租/接管。
+- ⬜ 任务 owner + lease + fencing token：Qdrant 任务状态锁仍是单实例读后写，需要与 Redis 锁对齐。
+- ⬜ 归档共享存储校验；幂等写入与重复片段清理；Qdrant 状态集合与 Redis 锁的一致性校验。
+- ⬜ 测试：双实例并发 `reindex` / `sync` 的完整互斥、续租、接管与释放（当前覆盖活动锁与 leader 选举）。
 
 ### P3 Spring Cloud Gateway（可选）
 - 独立模块或独立 compose 服务，WebFlux Gateway 路由 `/mcp`。
