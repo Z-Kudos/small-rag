@@ -134,7 +134,23 @@
         </plugins>
     </build>
 
+    <!--
+        仓库顺序 = 解析顺序：命中即停止。
+        阿里云公共仓库（聚合 Maven Central）放在最前，避免国内构建时回源到国外站点；
+        Spring 的 RC/milestone 构件只有 repo.spring.io 提供，放在其后作为回退。
+    -->
     <repositories>
+        <repository>
+            <id>aliyun-public</id>
+            <name>Aliyun Public</name>
+            <url>https://maven.aliyun.com/repository/public</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
         <repository>
             <id>spring-milestones</id>
             <name>Spring Milestones</name>
@@ -144,4 +160,19 @@
             </snapshots>
         </repository>
     </repositories>
+
+    <!-- 插件同样走阿里云，避免 maven-compiler / spring-boot 等插件回源 -->
+    <pluginRepositories>
+        <pluginRepository>
+            <id>aliyun-public</id>
+            <name>Aliyun Public</name>
+            <url>https://maven.aliyun.com/repository/public</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </pluginRepository>
+    </pluginRepositories>
 </project>

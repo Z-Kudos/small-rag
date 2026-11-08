@@ -22,12 +22,13 @@
 - **JDK 23+ 默认不自动发现注解处理器**：必须 `<maven.compiler.proc>full</maven.compiler.proc>`，否则 Lombok "找不到符号"。
 - 本机构建（默认 JAVA_HOME 是 JDK 21，编不了 release=25）：`JAVA_HOME='D:\java\jdk-27.0.1.0.3' mvn clean package`。
 - 验证命令：`mvn clean package -DskipTests`；单测 `mvn test`（不依赖外部服务）。
+- **依赖源**：`pom.xml` 的 `<repositories>` / `<pluginRepositories>` 首位是 `aliyun-public`（`https://maven.aliyun.com/repository/public`），其后才是 `spring-milestones`；容器构建额外用 `docker/maven-settings.xml`（`mirrorOf=*,!spring-milestones`）。**不要**把阿里云仓库放到 spring-milestones 之后，也不要引入 `mirrorOf=*` 而不排除 spring-milestones，否则 RC 构件会解析失败。
 
 ## 容器化
 
 - **双运行模式**：默认 `SMALL_RAG_RUNTIME=all-in-one`，镜像同时包含应用、Qdrant、llama.cpp，`supervisord` 作为 PID 1；`app-only` 只运行应用（`docker/supervisord-app-only.conf`），依赖由外部提供。`docker/entrypoint.sh` 按 `SMALL_RAG_RUNTIME` 选择配置。**standalone 必须保持零新增外部依赖**。
 - 只对外暴露 **18080**；all-in-one 时 Qdrant（6333/6334）与 Embedding 服务（11434）绑定 `127.0.0.1`。distributed 模式由 gateway（HAProxy，P3 可替换为 Spring Cloud Gateway）统一暴露 18080。
-- 多阶段构建：`maven:3.9-eclipse-temurin-25` 构建 → 以 `qdrant/qdrant`（debian:13-slim）为基底**从源码编译 llama-server**（`LLAMA_CPP_TAG`，默认 `v0.9.0`；编译基底=运行基底，无 glibc 兼容问题；源码包走 gh-proxy 加速）→ 拷入 Temurin JRE；基础镜像可用 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE` 替换。**不用 Ollama 镜像**（3.25GB，国内拉取过慢）。
+- 多阶段构建：`maven:3.9-eclipse-temurin-25` 构建（`-s docker/maven-settings.xml` 走阿里云）→ 以 `qdrant/qdrant`（debian:13-slim）为基底**从源码编译 llama-server**（`LLAMA_CPP_TAG`，默认 `v0.9.0`；编译基底=运行基底，无 glibc 兼容问题；源码包走 gh-proxy 加速）→ 拷入 Temurin JRE；基础镜像可用 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE` 替换。**不用 Ollama 镜像**（3.25GB，国内拉取过慢）。
 - 默认向量模型 Qwen3-Embedding-0.6B Q8_0（1024 维），`start-llama.sh` 首次启动从 ModelScope 下载 GGUF（`EMBEDDING_MODEL_URL`→`EMBEDDING_MODEL_PATH`，断点续传）并以 `--embeddings --pooling last` 启动 llama-server（**Qwen3-Embedding 必须 last pooling**）；`start-app.sh` 等待其 `/health` 就绪。
 - 启动脚本：`docker/start-qdrant.sh`、`start-llama.sh`、`start-app.sh`，由 `docker/supervisord.conf`（all-in-one）或 `supervisord-app-only.conf` 调度；数据统一 `/data`。
 - 目录导入的源目录用只读 bind mount 挂到 `/data/sources/...`：Compose 用可选 `compose.sources.yaml`（`make up-sources`，宿主机路径由 `.env` 的 `SMALL_RAG_SOURCE_HOST` 控制），或用 `docker run -v /host/notes:/data/sources/notes:ro -e SMALL_RAG_SOURCES_ENABLED=true -e SMALL_RAG_SOURCE_DIRS='notes=/data/sources/notes'`；`SMALL_RAG_SOURCE_DIRS` 必须是容器内路径。源目录必须对容器内 UID `10001` 可读；增量状态默认写 `<archive-dir>/.sources/state.json`，随归档卷持久化。

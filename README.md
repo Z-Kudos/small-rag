@@ -43,6 +43,18 @@ MCP 端点：`http://localhost:18080/mcp`。
 
 > `EMBEDDING_DIMENSION=1024` 必须与 Qdrant 集合维度一致。之前用 1536 维模型创建过集合的，请设置新的 `QDRANT_COLLECTION` 或删除旧集合后再启动。
 
+### 依赖下载加速（阿里云镜像）
+
+`pom.xml` 的 `<repositories>` / `<pluginRepositories>` 已把阿里云公共仓库放在最前（`aliyun-public`，聚合 Maven Central），Spring 的 RC/milestone 构件随后从 `repo.spring.io/milestone` 回退，因此本机与容器构建默认都走国内站点，无需再改 `~/.m2/settings.xml`。
+
+容器构建额外使用 `docker/maven-settings.xml`（`mirrorOf=*,!spring-milestones`），把所有仓库统一镜像到阿里云：
+
+```bash
+docker build -t small-rag:0.0.3 .          # 自动使用该 settings
+```
+
+如需改回官方源或换其他镜像，修改 `pom.xml` 中仓库顺序/URL 或 `docker/maven-settings.xml` 即可；若本机 `~/.m2/settings.xml` 里已有 `<mirrorOf>*</mirrorOf>`，它会覆盖 pom 配置，此时需要把 `spring-milestones` 加进 `mirrorOf` 的排除列表。
+
 ## 容器部署（单容器）
 
 镜像内同时运行应用、Qdrant、llama.cpp（llama-server Embedding 推理），由 `supervisord` 管理；**只对外暴露 `18080`**，其余服务绑定回环地址。数据统一在 `/data`（Qdrant 向量库与重建任务状态 + Embedding 模型 + 文档归档），建议挂载卷。
@@ -66,7 +78,7 @@ docker build -t small-rag:0.0.3 .
 docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.3
 ```
 
-国内镜像可通过 `.env` 覆盖 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE`，llama.cpp 源码版本用 `LLAMA_CPP_TAG`（默认 `v0.9.0`，镜像内从源码编译 llama-server，与运行时同基底无 glibc 兼容问题）。bind mount 时需保证容器内 UID `10001` 可写：`sudo chown -R 10001:10001 /path/to/data`。
+国内镜像可通过 `.env` 覆盖 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE`，llama.cpp 源码版本用 `LLAMA_CPP_TAG`（默认 `v0.9.0`，镜像内从源码编译 llama-server，与运行时同基底无 glibc 兼容问题）。构建阶段的 Maven 依赖统一走阿里云（`docker/maven-settings.xml`），apt 走清华镜像。bind mount 时需保证容器内 UID `10001` 可写：`sudo chown -R 10001:10001 /path/to/data`。
 
 ### 挂载宿主机 Markdown 目录
 
