@@ -34,7 +34,7 @@ related: [README.md, docs/v0.0.3/plan.md]
 ### 3.2 归档与状态
 
 - **归档索引**：`rag_list` / 启动重切使用 `.archive/index.json` 摘要索引，不再加载全部原文；索引丢失、版本不符或文档 id 集合不一致时会全量重建一次。索引内容陈旧但 id 集合一致时可能保留旧签名，异常后建议手动重建索引 / 重切。
-- **重启续接边界**：Qdrant 状态集合中的锁是单实例读后写，不是分布式 CAS；多副本部署不互斥。锁 point 丢失但任务快照仍在时，按单实例假设由最近一个未完成 / 未撤销任务重新持锁；多副本下可能误抢。v0.0.3 WP2 将改为 Redis 租约 + fencing token。
+- **重启续接边界**：任务锁的权威实现在 `DistributedLock`（standalone 进程内租约、distributed Redis 租约 `reindex-task` + 单调 epoch）；Qdrant 状态集合里的锁 point 只是诊断镜像，Qdrant 没有 CAS，不参与互斥。重启后只有抢到租约的副本才接管任务；租约被其他副本持有时不改写快照。旧持有者恢复后即使本地租约尚未过期，也会因 epoch 落后被拒绝写入。distributed 下 Redis 不可用时拒绝写索引（fail-closed）。
 - **启动顺序**：`ChunkingReindexRunner` 在 `ApplicationReadyEvent` 之前同步执行；若检测到有重启时中断、待续接的重建任务，则跳过自动重切并交给续接任务处理，避免重复重建。
 - **导入状态**：最近一次扫描统计只在内存中，重启后 `rag_sync_status` 的 `lastRun` 为空；日志仍保留历史。
 
@@ -46,8 +46,8 @@ related: [README.md, docs/v0.0.3/plan.md]
 
 ### 3.4 集群
 
-- **MCP 会话**：`STREAMABLE` 会话保存在单实例内存；当前 HAProxy 为 `roundrobin`，跨副本调用会丢会话。v0.0.3 WP1 将在 distributed 模式改用 `STATELESS`。
-- **任务可见性**：`rag_task_status` / `rag_task_resume` 目前只读本实例内存中的任务，跨副本不可见。v0.0.3 WP3 修复。
+- **MCP 会话**：standalone 使用 `STREAMABLE`（会话保存在单实例内存）；distributed 必须设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS`，会话不再依赖单副本，HAProxy 保持 `roundrobin`。漏配时启动只告警，跨副本调用仍可能 404。`STATELESS` 不支持 server-initiated notifications（当前未使用）。
+- **任务可见性**：`rag_task_status` / `rag_task_resume` / `rag_task_cancel` 目前仍只读本实例内存中的任务，跨副本不可见；在非持有副本上操作会按任务锁提示持有者。v0.0.3 WP3 修复。
 - **Redis 故障**：索引活动锁与 leader 选举失败，重建 / 目录导入停止并返回可读错误；检索不受影响。恢复后自动重新竞选。
 - **归档卷**：distributed 模式必须共享且可写；多主机需 RWX 存储（NFS / CephFS），否则无法自动重切 / 续接。
 
@@ -58,10 +58,10 @@ related: [README.md, docs/v0.0.3/plan.md]
 
 ## 4. 影响与缓解
 
-- **影响**：索引写入窗口可能导致短暂重复片段；集群下无 fencing 时可能双写；归档卷不可写时自动重切失效。
-- **缓解**：升级前备份归档与 Qdrant 快照；集群部署使用共享 RWX 卷；异常后执行 `rag_rebuild`；按 `plan.md` 的 WP2 / WP4 修复所有权与幂等问题。
+- **影响**：索引写入窗口可能导致短暂重复片段；跨副本任务状态仍不可见；归档卷不可写时自动重切失效。
+- **缓解**：升级前备份归档与 Qdrant 快照；集群部署使用共享 RWX 卷并设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS`；异常后执行 `rag_rebuild`；按 `plan.md` 的 WP3 / WP4 修复任务可见性与幂等问题。
 
 ## 5. 演进
 
-- v0.0.3 计划修复项：WP1 `STATELESS`、WP2 fencing、WP3 跨副本任务状态、WP4 确定性 chunk id、WP5 观测、WP6 Testcontainers。
+- v0.0.3 计划 / 已落地：WP1 `STATELESS`（已完成）、WP2 Redis 租约 + fencing epoch（已完成）、WP3 跨副本任务状态、WP4 确定性 chunk id、WP5 观测、WP6 Testcontainers。
 - 修复完成后在下一版本的 `docs/v<next>/design/limitations.md` 更新；本文随 v0.0.3 冻结。

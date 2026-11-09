@@ -223,7 +223,7 @@ public class RagMcpTools {
      *         lastProgressAt、stalled、cancelRequested、revoked、lockReleaseAt 等）；
      *         从未执行过重建时返回 {@code status=IDLE}
      */
-    @McpTool(name = "rag_task_status", description = "查询重建任务进度：传 taskId 查指定任务，不传返回最近一次任务；返回 status/total/processed/percent/stalled/cancelRequested/revoked/lockReleaseAt，无任务时 status=IDLE")
+    @McpTool(name = "rag_task_status", description = "查询重建任务进度：传 taskId 查指定任务，不传返回最近一次任务；返回 status/total/processed/percent/stalled/cancelRequested/revoked/lockReleaseAt/ownerInstance/epoch/heartbeatAt，无任务时 status=IDLE")
     public String ragTaskStatus(
             @McpToolParam(description = "任务 id；为空表示最近一次重建任务", required = false) String taskId) {
         log.debug("MCP rag_task_status 调用，taskId={}", taskId);

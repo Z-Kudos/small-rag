@@ -6,6 +6,9 @@ import com.smallrag.ragmcp.rag.RagService;
 
 import com.smallrag.ragmcp.config.QdrantProperties;
 import com.smallrag.ragmcp.config.RagProperties;
+import com.smallrag.ragmcp.config.DistributedProperties;
+import com.smallrag.ragmcp.distributed.DistributedLock;
+import com.smallrag.ragmcp.distributed.FencedLease;
 import com.smallrag.ragmcp.rag.archive.DocumentArchive;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -14,8 +17,10 @@ import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Deque;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Objects;
@@ -31,23 +36,28 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 异步重建任务：提交后立即返回 taskId，由后台线程执行，进度与任务锁持久化到 Qdrant。
+ * 异步重建任务：提交后立即返回 taskId，由后台线程执行，进度快照持久化到 Qdrant。
  *
  * <p>同一时刻只允许一个重建任务（{@code rag_reindex} 全量 / {@code rag_rebuild}），
  * 重复提交会返回错误。任务状态机：
  * {@code queued → clearing? → reindexing → completed|aborted|cancelled|failed}；
- * 进程重启时未完成的任务进入 {@code interrupted} 并<b>继续持有任务锁</b>，
+ * 进程重启时未完成的任务进入 {@code interrupted} 并<b>重新持有任务锁</b>，
  * 由 {@code resume-on-startup} 自动续接（或 {@code rag_task_resume} 手动续接、
  * {@code rag_task_cancel} 放弃）。
  *
- * <p>持久化（{@link ReindexStateStore}）：任务快照与任务锁写入 Qdrant 的独立集合
- * {@code <rag.qdrant.collection-name>_reindex_state}，跟随 Qdrant 的持久化，
+ * <p><b>任务所有权</b>：权威锁是 {@code <smallrag.distributed.lock.key-prefix>reindex-task}
+ * 租约（standalone 进程内、distributed Redis），并带单调 {@code epoch} 栅栏；每次
+ * {@code delete/add} 前由 {@link ReindexListener#isWritable()} 校验“活动锁仍持有 + 任务锁
+ * 仍持有 + epoch 仍最新”。distributed 模式下 Redis 不可用时拒绝写索引（fail-closed）。
+ *
+ * <p>持久化（{@link ReindexStateStore}）：任务快照与任务锁<b>诊断镜像</b>写入 Qdrant 的
+ * 独立集合 {@code <rag.qdrant.collection-name>_reindex_state}，跟随 Qdrant 的持久化，
  * 不依赖应用容器的文件系统；快照保留最近 {@value #MAX_RETAINED_TASKS} 个。
- * Qdrant 暂时不可用时读操作按“无历史任务”处理，写操作由调用方降级告警。
+ * Qdrant 没有 CAS，镜像不参与互斥。
  *
  * <p>看门狗（{@code rag.reindex.*}）：
  * <ul>
- *   <li>心跳：每次进度事件刷新 {@code lastProgressAt}；</li>
+ *   <li>心跳：每次进度事件刷新 {@code lastProgressAt}；任务锁续租成功刷新 {@code heartbeatAt}；</li>
  *   <li>停滞：超过 {@code stall-timeout-seconds} 无进度只标记 {@code stalled} 并告警，<b>保留任务锁</b>；</li>
  *   <li>硬超时：超过 {@code hard-timeout-seconds} 无进度则<b>撤销写权限</b>
  *       （{@link ReindexListener#isWritable()} 变 false）、取消在途 Embedding 调用并中断线程；</li>
@@ -70,6 +80,11 @@ public class ReindexTaskService {
 
     static final int MAX_RETAINED_TASKS = 20;
 
+    /**
+     * 权威任务锁在 {@code smallrag.distributed.lock.key-prefix} 下的后缀。
+     */
+    static final String TASK_LOCK_SUFFIX = "reindex-task";
+
     private static final Set<String> TERMINAL_STATUSES =
             Set.of("completed", "aborted", "cancelled", "failed");
 
@@ -81,10 +96,18 @@ public class ReindexTaskService {
     private final QdrantProperties qdrantProperties;
     private final ReindexStateStore stateStore;
     private final IndexActivityGuard activity;
+    private final DistributedLock lock;
+    private final DistributedProperties distributed;
     private final ScheduledExecutorService watchdog;
+    private final ScheduledExecutorService leaseRenewer;
     private final Map<String, Task> tasks = new ConcurrentHashMap<>();
     private final Deque<String> taskOrder = new ConcurrentLinkedDeque<>();
     private final AtomicReference<String> runningTaskId = new AtomicReference<>();
+
+    /**
+     * 权威任务锁：{@code <prefix>reindex-task} 租约 + fencing epoch；同一时刻只有一个副本持有。
+     */
+    private volatile FencedLease taskLease;
 
     /**
      * 重启后恢复出来的、仍持有任务锁的未完成任务；由 {@link #onApplicationReady()} 处分。
@@ -93,28 +116,36 @@ public class ReindexTaskService {
 
     public ReindexTaskService(RagService ragService, DocumentArchive documentArchive,
             RagProperties properties, QdrantProperties qdrantProperties, ReindexStateStore stateStore,
-            IndexActivityGuard activity) {
+            IndexActivityGuard activity, DistributedLock lock, DistributedProperties distributed) {
         this.ragService = ragService;
         this.documentArchive = documentArchive;
         this.properties = properties;
         this.qdrantProperties = qdrantProperties;
         this.stateStore = stateStore;
         this.activity = activity;
+        this.lock = lock;
+        this.distributed = distributed;
         this.watchdog = Executors.newSingleThreadScheduledExecutor(
                 runnable -> daemonThread(runnable, "rag-reindex-watchdog"));
+        this.leaseRenewer = Executors.newSingleThreadScheduledExecutor(
+                runnable -> daemonThread(runnable, "rag-reindex-lease-renewer"));
         RagProperties.Reindex config = properties.getReindex();
         if (config.getStallTimeoutSeconds() > 0 || config.getHardTimeoutSeconds() > 0) {
             long interval = config.effectiveCheckIntervalSeconds();
             watchdog.scheduleWithFixedDelay(this::checkStalled, interval, interval, TimeUnit.SECONDS);
         }
+        long renewMillis = Math.max(10, distributed.getLock().getRenewInterval().toMillis());
+        leaseRenewer.scheduleWithFixedDelay(this::renewTaskLease, renewMillis, renewMillis,
+                TimeUnit.MILLISECONDS);
         restore();
     }
 
     /**
-     * 从状态存储恢复任务快照与任务锁。
+     * 从状态存储恢复任务快照，并尝试接管未完成任务的权威锁。
      *
-     * <p>锁持有者若已撤销/已请求取消，则直接进入终态并释放锁；否则标记 {@code interrupted}
-     * 并继续持有锁，等 {@link #onApplicationReady()} 续接。
+     * <p>任务锁以 {@code <prefix>reindex-task} 租约为准（standalone 进程内、distributed
+     * Redis）；Qdrant 里的锁 point 只是诊断镜像。接管成功才把任务标记为 {@code interrupted}
+     * 并等待续接；接管失败说明其他副本仍在执行，本实例不改写任何快照。
      */
     private void restore() {
         for (ReindexStateStore.PersistedTask persisted : stateStore.loadAll()) {
@@ -124,70 +155,67 @@ public class ReindexTaskService {
         }
         trim();
 
-        String owner = stateStore.readOwner().orElse(null);
-        if (owner == null) {
-            recoverWithoutOwner();
+        Task candidate = latestUnfinished();
+        if (candidate == null) {
+            clearStaleMirror();
+            return;
+        }
+        if (candidate.isRevoked()) {
+            candidate.abortRevoked();
+            stateStore.clearLock(candidate.taskId);
+            log.warn("重启前重建任务写权限已撤销，直接置为 failed: taskId={}", candidate.taskId);
+            return;
+        }
+        if (candidate.isCancelRequested()) {
+            candidate.abandon();
+            stateStore.clearLock(candidate.taskId);
+            log.info("重启前已请求取消重建任务，直接置为 cancelled: taskId={}", candidate.taskId);
             return;
         }
 
-        Task task = tasks.get(owner);
-        if (task == null || task.isTerminal()) {
-            stateStore.clearOwner(owner);
+        try {
+            if (!acquireOwnership(candidate)) {
+                log.warn("重建任务锁由其他副本持有，本实例不接管: taskId={}, owner={}",
+                        candidate.taskId, taskLockOwner().orElse("unknown"));
+                return;
+            }
+        } catch (RuntimeException e) {
+            log.error("接管重建任务锁失败（Redis 不可用时不接管，避免双写）: taskId={}, 原因={}",
+                    candidate.taskId, e.toString());
             return;
         }
-        if (task.isRevoked()) {
-            task.abortRevoked();
-            stateStore.clearOwner(owner);
-            log.warn("重启前重建任务写权限已撤销，直接置为 failed 并释放任务锁: taskId={}", owner);
-            return;
-        }
-        if (task.isCancelRequested()) {
-            task.abandon();
-            stateStore.clearOwner(owner);
-            log.info("重启前已请求取消重建任务，直接置为 cancelled 并释放任务锁: taskId={}", owner);
-            return;
-        }
-
-        runningTaskId.set(owner);
-        if (!activity.tryAcquire(activityLabel(owner))) {
-            log.warn("恢复重建任务时其他索引活动仍在运行，将在其结束后再操作: owner={}",
-                    activity.activeOwner().orElse("unknown"));
-        }
-        task.markInterrupted();
-        recoveredTask = task;
-        log.warn("恢复未完成的重建任务并续接任务锁: taskId={}, mode={}, processed={}/{}",
-                owner, task.mode, task.processed, task.total);
+        candidate.markInterrupted();
+        recoveredTask = candidate;
+        log.warn("恢复未完成的重建任务并续接任务锁: taskId={}, mode={}, processed={}/{}, epoch={}",
+                candidate.taskId, candidate.mode, candidate.processed, candidate.total,
+                taskLease == null ? 0L : taskLease.epoch());
     }
 
     /**
-     * 锁 point 丢失但任务快照仍在时的恢复：按单实例假设，由最近一个未撤销/未取消的
-     * 未完成任务重新持有锁，避免任务永久卡在 interrupted 且无法 resume。
+     * @return 最近一个未进入终态的任务；没有时为空
      */
-    private void recoverWithoutOwner() {
-        Task latest = null;
-        for (String taskId : taskOrder) {
-            Task candidate = tasks.get(taskId);
-            if (candidate == null || candidate.isTerminal()
-                    || candidate.isRevoked() || candidate.isCancelRequested()) {
-                continue;
+    private Task latestUnfinished() {
+        Iterator<String> iterator = taskOrder.descendingIterator();
+        while (iterator.hasNext()) {
+            Task candidate = tasks.get(iterator.next());
+            if (candidate != null && !candidate.isTerminal()) {
+                return candidate;
             }
-            latest = candidate;
         }
-        if (latest != null) {
-            runningTaskId.set(latest.taskId);
-            if (!activity.tryAcquire(activityLabel(latest.taskId))) {
-                log.warn("恢复重建任务锁失败，其他索引活动正在运行: owner={}",
-                        activity.activeOwner().orElse("unknown"));
-            }
-            latest.markInterrupted();
-            recoveredTask = latest;
-            persistOwner(latest.taskId);
-            log.warn("任务锁缺失，按单实例假设重建任务锁: taskId={}", latest.taskId);
-        }
-        Task recovered = latest;
-        tasks.values().stream()
-                .filter(task -> task != recovered && !task.isTerminal())
-                .forEach(Task::markInterrupted);
+        return null;
+    }
+
+    /**
+     * 镜像指向的任务在本实例已进入终态时清掉，避免诊断信息长期误导；
+     * 未知任务可能属于其他副本，保留镜像。
+     */
+    private void clearStaleMirror() {
+        stateStore.readLock()
+                .filter(lock -> {
+                    Task known = tasks.get(lock.taskId());
+                    return known != null && known.isTerminal();
+                })
+                .ifPresent(lock -> stateStore.clearLock(lock.taskId()));
     }
 
     /**
@@ -215,14 +243,9 @@ public class ReindexTaskService {
         try {
             resume(task.taskId);
         } catch (Exception e) {
-            log.error("自动续接重建任务失败，尝试取消并释放任务锁: taskId={}, 原因={}",
+            // 不取消任务：租约仍在续租，用户可以稍后手动 rag_task_resume 或 rag_task_cancel
+            log.error("自动续接重建任务失败，任务保持 interrupted（可手动续接或放弃）: taskId={}, 原因={}",
                     task.taskId, e.toString());
-            try {
-                cancel(task.taskId);
-            } catch (Exception cancelError) {
-                log.warn("自动续接失败后取消任务也失败: taskId={}, 原因={}",
-                        task.taskId, cancelError.toString());
-            }
         }
     }
 
@@ -256,8 +279,24 @@ public class ReindexTaskService {
             activity.release(label);
             throw new IllegalStateException(busyMessage(runningTaskId.get()));
         }
+        Optional<FencedLease> acquired;
+        try {
+            acquired = acquireTaskLease(taskId);
+        } catch (RuntimeException e) {
+            runningTaskId.set(null);
+            activity.release(label);
+            throw new IllegalStateException("获取重建任务锁失败（distributed 模式 Redis 不可用时拒绝写索引）: "
+                    + e.getMessage(), e);
+        }
+        if (acquired.isEmpty()) {
+            runningTaskId.set(null);
+            activity.release(label);
+            throw new IllegalStateException(busyMessage(taskLockOwner().orElse("unknown")));
+        }
+        taskLease = acquired.get();
 
         Task task = new Task(taskId, mode, total);
+        task.markOwned(distributed.getInstanceId(), taskLease.epoch());
         tasks.put(taskId, task);
         taskOrder.addLast(taskId);
         trim();
@@ -279,18 +318,90 @@ public class ReindexTaskService {
     public ReindexTaskView resume(String taskId) {
         Task task = resolve(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("没有可续接的重建任务"));
-        if (!task.taskId.equals(runningTaskId.get())) {
-            throw new IllegalStateException("任务锁未被该任务持有，无法续接: " + task.taskId);
+        if (!task.isInterrupted()) {
+            throw new IllegalStateException("只有 interrupted 状态的任务可以续接，当前: "
+                    + task.snapshot().status());
         }
+        if (!acquireOwnership(task)) {
+            throw new IllegalStateException("任务锁由其他副本持有，无法续接: "
+                    + taskLockOwner().orElse("unknown"));
+        }
+        ensureActivity(task.taskId);
         if (!task.beginResume()) {
             throw new IllegalStateException("只有 interrupted 状态的任务可以续接，当前: "
                     + task.snapshot().status());
         }
         boolean clearFirst = "rebuild".equals(task.mode) && !task.isCleared();
-        log.info("续接重建任务: taskId={}, mode={}, 跳过已完成 {} 篇, clearFirst={}",
-                task.taskId, task.mode, task.completedCount(), clearFirst);
+        log.info("续接重建任务: taskId={}, mode={}, 跳过已完成 {} 篇, clearFirst={}, epoch={}",
+                task.taskId, task.mode, task.completedCount(), clearFirst,
+                taskLease == null ? 0L : taskLease.epoch());
         startWorker(task, clearFirst);
         return task.snapshot();
+    }
+
+    /**
+     * 确保本实例持有重建任务的权威锁（租约 + epoch）；已持有同一任务时直接返回。
+     *
+     * @param task 目标任务
+     * @return true 表示持有锁；false 表示锁被其他副本持有
+     */
+    private synchronized boolean acquireOwnership(Task task) {
+        FencedLease current = taskLease;
+        if (current != null && Objects.equals(runningTaskId.get(), task.taskId)) {
+            return true;
+        }
+        Optional<FencedLease> acquired = acquireTaskLease(task.taskId);
+        if (acquired.isEmpty()) {
+            return false;
+        }
+        taskLease = acquired.get();
+        runningTaskId.set(task.taskId);
+        task.markOwned(distributed.getInstanceId(), taskLease.epoch());
+        persistOwner(task.taskId);
+        return true;
+    }
+
+    /**
+     * 续接前确保索引活动锁可用（与目录导入互斥）；不持有则尝试获取。
+     */
+    private void ensureActivity(String taskId) {
+        String label = activityLabel(taskId);
+        if (activity.owner().filter(label::equals).isPresent()) {
+            return;
+        }
+        if (!activity.tryAcquire(label)) {
+            throw new IllegalStateException("其他索引活动正在执行，请稍后重试: "
+                    + activity.activeOwner().orElse("unknown"));
+        }
+    }
+
+    /**
+     * 获取任务锁租约；distributed 模式下 Redis 不可用时抛异常（fail-closed）。
+     */
+    private Optional<FencedLease> acquireTaskLease(String taskId) {
+        return FencedLease.acquire(lock, taskLockKey(), taskId, effectiveLease());
+    }
+
+    private String taskLockKey() {
+        return distributed.getLock().getKeyPrefix() + TASK_LOCK_SUFFIX;
+    }
+
+    private Optional<String> taskLockOwner() {
+        try {
+            return lock.currentOwner(taskLockKey());
+        } catch (Exception e) {
+            log.debug("查询重建任务锁持有者失败: {}", e.toString());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * 租约时长与索引活动锁一致：至少为续租间隔的 3 倍，避免续租抖动导致误丢锁。
+     */
+    private Duration effectiveLease() {
+        long interval = Math.max(10, distributed.getLock().getRenewInterval().toMillis());
+        long lease = distributed.getLock().getLease().toMillis();
+        return Duration.ofMillis(Math.max(lease, interval * 3));
     }
 
     /**
@@ -298,11 +409,14 @@ public class ReindexTaskService {
      */
     private String busyMessage(String ownerTaskId) {
         Task owner = ownerTaskId == null ? null : tasks.get(ownerTaskId);
-        if (owner != null && owner.isInterrupted()) {
+        if (owner == null) {
+            return "重建任务锁由其他副本持有，请稍后重试: " + ownerTaskId;
+        }
+        if (owner.isInterrupted()) {
             return "上一个重建任务在重启时中断，已保留任务锁；请用 rag_task_resume 继续或 "
                     + "rag_task_cancel 放弃: " + ownerTaskId;
         }
-        if (owner != null && owner.isRevoked() && !owner.isTerminal()) {
+        if (owner.isRevoked() && !owner.isTerminal()) {
             return "上一个重建任务已撤销写权限，正在释放任务锁（最长 "
                     + properties.getReindex().effectiveRecoveryGraceSeconds(
                             qdrantProperties.getRequestTimeoutMs())
@@ -391,22 +505,86 @@ public class ReindexTaskService {
     }
 
     /**
-     * 释放任务锁（内存 + 磁盘）；按 taskId 内容比较，避免误放后续任务的锁。
+     * 释放任务锁（权威租约 + 诊断镜像 + 活动锁）；按 taskId 内容比较，避免误放后续任务的锁。
      *
      * <p>不能用 {@link AtomicReference#compareAndSet}：恢复出来的持有者与任务快照里的
      * taskId 是不同 String 实例，CAS 按引用比较会失败。
      */
     private synchronized void releaseLock(Task task) {
         if (task.isSuspendedForRestart()) {
-            // 服务关闭挂起：保留任务锁，重启后续接
+            // 服务关闭挂起：由 shutdown() 统一处理租约，避免工作线程提前释放
             return;
         }
         if (Objects.equals(runningTaskId.get(), task.taskId)) {
             runningTaskId.set(null);
             task.markLockReleased();
-            stateStore.clearOwner(task.taskId);
+            releaseLease();
+            stateStore.clearLock(task.taskId);
         }
         activity.release(activityLabel(task.taskId));
+    }
+
+    /**
+     * 释放权威任务锁；幂等。
+     */
+    private void releaseLease() {
+        FencedLease lease = taskLease;
+        taskLease = null;
+        if (lease == null) {
+            return;
+        }
+        try {
+            lease.release();
+        } catch (Exception e) {
+            log.warn("释放重建任务锁失败: owner={}, 原因={}", lease.owner(), e.toString());
+        }
+    }
+
+    /**
+     * 续租任务锁并刷新心跳；失败说明锁已被其他副本接管或已过期，停止写入。
+     */
+    private void renewTaskLease() {
+        FencedLease lease = taskLease;
+        if (lease == null) {
+            return;
+        }
+        boolean renewed;
+        try {
+            renewed = lease.renew(effectiveLease());
+        } catch (Exception e) {
+            log.error("重建任务锁续租异常，停止写入: taskId={}, 原因={}", lease.owner(), e.toString());
+            markLeaseLost(lease, "续租异常: " + e);
+            return;
+        }
+        if (!renewed) {
+            markLeaseLost(lease, "续租失败（锁已被其他副本接管或已过期）");
+            return;
+        }
+        Task task = tasks.get(runningTaskId.get());
+        if (task != null) {
+            task.heartbeat();
+        }
+    }
+
+    /**
+     * 租约丢失：清空本地持有权并让运行中的任务失败；{@code interrupted} 任务保持可续接。
+     */
+    private synchronized void markLeaseLost(FencedLease lease, String reason) {
+        if (taskLease != lease) {
+            return;
+        }
+        taskLease = null;
+        String taskId = runningTaskId.get();
+        runningTaskId.set(null);
+        log.error("重建任务锁已丢失，本实例停止写索引: taskId={}, epoch={}, 原因={}",
+                taskId, lease.epoch(), reason);
+        Task task = taskId == null ? null : tasks.get(taskId);
+        if (task != null && !task.isTerminal() && !task.isInterrupted()) {
+            task.revoke("重建任务锁已丢失: " + reason);
+        }
+        if (taskId != null) {
+            activity.release(activityLabel(taskId));
+        }
     }
 
     /**
@@ -425,13 +603,18 @@ public class ReindexTaskService {
     }
 
     /**
-     * 持久化任务锁持有者；失败只告警。
+     * 写入任务锁诊断镜像（权威锁在 {@link DistributedLock}）；失败只告警。
      */
     private void persistOwner(String taskId) {
+        FencedLease lease = taskLease;
         try {
-            stateStore.writeOwner(taskId);
+            stateStore.writeLock(new ReindexStateStore.LockMirror(
+                    taskId,
+                    distributed.getInstanceId(),
+                    lease == null ? 0L : lease.epoch(),
+                    Instant.now().plus(effectiveLease()).toString()));
         } catch (Exception e) {
-            log.warn("重建任务锁持久化失败: taskId={}, 原因={}", taskId, e.toString());
+            log.warn("重建任务锁镜像持久化失败: taskId={}, 原因={}", taskId, e.toString());
         }
     }
 
@@ -514,7 +697,8 @@ public class ReindexTaskService {
             }
             task.markLockReleased();
             task.abortRevoked();
-            stateStore.clearOwner(task.taskId);
+            releaseLease();
+            stateStore.clearLock(task.taskId);
             activity.release(activityLabel(task.taskId));
             trim();
         } catch (Exception e) {
@@ -546,10 +730,15 @@ public class ReindexTaskService {
     @PreDestroy
     void shutdown() {
         watchdog.shutdownNow();
+        leaseRenewer.shutdownNow();
         String taskId = runningTaskId.get();
         Task task = taskId == null ? null : tasks.get(taskId);
         if (task == null || task.isTerminal() || task.isRevoked()) {
             // 已撤销/已结束的任务按原状态落盘：重启后不会被续接
+            releaseLease();
+            if (taskId != null) {
+                activity.release(activityLabel(taskId));
+            }
             return;
         }
         task.suspendForRestart();
@@ -558,10 +747,14 @@ public class ReindexTaskService {
         } catch (Exception e) {
             log.debug("等待重建线程退出失败: taskId={}, 原因={}", task.taskId, e.toString());
         }
-        // 工作线程可能已清理锁/写入终态：以“中断待续接”状态覆盖，并保留任务锁
+        // 工作线程可能已清理锁/写入终态：以“中断待续接”状态覆盖
         persist(task);
         persistOwner(task.taskId);
-        log.warn("服务关闭：重建任务已保存为 interrupted 并保留任务锁，重启后自动续接: taskId={}",
+        // 优雅停机：立即让出租约，重启或另一副本可以马上续接；崩溃时靠租约过期接管
+        releaseLease();
+        activity.release(activityLabel(task.taskId));
+        stateStore.clearLock(task.taskId);
+        log.warn("服务关闭：重建任务已保存为 interrupted 并让出任务锁，重启后自动续接: taskId={}",
                 task.taskId);
     }
 
@@ -600,6 +793,9 @@ public class ReindexTaskService {
      * @param error             失败原因，成功时为 null
      * @param revoked           写权限是否已被看门狗撤销（撤销后旧任务不能再写索引）
      * @param lockReleaseAt     宽限期结束时间（ISO-8601）；只有“已撤销但线程未退出”时非空
+     * @param ownerInstance     当前/最近持有任务锁的实例标识
+     * @param epoch             任务锁栅栏 epoch；每次接管严格递增
+     * @param heartbeatAt       最近一次成功续租任务锁的时间（ISO-8601）
      */
     public record ReindexTaskView(
             String taskId,
@@ -619,7 +815,10 @@ public class ReindexTaskService {
             boolean aborted,
             String error,
             boolean revoked,
-            String lockReleaseAt) {
+            String lockReleaseAt,
+            String ownerInstance,
+            long epoch,
+            String heartbeatAt) {
     }
 
     /**
@@ -648,6 +847,9 @@ public class ReindexTaskService {
         private boolean cleared;
         private boolean suspendedForRestart;
         private long lockReleaseAtMillis;
+        private String ownerInstance;
+        private long epoch;
+        private long heartbeatAtMillis;
         private Thread workerThread;
         private CancellationScope scope;
 
@@ -676,9 +878,28 @@ public class ReindexTaskService {
             this.revoked = view.revoked();
             this.cancelRequested = view.cancelRequested();
             this.cleared = persisted.cleared();
+            this.ownerInstance = view.ownerInstance();
+            this.epoch = view.epoch();
+            this.heartbeatAtMillis = parseMillis(view.heartbeatAt());
             if (persisted.completedDocumentIds() != null) {
                 this.completedDocumentIds.addAll(persisted.completedDocumentIds());
             }
+        }
+
+        /**
+         * 记录任务锁持有者信息（接管时调用）。
+         */
+        private synchronized void markOwned(String instanceId, long ownedEpoch) {
+            this.ownerInstance = instanceId;
+            this.epoch = ownedEpoch;
+            this.heartbeatAtMillis = System.currentTimeMillis();
+        }
+
+        /**
+         * 续租成功时刷新心跳。
+         */
+        private synchronized void heartbeat() {
+            this.heartbeatAtMillis = System.currentTimeMillis();
         }
 
         @Override
@@ -731,8 +952,19 @@ public class ReindexTaskService {
 
         @Override
         public synchronized boolean isWritable() {
-            // 分布式模式下租约丢失后，即使本线程尚未被中断也必须立刻停止写入
-            return !revoked && !suspendedForRestart && activity.isHeldBy(activityLabel(taskId));
+            // 分布式模式下租约丢失后，即使本线程尚未被中断也必须立刻停止写入；
+            // 同时校验活动锁（与目录导入互斥）与任务锁 epoch（防止旧持有者写入）
+            return !revoked && !suspendedForRestart
+                    && activity.isHeldBy(activityLabel(taskId))
+                    && ownsTaskLease();
+        }
+
+        /**
+         * 本任务是否仍持有权威任务锁（租约 + 最新 epoch）。
+         */
+        private boolean ownsTaskLease() {
+            FencedLease lease = taskLease;
+            return lease != null && taskId.equals(lease.owner()) && lease.isValid();
         }
 
         private synchronized void bindWorker(Thread thread) {
@@ -827,7 +1059,7 @@ public class ReindexTaskService {
             return new ReindexTaskView(taskId, mode, STATUS_INTERRUPTED, total, processed,
                     succeeded, failed, percent, currentDocumentId,
                     Instant.now().toString(), false, false, startedAt, null, false, null,
-                    false, null);
+                    false, null, ownerInstance, epoch, heartbeatAt());
         }
 
         /**
@@ -977,7 +1209,14 @@ public class ReindexTaskService {
             return new ReindexTaskView(taskId, mode, status, total, processed, succeeded, failed,
                     percent, currentDocumentId, Instant.ofEpochMilli(lastProgressAtMillis).toString(),
                     stalled, cancelRequested, startedAt, finishedAt, "aborted".equals(status), error,
-                    revoked, releaseAt);
+                    revoked, releaseAt, ownerInstance, epoch, heartbeatAt());
+        }
+
+        /**
+         * @return 最近一次续租时间；从未持有时为 null
+         */
+        private String heartbeatAt() {
+            return heartbeatAtMillis <= 0 ? null : Instant.ofEpochMilli(heartbeatAtMillis).toString();
         }
 
         private static long parseMillis(String instant) {

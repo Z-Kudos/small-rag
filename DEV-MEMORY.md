@@ -18,8 +18,9 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 - 上一版：`v0.0.2`（2026-11-07，`main` tag，双远程已推送）。
 - 主题：**单机与集群**。
 - 规划：[`docs/v0.0.3/plan.md`](docs/v0.0.3/plan.md)。
-- 里程碑：M1（WP1 + WP2）→ M2（WP3 + WP5）→ M3（WP4 + WP6）。
-- 下一步：`feature/cluster-safety`（WP1 集群会话 + WP2 fencing）。
+- 里程碑：M1（WP1 + WP2）✅ → M2（WP3 + WP5）→ M3（WP4 + WP6）。
+- 下一步：`feature/cluster-ops`（WP3 跨副本任务状态 + WP5 观测）。
+- 已完成：`feature/cluster-safety`（WP1 集群会话 + WP2 fencing），待合回 `develop`。
 - 文档：`README.md`（简体中文）/ `README.en.md`（English）双语；版本文档统一放在 `docs/v0.0.3/`；模板与写作规范在 `docs/templates/`。
 
 **已确认决策（2026-11-09）**
@@ -34,7 +35,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 ## 2. 构建与验证
 
 - JDK 25（`maven.compiler.release=25`）；本机 `mvn -v` 已指向 JDK 25，若默认不是 25 用 `JAVA_HOME` 指定。
-- 构建：`mvn clean package`；单测：`mvn test`（默认不依赖外部服务，**154** 个测试全绿，`*RedisIT` 跳过）。
+- 构建：`mvn clean package`；单测：`mvn test`（默认不依赖外部服务，**165** 个测试全绿，`*RedisIT` 跳过）。
 - Redis 集成测试：`redis-server --port 6390 --save '' --appendonly no --daemonize yes`，再 `mvn test -Dtest='*RedisIT' -Dsmallrag.redis.it=true`。
 - 切分断点校准：`mvn test -Dtest=BreakpointPercentileCalibration -Dcalibrate=true`（需本机 OpenAI 兼容 Embedding，可用 `EMBEDDING_*` 覆盖）。
 - 镜像：`podman compose -f compose.yaml build small-rag` 冷构建 **126s**，产出 `small-rag:0.0.3`（649 MB）。
@@ -72,10 +73,11 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 ### 4.3 重建任务
 
 - `rag_rebuild` 与 `rag_reindex`（不传 documentId）为异步任务，立即返回 `taskId`；单篇 `rag_reindex(documentId)` 同步。
-- `rag_task_status` 返回 `status`（queued / clearing / reindexing / interrupted / completed / aborted / cancelled / failed）、进度、`stalled`、`cancelRequested`、`revoked`、`lockReleaseAt` 等。
+- `rag_task_status` 返回 `status`（queued / clearing / reindexing / interrupted / completed / aborted / cancelled / failed）、进度、`stalled`、`cancelRequested`、`revoked`、`lockReleaseAt`、`ownerInstance`、`epoch`、`heartbeatAt`。
 - `ReindexTaskService`：每任务独立 daemon 线程 + 单任务互斥 + 保留最近 20 个快照。
-- 状态持久化：`ReindexStateStore` + `QdrantReindexStateBackend` 写入独立集合 `<collection>_reindex_state`（1 维 Dot 哑向量 + JSON payload）；含 `cleared` 与 `completedDocumentIds` 检查点。状态跟随 Qdrant，不依赖容器文件系统。
-- 重启：未完成且未撤销 / 未取消的任务标 `interrupted` 并继续持锁；`REINDEX_RESUME_ON_STARTUP=true` 时自动续接，`false` 时等 `rag_task_resume` / `rag_task_cancel`。
+- **任务所有权**：`FencedLease` 持有 `<lock-prefix>reindex-task` 租约并递增单调 epoch；standalone 用 `LocalDistributedLock`，distributed 用 Redis（`INCR <key>:epoch`）；续租线程每 10s 刷新心跳，`isWritable()` 每次写入前远程校验 owner+token+epoch。Redis 不可用时拒绝写索引（fail-closed）。
+- 状态持久化：`ReindexStateStore` + `QdrantReindexStateBackend` 写入独立集合 `<collection>_reindex_state`（1 维 Dot 哑向量 + JSON payload）；含 `cleared` 与 `completedDocumentIds` 检查点。任务锁 point 仅作诊断镜像（`ownerInstance` / `epoch` / `expiresAt`），Qdrant 无 CAS，不参与互斥。
+- 重启：先抢到任务租约才把最近未完成任务标 `interrupted`（抢不到说明其他副本仍在执行，不改写快照）；`REINDEX_RESUME_ON_STARTUP=true` 时自动续接，`false` 时等 `rag_task_resume` / `rag_task_cancel`。优雅停机保存 `interrupted` 后让出租约，重启可立即续接；崩溃靠租约过期（≤30s）接管。
 - 看门狗：每 30s 检查；超过 1800s 无进度只标 `stalled` 并保留锁；超过 3600s 撤销写权限 + 取消在途 Embedding + 中断线程，10s 内退出则释放锁，否则 120s 宽限期后强制释放并置 `failed`。
 - `RagService.reindexArchived(clearFirst, listener, skipDocumentIds)` 逐篇回调检查点；清空前校验归档非空，清空后重读归档列表。
 
@@ -93,13 +95,14 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 
 - 开关：`smallrag.distributed.enabled`（默认 false）。**不是 Spring profile**，由 `SMALL_RAG_DISTRIBUTED_ENABLED` + `compose.distributed.yaml` 开启。
 - 锁配置：`lock.lease`（30s）、`lock.renew-interval`（10s，下限 10ms）、`lock.key-prefix`；Redis 走 `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD`。
-- `DistributedLock`：`tryAcquire` / `renew` / `release` / `isHeld` / `currentOwner`；`LockHandle` 带 owner + token + 本地到期时间，按 value 匹配，旧持有者不会误删。
+- `DistributedLock`：`tryAcquire` / `renew` / `release` / `isHeld` / `currentOwner` / `nextEpoch` / `currentEpoch`；`LockHandle` 带 owner + token + 本地到期时间，按 value 匹配，旧持有者不会误删；`FencedLease` 组合租约与 epoch。
 - `IndexActivityGuard`：持锁期间后台续租；续租失败即 `lockLost=true` 并停止续租；`isHeldBy` 每次向锁存储远程校验 owner + token。重建、导入、启动重切在每次写入前校验。`@PreDestroy` 只停止续租，不主动释放。
+- **MCP 传输**：`SMALL_RAG_MCP_PROTOCOL`（默认 `STREAMABLE`）；`compose.distributed.yaml` 设 `STATELESS`，`McpTransportGuard` 对 distributed + 非 STATELESS 启动告警。
 - `SourcesLeaderElection`：竞争 `sources-leader` 租约；启动 / 定时 / watcher 自动扫描仅 leader 执行，手动 `rag_sync_sources` 任意副本可发起。
 - `compose.distributed.yaml`：外部 Qdrant / Redis / Consul / Embedding + HAProxy gateway（`docker/haproxy.cfg`）；应用端口用 `!reset []` 去掉；`small_rag_data` 为共享归档卷；需 Compose v2.24+。
 - Consul：`CONSUL_ENABLED`（默认 false）同时控制 discovery / config；注册 `small-rag`，健康检查 `/actuator/health`；`instance-id` 默认 `${spring.application.name}-${HOSTNAME}-${server.port}`。KV 默认 `KEY_VALUE`（每项一个 key），启动加 `SPRING_CONFIG_IMPORT=optional:consul:`；config watch 默认关闭。
 - Spring Cloud 范围：只保留 Consul discovery / config（可选）；`consul-discovery` 已排除未使用的 `spring-cloud-starter-loadbalancer`。不引入 Gateway / Config Server / Bus / Vault / K8s / Feign / CircuitBreaker 包装，理由见 [`docs/v0.0.3/adr/0001-spring-cloud-scope.md`](docs/v0.0.3/adr/0001-spring-cloud-scope.md)。
-- 已知边界（v0.0.3 待改）：任务快照锁仍是单实例读后写、无 fencing token；`rag_task_status` / `rag_task_resume` 只能看到本实例内存中的任务；HAProxy `roundrobin` 与 `STREAMABLE` 会话不兼容。
+- 已知边界（v0.0.3 待改）：`rag_task_status` / `rag_task_resume` / `rag_task_cancel` 仍只能看到本实例内存中的任务（WP3 修复）；跨副本操作会提示持有者。
 
 ### 4.6 健康与熔断
 
@@ -115,7 +118,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 - **依赖源**：`pom.xml` 首位 `aliyun-public`，`spring-milestones` 回退；容器构建用 `docker/maven-settings.xml`（`mirrorOf=*,!spring-milestones`）。本机 `~/.m2/settings.xml` 若有 `mirrorOf=*` 会覆盖 pom。
 - **Qdrant**：gRPC 端口 6334（REST 6333）；`Document` id 必须 UUID；集合初始化 fail-soft，维度不一致 fail-fast；gRPC deadline 用 `rag.qdrant.request-timeout-ms`（默认 30s）。
 - **状态集合隔离**：重建状态放 `<collection>_reindex_state`，不要并入主集合，否则污染空库探活、检索与 `rag_rebuild` 清理。
-- **MCP**：`McpSyncServerCustomizer` 是单例且已被 WebMVC 自动配置占用，不要自定义；instructions 等走 `spring.ai.mcp.server.*`。
+- **MCP**：`McpSyncServerCustomizer` 是单例且已被 WebMVC 自动配置占用，不要自定义；instructions 等走 `spring.ai.mcp.server.*`。distributed 多副本必须 `SMALL_RAG_MCP_PROTOCOL=STATELESS`，standalone 保持 `STREAMABLE`。
 - **Dockerfile** 无 `# syntax=` 指令（国内拉不到 docker.io frontend 镜像）；`docker/*.sh` 必须 LF（`.gitattributes` 已强制）。
 - **`.env`** 直接入库，只放模板值；真实密钥禁止写入。
 - **切分签名**：`ChunkingSignature` 版本与项目版本同步；只改切分算法而不升版本，旧索引不会自动重切。
@@ -126,7 +129,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 
 ## 6. 待办
 
-- v0.0.3：按规划完成 WP1–WP6（见 plan），优先 M1。
+- v0.0.3：M1（WP1 + WP2）已完成；下一步 WP3 跨副本任务状态 + WP5 观测，然后 WP4 确定性 chunk id + WP6 Testcontainers/CI（见 plan）。
 - P3：Spring Cloud Gateway 仍可选，不阻塞本版本。
 - 真实语料端到端验证 MMR 效果（需 Qdrant + 实际知识库人工评估）。
 - 混合主题语料校准 `SEMANTIC_BREAKPOINT_PERCENTILE`（当前校准语料同质，分布扁平）。

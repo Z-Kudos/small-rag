@@ -39,6 +39,8 @@ related: [README.md, docs/v0.0.3/plan.md]
 - **归档摘要索引**：`.archive/index.json` 保存 metadata / 签名 / 长度，`rag_list` 与启动重切只读摘要，原文按需 `find`。
 - **重切写入顺序**：能枚举旧 point id 时先写新片段再删旧片段，失败时旧数据仍可检索；无法枚举时回退先删后写。
 - **错误收敛**：MCP 工具把运行期异常转为 `{"error": "..."}`，不抛协议层异常。
+- **集群会话**：standalone 使用 `STREAMABLE`；distributed 多副本使用 `STATELESS`（`SMALL_RAG_MCP_PROTOCOL`），会话不再保存在单副本内存，gateway 可继续 `roundrobin`。`McpTransportGuard` 在 distributed 且非 `STATELESS` 时启动告警。
+- **任务所有权**：重建任务持有 `<lock-prefix>reindex-task` 租约 + 单调 fence epoch（standalone 进程内、distributed Redis）；每次 Qdrant 变更前远程校验持有者、token 与 epoch 仍最新，旧持有者恢复后不能继续写入。distributed 下 Redis 不可用时 fail-closed。Qdrant `_reindex_state` 的任务锁 point 只作诊断镜像，不参与互斥。
 
 ## 4. 包结构
 
@@ -55,8 +57,8 @@ rag/sources/    SourceSyncService（多目录 Markdown 扫描/增量/定时/手�
 rag/chunking/   ChunkingService、ChunkingStrategy、ChunkingSignature、TextChunk、
                 TextChunker、RecursiveTextChunker、MarkdownChunker、SemanticTextChunker
 rag/archive/    DocumentArchive、ArchivedDocument、ArchivedDocumentSummary（原文归档、摘要索引与签名记录）
-distributed/    DistributedLock、LockHandle、LocalDistributedLock、RedisDistributedLock
-config/         QdrantConfig、McpServerConfig、EmbeddingConfig（HTTP 超时）、
+distributed/    DistributedLock、LockHandle、FencedLease、LocalDistributedLock、RedisDistributedLock
+config/         QdrantConfig、McpServerConfig、McpTransportGuard（协议与运行形态校验）、EmbeddingConfig（HTTP 超时）、
                 DistributedLockConfig、DistributedProperties、RagProperties、QdrantProperties、
                 IndexLockHealthIndicator
 docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord*.conf
@@ -70,13 +72,13 @@ docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord*.c
 
 **检索**：`rag_search` / `rag_query` → 熔断器 → `KnowledgeBaseProbe` 空库短路 → Embedding → Qdrant 相似度检索 → Parent-Child 按 `parent_id` 去重回取父块 → MMR → 上下文拼装。
 
-**重建**：MCP 提交任务 → `IndexActivityGuard` 获取索引活动锁 → `ReindexTaskService` 异步线程 → 逐篇 `RagService.reindexArchived` → 检查点写入 `_reindex_state` → 完成释放锁。
+**重建**：MCP 提交任务 → `IndexActivityGuard` 获取索引活动锁（与目录导入互斥）→ `FencedLease` 获取 `reindex-task` 租约并递增 epoch → `ReindexTaskService` 异步线程 → 逐篇 `RagService.reindexArchived`（每次写入校验租约 + epoch）→ 检查点与锁诊断镜像写入 `_reindex_state` → 完成释放租约与活动锁。
 
 ## 6. 影响面与限制
 
 - **接口**：MCP 端点 `/mcp` 与 13 个工具签名保持稳定；`rag_query` 仍只返回增强上下文。
-- **数据**：主集合存子块与父块，独立集合 `<collection>_reindex_state` 存任务快照与锁；归档目录存原文与摘要索引。
-- **兼容性**：`ChunkingSignature` 版本与项目版本同步，升级可能触发一次全量重切。
+- **数据**：主集合存子块与父块，独立集合 `<collection>_reindex_state` 存任务快照与任务锁诊断镜像；归档目录存原文与摘要索引。
+- **兼容性**：`ChunkingSignature` 版本与项目版本同步，升级可能触发一次全量重切；`rag_task_status` 新增 `ownerInstance` / `epoch` / `heartbeatAt`，旧快照缺字段按空值恢复。
 - **运维**：`/actuator/health` 暴露锁、leader、熔断状态；distributed 模式依赖 Redis 与共享归档卷。
 - **限制与风险**：见 [`limitations.md`](limitations.md)。
 

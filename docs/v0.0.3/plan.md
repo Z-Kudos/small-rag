@@ -1,6 +1,6 @@
 ---
 title: v0.0.3 单机与集群规划
-status: approved
+status: implementing
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
@@ -61,7 +61,9 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 
 ## 4. 工作包
 
-### WP1 集群会话路由（P0）
+### WP1 集群会话路由（P0）— 已完成
+
+**状态**：2026-11-09 完成。`application.yml` 支持 `SMALL_RAG_MCP_PROTOCOL`，overlay 设 `STATELESS`；`McpTransportGuard` 在 distributed 非 `STATELESS` 时告警。
 
 **目标**：多副本下 MCP 调用不依赖粘性会话。
 
@@ -79,7 +81,9 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 
 **风险**：stateless 不支持 server-initiated notifications（当前未使用），需在文档注明。
 
-### WP2 任务所有权统一 + fencing token（P0）
+### WP2 任务所有权统一 + fencing token（P0）— 已完成
+
+**状态**：2026-11-09 完成。新增 `FencedLease`；`ReindexTaskService` 使用 `reindex-task` 租约 + epoch，续租线程与远程写栅栏已接入；Qdrant 锁 point 降级为诊断镜像；`ReindexTaskView` 已暴露 `ownerInstance` / `epoch` / `heartbeatAt`。
 
 **目标**：同一时刻只有一个副本能写索引；旧持有者恢复后无法继续写。
 
@@ -187,7 +191,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 
 | 分支 | 覆盖 | 主要提交 |
 | --- | --- | --- |
-| `feature/cluster-safety` | WP1 + WP2 | `feat: support stateless MCP transport for replicas`、`feat: add fencing token to reindex task ownership` |
+| `feature/cluster-safety` | WP1 + WP2 | ✅ 已完成：`feat: stateless MCP in distributed mode and fenced reindex task lease` |
 | `feature/cluster-ops` | WP3 + WP5 | `feat: expose reindex tasks across replicas`、`feat: report archive and task owner in health` |
 | `feature/idempotent-ingest` | WP4 + WP6 | `refactor: make chunk point ids deterministic`、`test: add Testcontainers end-to-end coverage`、`ci: run unit and container tests` |
 
@@ -199,8 +203,8 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 
 | 配置 | 默认 | 说明 |
 | --- | --- | --- |
-| `spring.ai.mcp.server.protocol` | `STREAMABLE` | distributed 设 `STATELESS` |
-| `smallrag.distributed.reindex-fencing-enabled` | `true` | 关闭仅用于回滚排查 |
+| `spring.ai.mcp.server.protocol` | `STREAMABLE` | 环境变量 `SMALL_RAG_MCP_PROTOCOL`；distributed 设 `STATELESS` |
+| `smallrag.distributed.reindex-fencing-enabled` | — | 未实现开关：fencing 始终启用，关闭会破坏互斥语义 |
 | `smallrag.distributed.task-status-cache-ms` | `2000` | 跨副本状态读穿缓存 |
 | `smallrag.archive.shared` | `false` | distributed 部署设 `true`，health 据此判断共享卷 |
 | `SMALL_RAG_ARCHIVE_SHARED` | `false` | 上述配置的环境变量入口 |

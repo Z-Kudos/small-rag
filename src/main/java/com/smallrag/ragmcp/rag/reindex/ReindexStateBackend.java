@@ -21,25 +21,25 @@ interface ReindexStateBackend {
     List<ReindexStateStore.PersistedTask> loadAll();
 
     /**
-     * 读取任务锁持有者。
+     * 读取任务锁镜像（诊断用，不是权威锁）。
      *
-     * @return 持有者 taskId；没有锁时为空
+     * @return 锁镜像；没有时为空
      */
-    Optional<String> readOwner();
+    Optional<ReindexStateStore.LockMirror> readLock();
 
     /**
-     * 写入任务锁持有者。
+     * 写入任务锁镜像。
      *
-     * @param taskId 持有者 taskId
+     * @param lock 锁镜像
      */
-    void writeOwner(String taskId);
+    void writeLock(ReindexStateStore.LockMirror lock);
 
     /**
-     * 释放任务锁；仅在当前持有者匹配时删除。
+     * 清除任务锁镜像；仅在当前持有者匹配时删除。
      *
      * @param taskId 期望的持有者 taskId
      */
-    void clearOwner(String taskId);
+    void clearLock(String taskId);
 
     /**
      * 保存或覆盖任务状态。
