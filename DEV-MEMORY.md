@@ -14,12 +14,12 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 
 ## 1. 当前阶段
 
-- 版本：`0.0.4-SNAPSHOT`（v0.0.3 已发布，下一版本未开始）。
+- 版本：`0.0.3`（已发布，`main` tag `v0.0.3`）；未切换下一版本，版本元数据变更需人工确认。
 - 上一版：`v0.0.2`（2026-11-07，`main` tag，双远程已推送）。
 - 主题：**单机与集群**。
 - 规划：[`docs/v0.0.3/plan.md`](docs/v0.0.3/plan.md)。
 - 里程碑：M1（WP1 + WP2）✅ → M2（WP3 + WP5）✅ → M3（WP4 + WP6）✅。
-- 状态：v0.0.3 已发布（`main` + tag）；下一版本在 `develop` 继续。
+- 状态：v0.0.3 已发布（`main` + tag）；`develop` 保持 v0.0.3，等待确认后再切换下一版本。
 - 已完成：`feature/cluster-safety`、`feature/cluster-ops`、`feature/idempotent-ingest`。
 - 文档：`README.md`（简体中文）/ `README.en.md`（English）双语；版本文档统一放在 `docs/v0.0.3/`；模板与写作规范在 `docs/templates/`。
 

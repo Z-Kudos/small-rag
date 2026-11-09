@@ -13,7 +13,7 @@
 
     <groupId>com.smallrag</groupId>
     <artifactId>small-rag</artifactId>
-    <version>0.0.4-SNAPSHOT</version>
+    <version>0.0.3</version>
     <name>small-rag</name>
     <description>Small pure-text RAG knowledge base exposed as an MCP server</description>
 
