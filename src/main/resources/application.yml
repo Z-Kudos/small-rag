@@ -71,7 +71,7 @@ spring:
     mcp:
       server:
         name: small-rag
-        version: 0.0.3
+        version: 0.0.4-SNAPSHOT
         # standalone 保持 STREAMABLE（有状态会话）；distributed 多副本必须 STATELESS，
         # 否则会话只存在于单副本内存，轮询到其他副本会 404。compose.distributed.yaml 已设置。
         protocol: ${SMALL_RAG_MCP_PROTOCOL:STREAMABLE}

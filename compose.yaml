@@ -10,7 +10,7 @@ services:
         QDRANT_IMAGE: ${QDRANT_IMAGE:-docker.io/qdrant/qdrant:latest}
         JRE_IMAGE: ${JRE_IMAGE:-docker.io/library/eclipse-temurin:25-jre}
         LLAMA_CPP_TAG: ${LLAMA_CPP_TAG:-v0.9.0}
-    image: small-rag:${APP_IMAGE_TAG:-0.0.3}
+    image: small-rag:${APP_IMAGE_TAG:-0.0.4-SNAPSHOT}
     restart: unless-stopped
     # 单容器只对外暴露一个端口：应用 18080
     ports:

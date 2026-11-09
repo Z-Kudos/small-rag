@@ -14,7 +14,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 
 ## 1. 当前阶段
 
-- 版本：`0.0.3`（已发布），发布分支 `release/0.0.3`。
+- 版本：`0.0.4-SNAPSHOT`（v0.0.3 已发布，下一版本未开始）。
 - 上一版：`v0.0.2`（2026-11-07，`main` tag，双远程已推送）。
 - 主题：**单机与集群**。
 - 规划：[`docs/v0.0.3/plan.md`](docs/v0.0.3/plan.md)。
