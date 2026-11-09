@@ -80,14 +80,113 @@
 - **分支模型（Git Flow）**：长期分支 `main`（生产，随时可构建发布）与 `develop`（集成，功能合并目标）；短期分支 `feature/*`（从 `develop` 切出，squash 合回 `develop`）、`release/x.y.z`（从 `develop` 切出收敛发布，只修 bug，`--no-ff` 合入 `main` 并打 `vX.Y.Z` tag，再回灌 `develop`）、`hotfix/*`（从 `main` 或生产 tag 切出，修复合入 `main` 打补丁 tag 后回灌 `develop`）。禁止直接向 `main`/`develop` push；不设 `stable` 长期分支，生产版本由 `main` 上的 tag 标识。
 - `.gitignore` 覆盖 `target/`、`.idea/`、`*.iml`、`.vscode/`、`*.log`、`data/`。
 - 提交信息用 Conventional Commits。首次提交：`chore: bootstrap small-rag with JDK 25 + Spring Cloud 2026.0.0 + Spring AI 2.0.2`。
-- `README.md` 必须含：版本矩阵、文档索引、启动命令、`/mcp` 端点说明、入库示例、RC/milestone 说明。
 - **开发记忆（强制）**：每次开发都必须同步更新项目根目录的 `DEV-MEMORY.md`（不存在则创建）——简要记录本次开发所做的更改。要求：尽可能精简且实时，只保留当前有效的状态（架构、接口、行为、关键决策），过时的记忆直接覆盖或删除，不做历史归档（历史归档交给 git log）。
-- **文档规范（强制）**：完整规范见 `docs/README.md`，要点：
-  - 单一事实来源：`README.md` 面向使用者，`ROADMAP.md` 只写版本级里程碑与验收，`docs/plans/` 写版本规划，`docs/design/` 写跨版本设计，`docs/runbooks/` 写运维步骤，`docs/adr/` 写不可逆决策，`DEV-MEMORY.md` 写当前开发状态。同一事实只在一处定义，其余链接引用。
-  - 新建文档必须放在 `docs/` 对应子目录，文件名用小写 kebab-case 英文；版本规划命名 `plans/vX.Y.Z-<topic>.md`，从 `docs/templates/plan.md` 复制。
-  - 文档必须带 YAML front matter：`title` / `status`（draft|review|approved|implementing|done|superseded）/ `version` / `updated` / `owners` / `related`。
-  - 数字、端口、默认值、命令必须与代码一致；不确定写“待核实”。修改文档同步更新 `updated`。
-  - 版本发布后 plan 标 `done`，要点合并进 `ROADMAP.md`；下一版本开始时删除旧 plan（历史交给 git log）。
+
+## 文档规范（强制）
+
+### 1. 文档分工（单一事实来源）
+
+| 文档 | 读者 | 写什么 | 不写什么 |
+| --- | --- | --- | --- |
+| `README.md` / `README.en.md` | 使用者 | 项目介绍、安装、运行、配置、MCP 工具、客户端接入、迁移 | 开发过程、内部实现细节 |
+| `ROADMAP.md` | 维护者 | 版本目标、里程碑、验收、非目标 | 类名、方法、参数细节 |
+| `docs/plans/` | 开发者 | 版本规划、现状差距、工作包、风险、排期 | 使用教程 |
+| `docs/design/` | 开发者 | 跨版本的设计、取舍与已知限制 | 版本排期 |
+| `docs/runbooks/` | 运维 | 部署、排障、故障处理步骤 | 设计论证 |
+| `docs/adr/` | 开发者 | 单个不可逆决策及理由 | 实现细节 |
+| `DEV-MEMORY.md` | 开发者 / AI | 当前有效状态、坑、待办 | 历史流水、教程 |
+| `AGENTS.md` | AI / 贡献者 | 硬约束、构建命令、代码与文档规范 | 长篇设计 |
+
+**判定规则**：同一事实若已在某处定义，其他文档只写一句摘要并链接过去，不复制细节。`README.md` 的「文档」表是全仓库唯一的文档索引入口，新增文档必须登记到该表（中英文两份同步）。
+
+### 2. README 双语规则
+
+- `README.md` = **简体中文**（默认，GitHub 仓库首页展示）；`README.en.md` = **English**。
+- 两个文件第一行必须是语言切换，且互相指向：
+  - `README.md`：`**简体中文** | [English](README.en.md)`
+  - `README.en.md`：`[简体中文](README.md) | **English**`
+- 两份内容必须**对等**：章节顺序、表格行、命令、版本号、默认值、端口、链接目标一致，只允许语言不同。改任一份必须同步另一份。
+- 两份都必须含：一句话项目介绍、徽章、目录（TOC）、版本矩阵、文档索引、快速开始、容器部署、分布式模式、配置表、MCP 工具、客户端接入、切分策略、目录导入、测试、安全、贡献、许可证。
+- README 只写**使用说明**；架构、包结构、数据流、已知限制放 `docs/design/`，README 用链接引用。
+- 相对链接以仓库根为基准；英文版链接同样指向中文文档，并在文档表下方注明“设计/规划文档为中文”。
+
+### 3. 目录与命名
+
+```text
+docs/
+├── templates/
+│   └── plan.md                            # 规划模板
+├── plans/
+│   └── v0.0.3-standalone-and-cluster.md   # 版本规划
+├── design/                                # 跨版本设计（按需创建）
+├── runbooks/                              # 运维手册（按需创建）
+└── adr/                                   # 架构决策记录（按需创建）
+```
+
+- 文件名统一 **小写 kebab-case 英文**，不含空格和中文。
+- 版本规划：`plans/v<MAJOR>.<MINOR>.<PATCH>-<topic>.md`。
+- 设计文档：`design/<topic>.md`；运维手册：`runbooks/<topic>.md`。
+- 决策记录：`adr/NNNN-<topic>.md`，四位编号从 `0001` 起，只增不改。
+- **不要**再新增 `docs/README.md` 之类的“文档规范”文件；规范只在本文件维护。
+
+### 4. 文档头（必填）
+
+所有 `docs/` 下的文档、`ROADMAP.md`、`DEV-MEMORY.md` 使用 YAML front matter：
+
+```yaml
+---
+title: 一句话标题
+status: draft | review | approved | implementing | done | superseded
+version: 0.0.3
+updated: 2026-11-09
+owners: [zjk]
+related: [ROADMAP.md, DEV-MEMORY.md]
+---
+```
+
+- `status` 只能取上述值；`updated` 必须是最后修改日期。
+- `related` 用相对仓库根目录的路径。
+- 发布后不再更新的文档标 `done`；被新文档取代的标 `superseded` 并在正文首行写明替代链接。
+
+### 5. 各类文档的必备章节
+
+- **规划（`plans/`）**：背景与目标、范围与非目标、现状与差距、工作包（变更点 / 验收 / 风险）、里程碑与排期、验证矩阵、决策记录、完成定义（DoD）。模板见 [`docs/templates/plan.md`](docs/templates/plan.md)。
+- **设计（`design/`）**：问题、约束、方案对比、选定方案与理由、影响面（接口 / 数据 / 兼容性）、回滚方式。
+- **运维（`runbooks/`）**：适用场景、前置检查、操作步骤（可直接复制）、验证、回滚、常见故障。
+- **决策（`adr/`）**：背景、决策、备选方案、后果（正面 / 负面）。
+
+### 6. 写作规则
+
+1. 正文中文；代码、路径、标识符、环境变量保留英文原文（英文 README 除外）。
+2. 版本号、端口、默认值、测试数必须与代码一致；不确定时写“待核实”，不要猜。
+3. 命令必须可直接复制执行，并标注工作目录与前置条件。
+4. 用具体日期或版本，避免“目前”“最新”“以后”等易过时措辞。
+5. 列举优先用表格；步骤优先用有序列表；代码块必须标注语言。
+6. 文档内链接用相对路径，不写绝对路径或本机路径。
+7. 不记录一次性调试过程；结论进文档，过程交给 `git log`。
+8. 修改文档必须同步更新 front matter 的 `updated`。
+
+### 7. 生命周期
+
+```text
+draft → review → approved → implementing → done
+                                   ↘ superseded
+```
+
+- 新版本开始：从模板创建 `plans/vX.Y.Z-<topic>.md`，状态 `draft`。
+- 方案确认：改为 `approved`，并把关键决策同步到 `ROADMAP.md`。
+- 开始编码：改为 `implementing`。
+- 版本发布：改为 `done`，要点合并进 `ROADMAP.md`。
+- 下一版本开始：删除上一版本的 plan（历史由 `git log` 保留）；被替代的设计文档标 `superseded`。
+
+### 8. 提交前检查
+
+- [ ] front matter 完整，`updated` 是今天
+- [ ] 数字、端口、命令与代码一致
+- [ ] 没有复制其他文档已有的细节
+- [ ] 相对链接可打开
+- [ ] 中文标点统一，代码块标注语言
+- [ ] 中英文 README 内容对等（章节、表格、命令、版本号）
 
 ## 验收标准
 

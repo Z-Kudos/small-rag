@@ -1,0 +1,61 @@
+---
+title: 架构与设计要点
+status: approved
+version: 0.0.3
+updated: 2026-11-09
+owners: [zjk]
+related: [README.md, docs/plans/v0.0.3-standalone-and-cluster.md]
+---
+
+# 架构与设计要点
+
+> 面向开发者。使用说明见 [`README.md`](../../README.md)。
+
+## 1. 设计要点
+
+- **仅向量模型**：`spring.ai.model.chat=none`，不创建 ChatModel / ChatClient。
+- **阈值与预算**：`rag.min-score=0.35`；单片段超长时以命中子块（`matched_text`）为中心做窗口截断，总上下文 12000 全宽字符当量，预算不足时跳过当前片段继续尝试装载后续更短片段。
+- **父块独立存储**：父块作为独立 point 与子块同集合写入，子块不再复制父块正文（消除 payload N 倍放大）；检索命中后按 id 取回父块正文与向量，父块缺失时回退为子块原文。
+- **MMR 多样性**：候选超出 topK 时按 `λ·score − (1−λ)·与已选结果的最大相似度` 迭代选取（`MMR_LAMBDA`，默认 0.7）；Parent-Child 复用父块存储向量，零额外 Embedding，其余策略对候选文本做一次批量 Embedding。
+- **空库短路**：检索前用 Qdrant `count` 判断，避免无意义 Embedding 调用。
+- **启动韧性**：Qdrant 不可用只告警（fail-soft）；集合维度不一致直接失败（fail-fast）。
+- **自动重切**：原文归档 + 切分配置签名（签名版本与项目版本同步，当前 `0.0.3`），启动时检测到变化自动删旧片段重建。
+- **Markdown 结构**：标题分节，代码 / 表格 / callout 受保护，frontmatter、heading_path、wikilink 写入元数据；超长表格 / 代码切片重复表头或围栏。
+- **中英对齐**：切分长度按全宽字符当量计量（CJK=1、拉丁=0.25），英文硬切回退单词边界，句界识别带缩写白名单；语义断点支持分位数模式。
+- **重切时机**：启动时同步执行，失败不阻断启动，下次启动继续重试。
+- **目录导入**：确定性文档 id（根 label + 相对路径）+ `mtime/size/SHA-256` 增量；状态文件与归档同卷，丢失时从归档元数据重建；启动 / 定时 / watcher / MCP 异步触发，`max-files-per-scan` 限流。
+- **归档摘要索引**：`.archive/index.json` 保存 metadata / 签名 / 长度，`rag_list` 与启动重切只读摘要，原文按需 `find`。
+- **重切写入顺序**：能枚举旧 point id 时先写新片段再删旧片段，失败时旧数据仍可检索；无法枚举时回退先删后写。
+- **错误收敛**：MCP 工具把运行期异常转为 `{"error": "..."}`，不抛协议层异常。
+
+## 2. 包结构
+
+```text
+mcp/            RagMcpTools：rag_* 共 13 个工具（入库/检索/重建/任务查询/目录导入）
+rag/            RagService（入库/检索/上下文/更新删除重建）、IndexActivityGuard（重建与目录导入互斥）、
+                KnowledgeBaseProbe（空库短路）、QueryCircuitBreaker（检索熔断）
+rag/reindex/    ReindexTaskService（异步重建/看门狗/撤销与宽限期）、ReindexStateStore（任务快照与锁门面）、
+                ReindexStateBackend、QdrantReindexStateBackend（Qdrant 状态集合）、
+                ReindexProgress、ReindexListener、ReindexRevokedException、CancellationScope（OkHttp 主动取消）、
+                ChunkingReindexRunner（启动自动重切）
+rag/sources/    SourceSyncService（多目录 Markdown 扫描/增量/定时/手动触发/watcher）、
+                SourceStateStore（文件指纹与手动删除墓碑）、SourcesLeaderElection（扫描 leader）
+rag/chunking/   ChunkingService、ChunkingStrategy、ChunkingSignature、TextChunk、
+                TextChunker、RecursiveTextChunker、MarkdownChunker、SemanticTextChunker
+rag/archive/    DocumentArchive、ArchivedDocument、ArchivedDocumentSummary（原文归档、摘要索引与签名记录）
+distributed/    DistributedLock、LockHandle、LocalDistributedLock、RedisDistributedLock
+config/         QdrantConfig、McpServerConfig、EmbeddingConfig（HTTP 超时）、
+                DistributedLockConfig、DistributedProperties、RagProperties、QdrantProperties、
+                IndexLockHealthIndicator
+docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord*.conf
+```
+
+`VectorStore` 与 `EmbeddingModel` 均按 Spring AI 接口注入。
+
+## 3. 关键数据流
+
+**入库**：`rag_ingest` / `rag_update` / 目录导入 → `RagService` 归档原文 → `ChunkingService` 切分 → `EmbeddingModel` 批量向量化 → Qdrant upsert（子块 + 父块）。
+
+**检索**：`rag_search` / `rag_query` → 熔断器 → `KnowledgeBaseProbe` 空库短路 → Embedding → Qdrant 相似度检索 → Parent-Child 按 `parent_id` 去重回取父块 → MMR → 上下文拼装。
+
+**重建**：MCP 提交任务 → `IndexActivityGuard` 获取索引活动锁 → `ReindexTaskService` 异步线程 → 逐篇 `RagService.reindexArchived` → 检查点写入 `_reindex_state` → 完成释放锁。

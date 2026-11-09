@@ -4,13 +4,13 @@ status: implementing
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
-related: [ROADMAP.md, docs/plans/v0.0.3-standalone-and-cluster.md, docs/README.md]
+related: [AGENTS.md, ROADMAP.md, docs/plans/v0.0.3-standalone-and-cluster.md]
 ---
 
 # DEV-MEMORY — 当前开发状态
 
 > 只记录**当前有效**的状态；过时内容直接覆盖 / 删除，历史看 `git log`。
-> 编写规范见 [`docs/README.md`](docs/README.md)。
+> 编写规范见 [`AGENTS.md`](AGENTS.md)。
 
 ## 1. 当前阶段
 
@@ -20,6 +20,7 @@ related: [ROADMAP.md, docs/plans/v0.0.3-standalone-and-cluster.md, docs/README.m
 - 规划：[`docs/plans/v0.0.3-standalone-and-cluster.md`](docs/plans/v0.0.3-standalone-and-cluster.md)。
 - 里程碑：M1（WP1 + WP2）→ M2（WP3 + WP5）→ M3（WP4 + WP6）。
 - 下一步：`feature/cluster-safety`（WP1 集群会话 + WP2 fencing）。
+- 文档：`README.md`（简体中文）/ `README.en.md`（English）双语；规范只维护在 `AGENTS.md`，不再有 `docs/README.md`。
 
 **已确认决策（2026-11-09）**
 
@@ -133,8 +134,10 @@ related: [ROADMAP.md, docs/plans/v0.0.3-standalone-and-cluster.md, docs/README.m
 
 | 文档 | 用途 |
 | --- | --- |
-| [`README.md`](README.md) | 安装、运行、配置、MCP 工具、迁移 |
+| [`README.md`](README.md) | 安装、运行、配置、MCP 工具、迁移（简体中文） |
+| [`README.en.md`](README.en.md) | 英文版使用说明 |
 | [`ROADMAP.md`](ROADMAP.md) | 版本目标、里程碑、验收 |
-| [`docs/README.md`](docs/README.md) | 文档规范与索引 |
+| [`docs/design/architecture.md`](docs/design/architecture.md) | 架构、包结构、关键数据流 |
+| [`docs/design/limitations.md`](docs/design/limitations.md) | 已知限制与风险 |
 | [`docs/plans/v0.0.3-standalone-and-cluster.md`](docs/plans/v0.0.3-standalone-and-cluster.md) | v0.0.3 规划 |
 | [`AGENTS.md`](AGENTS.md) | 版本基线、构建命令、代码约束 |
