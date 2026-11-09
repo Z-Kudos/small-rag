@@ -1,6 +1,6 @@
 ---
 title: 已知限制与风险
-status: approved
+status: done
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]

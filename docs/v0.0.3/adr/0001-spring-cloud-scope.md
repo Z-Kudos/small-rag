@@ -1,6 +1,6 @@
 ---
 title: Spring Cloud 组件范围
-status: approved
+status: done
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]

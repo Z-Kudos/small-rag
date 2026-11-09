@@ -1,15 +1,15 @@
 ---
 title: ROADMAP
-status: implementing
+status: done
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
 related: [docs/v0.0.3/plan.md, DEV-MEMORY.md]
 ---
 
-# ROADMAP — v0.0.3（进行中）
+# ROADMAP — v0.0.3（已发布）
 
-> 当前开发版本 `0.0.3-SNAPSHOT`（`develop`）；上一版 `v0.0.2` 已于 2026-11-07 发布。
+> 当前版本 `v0.0.3`（2026-11-09 发布）；上一版 `v0.0.2` 已于 2026-11-07 发布。
 > 工作包与验收细节见 [`docs/v0.0.3/plan.md`](docs/v0.0.3/plan.md)。
 > 本文只记录版本级目标、里程碑与验收，不记录实现细节。
 
@@ -37,22 +37,22 @@ v0.0.3 主题：**单机与集群**——一套语义、两种形态。
 
 ## 3. 里程碑
 
-### M1 集群可用（进行中）
+### M1 集群可用
 
-- ⬜ **WP1 集群会话**：distributed 使用 `STATELESS`，不依赖粘性会话。
-- ⬜ **WP2 任务所有权**：Redis 租约 + fencing token；Qdrant 锁 point 降级为诊断镜像。
+- ✅ **WP1 集群会话**：distributed 使用 `STATELESS`，不依赖粘性会话。
+- ✅ **WP2 任务所有权**：Redis 租约 + fencing token；Qdrant 锁 point 降级为诊断镜像。
 - 验收：两副本经 gateway 连续 50 次 MCP 调用成功；`kill -9` 持有者后安全接管，旧副本无法继续写入。
 
 ### M2 集群可运维
 
-- ⬜ **WP3 跨副本任务状态**：`rag_task_status` / `rag_task_resume` / `rag_task_cancel` 任意副本可用。
-- ⬜ **WP5 观测**：health 增加 `archive` 与 `reindexTask`（owner / epoch）。
+- ✅ **WP3 跨副本任务状态**：`rag_task_status` / `rag_task_resume` / `rag_task_cancel` 任意副本可用。
+- ✅ **WP5 观测**：health 增加 `archive` 与 `reindexTask`（owner / epoch）。
 - 验收：任意副本可查 / 续 / 取消；health 能定位 owner / epoch。
 
 ### M3 数据正确性
 
-- ⬜ **WP4 幂等写入**：chunk id 确定性化，孤儿 / 重复片段清理。
-- ⬜ **WP6 测试与文档**：Testcontainers E2E 纳入 CI；迁移与限制文档。
+- ✅ **WP4 幂等写入**：chunk id 确定性化，孤儿 / 重复片段清理。
+- ✅ **WP6 测试与文档**：Testcontainers E2E 纳入 CI；迁移与限制文档。
 - 验收：重复 upsert 片段数恒定；`mvn verify -Pcontainer-it` 通过。
 
 ## 4. 已完成（v0.0.2）
@@ -76,8 +76,8 @@ v0.0.3 主题：**单机与集群**——一套语义、两种形态。
 
 ## 6. 验收标准
 
-1. `mvn clean package` 通过；全部测试全绿（当前基线 154，`*RedisIT` 默认跳过）。
-2. `mvn verify -Pcontainer-it` 通过（Testcontainers：Qdrant + Redis + 假 Embedding）。
+1. `mvn clean package` 通过；全部测试全绿（当前基线 174，`*RedisIT` / `*ContainerIT` 默认跳过）。
+2. `mvn verify -Pcontainer-it` 通过（Testcontainers：真实 Qdrant + Redis；Qdrant E2E 使用确定性哈希 Embedding）。
 3. `docker compose up -d --build` 单容器行为与 v0.0.2 一致。
 4. `docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-rag=2` 可运行。
 5. 双副本同一时刻只有一个重建任务 / 目录扫描；`kill` 持有者后租约过期接管。

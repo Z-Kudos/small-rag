@@ -1,6 +1,6 @@
 ---
 title: 架构与设计要点
-status: approved
+status: done
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
