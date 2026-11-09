@@ -19,9 +19,9 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 - 上一版：`v0.0.2`（2026-11-07，`main` tag，双远程已推送）。
 - 主题：**单机与集群**。
 - 规划：[`docs/v0.0.3/plan.md`](docs/v0.0.3/plan.md)。
-- 里程碑：M1（WP1 + WP2）✅ → M2（WP3 + WP5）✅ → M3（WP4 + WP6）✅。
-- 状态：v0.0.3 已发布（`main` + tag）；`develop` 保持 v0.0.3，等待确认后再切换下一版本。
-- 已完成：`feature/cluster-safety`、`feature/cluster-ops`、`feature/idempotent-ingest`。
+- 里程碑：M1（WP1 + WP2）✅ → M2（WP3 + WP5）✅ → M3（WP4 + WP6）✅ → WP7（Spring Cloud 数据面）✅。
+- 状态：v0.0.3 已发布（`main` + tag）；`develop` 保持 v0.0.3 并包含 Spring Cloud 数据面后继变更，等待确认后再切换下一版本。
+- 已完成：`feature/cluster-safety`、`feature/cluster-ops`、`feature/idempotent-ingest`、`feature/spring-cloud-data-plane`。
 - 文档：`README.md`（简体中文）/ `README.en.md`（English）双语；版本文档统一放在 `docs/v0.0.3/`；模板与写作规范在 `docs/templates/`。
 
 **已确认决策（2026-11-09）**
@@ -32,6 +32,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 | D2 | 集群传输 | distributed 默认 `STATELESS`；standalone 保持 `STREAMABLE` |
 | D3 | 幂等改造 | 本期做：chunk id 确定性化，接受一次全量重切 |
 | D4 | 容器化测试 | 纳入 CI：Testcontainers E2E 在 CI 跑 |
+| D5 | Spring Cloud 数据面 | Gateway（WebFlux）+ Config Server（native）+ CircuitBreaker（Resilience4j 实现）；保留 Consul discovery，移除 HAProxy |
 
 ## 2. 构建与验证
 
@@ -134,8 +135,8 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 
 ## 6. 待办
 
-- v0.0.3：WP1–WP6 已完成；进入发布收尾（文档冻结、release/v0.0.3 → main + tag）。
-- 暂无 P3 网关项；Gateway / Config Server 已纳入 v0.0.3 后继变更。
+- v0.0.3：WP1–WP7 已完成；`main` + tag `v0.0.3` 已发布，`develop` 保留 Spring Cloud 数据面后继变更；未切换版本。
+- 分布式实机演练：2 副本经 Gateway 连续 50 次 MCP 调用、`kill -9` 接管、Redis 故障 fail-closed。
 - 真实语料端到端验证 MMR 效果（需 Qdrant + 实际知识库人工评估）。
 - 混合主题语料校准 `SEMANTIC_BREAKPOINT_PERCENTILE`（当前校准语料同质，分布扁平）。
 

@@ -49,13 +49,13 @@ A **plain-text RAG retrieval** MCP service built on Spring AI: it only ingests a
 | Spring Cloud | 2026.0.0-RC1 | Matches Boot 4.2.0-RC1 |
 | Spring AI | 2.0.2 | Maven Central stable |
 | Qdrant | 1.x | gRPC port 6334 |
-| MCP | Streamable HTTP | Endpoint `/mcp` |
+| MCP | Streamable HTTP / Stateless | Endpoint `/mcp`; Streamable for standalone, Stateless for distributed |
 
 > Boot / Cloud resolve from `https://repo.spring.io/milestone`, already configured in `pom.xml`.
 
 ## Documentation
 
-The documents below belong to the current version **v0.0.3**. After release, `docs/v0.0.3/` is frozen and the next version gets its own directory.
+The documents below belong to the current version **v0.0.3** and include post-release Spring Cloud data-plane changes. The next version gets its own `docs/vX.Y.Z/` directory.
 
 | Document | Contents |
 | --- | --- |
@@ -289,12 +289,17 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 | `SMALL_RAG_LOCK_LEASE` | `30s` | Index activity lock lease |
 | `SMALL_RAG_LOCK_RENEW_INTERVAL` | `10s` | Renewal interval, must be clearly shorter than the lease |
 | `SMALL_RAG_LOCK_PREFIX` | `smallrag:lock:` | Lock key prefix |
-| `CONSUL_ENABLED` | `false` | Enable Consul service registration and discovery (service name `small-rag`) |
+| `CONSUL_ENABLED` | `false` (app) / `true` (gateway) | Enable Consul service registration and discovery (service name `small-rag`) |
 | `CONSUL_HOST` / `CONSUL_PORT` | `localhost` / `8500` | Consul agent address |
 | `CONSUL_REGISTER` | `true` | Whether to register with Consul |
+| `CONSUL_INSTANCE_ID` | `${spring.application.name}-${HOSTNAME}-${server.port}` | Unique instance id for multiple replicas |
+| `CONSUL_CONFIG_FAIL_FAST` | `false` | Whether to block startup when Consul KV is unreachable |
 | `CONFIG_SERVER_ENABLED` | `false` | Enable the Config Server client; the distributed overlay sets it |
 | `CONFIG_SERVER_FAIL_FAST` | `false` | Whether to block startup when Config Server is unreachable |
+| `CONFIG_SERVER_PORT` | `8888` | Config Server listen port |
+| `CONFIG_SERVER_SEARCH_LOCATIONS` | `file:/config` | Native config repository path |
 | `SPRING_CONFIG_IMPORT` | empty | e.g. `optional:configserver:http://config-server:8888` or `optional:consul:` |
+| `GATEWAY_PORT` | `18080` | Gateway listen port |
 | `GATEWAY_RESPONSE_TIMEOUT` | `1h` | Gateway long-response timeout for MCP |
 | `GATEWAY_CONNECT_TIMEOUT_MS` | `5000` | Gateway backend connect timeout (ms) |
 | `RAG_QUERY_BREAKER_ENABLED` | `true` | Circuit breaker for `rag_search` / `rag_query` |

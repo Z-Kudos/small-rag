@@ -66,4 +66,4 @@ related: [README.md, docs/v0.0.3/plan.md]
 ## 5. 演进
 
 - v0.0.3 计划 / 已落地：WP1 `STATELESS`（已完成）、WP2 Redis 租约 + fencing epoch（已完成）、WP3 跨副本任务状态（已完成）、WP4 确定性 chunk id 与孤儿清理（已完成）、WP5 观测与一致性诊断（已完成）、WP6 Testcontainers + CI（已完成）、WP7 Spring Cloud Gateway / Config Server / CircuitBreaker（已完成，ADR-0002）。
-- 修复完成后在下一版本的 `docs/v<next>/design/limitations.md` 更新；本文随 v0.0.3 冻结。
+- v0.0.3 发布后本文只做事实性修正；Spring Cloud 数据面后继变更已记录在本文与 ADR-0002，下一版本另建 `docs/v<next>/`。

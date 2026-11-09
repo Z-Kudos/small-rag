@@ -49,13 +49,13 @@
 | Spring Cloud | 2026.0.0-RC1 | 与 Boot 4.2.0-RC1 对应 |
 | Spring AI | 2.0.2 | Maven Central 稳定版 |
 | Qdrant | 1.x | gRPC 端口 6334 |
-| MCP | Streamable HTTP | 端点 `/mcp` |
+| MCP | Streamable HTTP / Stateless | 端点 `/mcp`；standalone 用 Streamable，distributed 用 Stateless |
 
 > Boot / Cloud 从 `https://repo.spring.io/milestone` 解析，已在 `pom.xml` 配置。
 
 ## 文档
 
-以下为当前版本 **v0.0.3** 的文档；版本发布后 `docs/v0.0.3/` 已冻结，下一版本另建目录。
+以下为当前版本 **v0.0.3** 的文档；包含发布后的 Spring Cloud 数据面变更。下一版本另建 `docs/vX.Y.Z/` 目录。
 
 | 文档 | 内容 |
 | --- | --- |
@@ -287,12 +287,17 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 | `SMALL_RAG_LOCK_LEASE` | `30s` | 索引活动锁租约 |
 | `SMALL_RAG_LOCK_RENEW_INTERVAL` | `10s` | 续租间隔，必须明显小于租约 |
 | `SMALL_RAG_LOCK_PREFIX` | `smallrag:lock:` | 锁 key 前缀 |
-| `CONSUL_ENABLED` | `false` | 启用 Consul 服务注册与发现（服务名 `small-rag`） |
+| `CONSUL_ENABLED` | `false`（app）/ `true`（gateway） | 启用 Consul 服务注册与发现（服务名 `small-rag`） |
 | `CONSUL_HOST` / `CONSUL_PORT` | `localhost` / `8500` | Consul agent 地址 |
 | `CONSUL_REGISTER` | `true` | 是否注册到 Consul |
+| `CONSUL_INSTANCE_ID` | `${spring.application.name}-${HOSTNAME}-${server.port}` | 多副本唯一实例 id |
+| `CONSUL_CONFIG_FAIL_FAST` | `false` | Consul KV 不可达时是否阻止启动 |
 | `CONFIG_SERVER_ENABLED` | `false` | 启用 Config Server 客户端；distributed overlay 已设置 |
 | `CONFIG_SERVER_FAIL_FAST` | `false` | Config Server 不可达时是否阻止启动 |
+| `CONFIG_SERVER_PORT` | `8888` | Config Server 自身监听端口 |
+| `CONFIG_SERVER_SEARCH_LOCATIONS` | `file:/config` | native 配置仓库路径 |
 | `SPRING_CONFIG_IMPORT` | 空 | 例如 `optional:configserver:http://config-server:8888` 或 `optional:consul:` |
+| `GATEWAY_PORT` | `18080` | Gateway 监听端口 |
 | `GATEWAY_RESPONSE_TIMEOUT` | `1h` | Gateway 代理 MCP 的长响应超时 |
 | `GATEWAY_CONNECT_TIMEOUT_MS` | `5000` | Gateway 连接后端超时（毫秒） |
 | `RAG_QUERY_BREAKER_ENABLED` | `true` | `rag_search` / `rag_query` 熔断开关 |

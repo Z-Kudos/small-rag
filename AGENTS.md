@@ -76,7 +76,7 @@
 
 ## 代码约束
 
-- 测试：默认 `mvn test` 不依赖外部服务；容器化 E2E 用 `mvn verify -Pcontainer-it`（Testcontainers + 真实 Qdrant/Redis，需 Docker/Podman，默认镜像 `qdrant/qdrant:latest` / `redis:7.4-alpine`，可 `-Dsmallrag.qdrant.image=...` / `-Dsmallrag.redis.image=...` 覆盖）；`*RedisIT` 需 `-Dsmallrag.redis.it=true` 且本机 Redis 6390；离线 RAG 评测在 `src/test/java/.../rag/eval/`（`EvalMetrics` + `RagPipelineEvaluationTest`）；CI 见 `.github/workflows/ci.yml`（unit + container-it 两个 job）。
+- 测试：默认 `mvn test` 不依赖外部服务；容器化 E2E 用 `mvn verify -Pcontainer-it`（Testcontainers + 真实 Qdrant/Redis，需 Docker/Podman，默认镜像 `qdrant/qdrant:latest` / `redis:7.4-alpine`，可 `-Dsmallrag.qdrant.image=...` / `-Dsmallrag.redis.image=...` 覆盖）；`*RedisIT` 需 `-Dsmallrag.redis.it=true` 且本机 Redis 6390；离线 RAG 评测在 `app/src/test/java/.../rag/eval/`（`EvalMetrics` + `RagPipelineEvaluationTest`）；CI 见 `.github/workflows/ci.yml`（unit + container-it 两个 job）。
 
 - Lombok：DTO 用 `@Data`/`@Builder`/`@NoArgsConstructor`/`@AllArgsConstructor`，Service 用 `@RequiredArgsConstructor` 构造注入（禁 `@Autowired` 字段注入），日志 `@Slf4j`。
 - **Spring Boot 4 已迁移 Jackson 3**：import 一律 `tools.jackson.*`，`com.fasterxml.jackson.*` 编译失败。

@@ -5,7 +5,7 @@ version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
 template: docs/templates/plan.md
-related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.md, docs/v0.0.3/design/limitations.md, docs/v0.0.3/adr/0001-spring-cloud-scope.md]
+related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.md, docs/v0.0.3/design/limitations.md, docs/v0.0.3/adr/0001-spring-cloud-scope.md, docs/v0.0.3/adr/0002-spring-cloud-data-plane.md]
 ---
 
 # v0.0.3 规划：单机与集群
@@ -38,7 +38,9 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 2. **单机零回归**：集群能力在 `smallrag.distributed.enabled=false` 时退化到进程内实现。
 3. **状态以外部存储为准**：Qdrant 存快照，Redis 存租约与 fencing；内存只做本实例加速。
 
-## 3. 现状与差距（已核对代码）
+## 3. 现状与差距（v0.0.3 开工基线，已核对代码）
+
+> 以下 G1–G8 是开工时的现状；WP1–WP7 已完成对应改造，保留此表用于回溯问题来源。
 
 | # | 能力 | 单机 | 集群 | 差距 / 影响 |
 | --- | --- | --- | --- | --- |
@@ -71,7 +73,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 
 - distributed 模式设 `spring.ai.mcp.server.protocol=STATELESS`（已确认 Spring AI 2.0.2 + WebMVC 支持，端点仍是 `/mcp`）。
 - standalone 保持 `STREAMABLE`。
-- HAProxy 保留 `roundrobin`；若坚持 STREAMABLE 集群，文档给出 `balance source` 与限制说明。
+- 网关保留轮询；WP7 已改为 Spring Cloud Gateway + Consul + LoadBalancer。
 - 工具走注解扫描，`McpServerConfig` 无需改；需验证 stateless 下 13 个工具全部可见。
 
 **验收**
@@ -246,7 +248,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 
 `.github/workflows/ci.yml`（GitHub Actions）已落地：
 
-- `unit`：JDK 25（temurin），`mvn -B clean package`，不依赖外部服务。
+- `unit`：JDK 25（temurin），`mvn -B clean verify`，不依赖外部服务。
 - `container-it`：`mvn -B verify -Pcontainer-it`。GitHub 托管的 `ubuntu-latest` 自带 Docker daemon，Testcontainers 可直接使用，**不需要 DinD**。
 - `image`：后续可选；当前 CI 只跑单元与容器 E2E，镜像构建由本地 / 发布流程负责。
 
@@ -256,9 +258,11 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 
 - [x] `mvn clean package` 通过，单测全绿且默认不依赖外部服务（app 176 + gateway 2 + config-server 1）
 - [x] `mvn verify -Pcontainer-it` 通过（Qdrant + Redis + 确定性哈希 Embedding）
-- [ ] standalone：jar 冒烟 + all-in-one 镜像冒烟与 v0.0.2 行为一致
-- [ ] distributed：2 副本经 Spring Cloud Gateway 连续 50 次 MCP 调用成功
-- [ ] 故障：`kill -9` 持有者后安全接管，旧副本无法继续写入；Redis 不可用时写索引 fail-closed
-- [ ] `rag_task_status` / `rag_task_resume` / `rag_task_cancel` 在任意副本可用
-- [ ] 同一文档重复 upsert 片段数恒定；`rag_rebuild` 后无孤儿父块
-- [ ] README / ROADMAP / DEV-MEMORY 同步，迁移与限制写清楚
+- [x] standalone：jar 冒烟 + all-in-one 镜像冒烟（v0.0.3 发布前已验证）
+- [ ] distributed：2 副本经 Spring Cloud Gateway 连续 50 次 MCP 调用成功（需真实部署环境演练）
+- [ ] 故障：`kill -9` 持有者后安全接管，旧副本无法继续写入；Redis 不可用时写索引 fail-closed（需真实部署环境演练）
+- [x] `rag_task_status` / `rag_task_resume` / `rag_task_cancel` 跨副本逻辑有单元测试覆盖
+- [x] 同一文档重复 upsert 片段数恒定；`rag_rebuild` 后无孤儿父块（容器 E2E 覆盖）
+- [x] README / ROADMAP / DEV-MEMORY 同步，迁移与限制写清楚
+
+> 未勾选项属于真实多副本故障演练，无法在本地 CI 中可靠复现；部署验收时按第 6 节矩阵执行。

@@ -4,7 +4,7 @@ status: implementing
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
-related: [docs/v0.0.3/plan.md, DEV-MEMORY.md]
+related: [docs/v0.0.3/plan.md, docs/v0.0.3/adr/0002-spring-cloud-data-plane.md, DEV-MEMORY.md]
 ---
 
 # ROADMAP — v0.0.3（已发布，后继变更中）
