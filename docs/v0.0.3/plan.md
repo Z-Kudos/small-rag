@@ -4,6 +4,7 @@ status: approved
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
+template: docs/templates/plan.md
 related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.md, docs/v0.0.3/design/limitations.md, docs/v0.0.3/adr/0001-spring-cloud-scope.md]
 ---
 

@@ -92,9 +92,9 @@
 | `ROADMAP.md` | 维护者 | 版本目标、里程碑、验收、非目标 | 类名、方法、参数细节 |
 | `docs/v<version>/` | 开发者 / 运维 | **当前开发版本**的规划、设计、ADR、运维手册；版本发布后冻结 | 跨版本内容、使用教程 |
 | `DEV-MEMORY.md` | 开发者 / AI | 当前有效状态、坑、待办 | 历史流水、教程 |
-| `AGENTS.md` | AI / 贡献者 | 硬约束、构建命令、代码与文档规范 | 长篇设计 |
+| `AGENTS.md` | AI / 贡献者 | 硬约束、构建命令、代码规范、文档治理 | 长篇设计、各类型写作规范 |
 
-**判定规则**：同一事实若已在某处定义，其他文档只写一句摘要并链接过去，不复制细节。`README.md` 的「文档」表是全仓库唯一的文档索引入口，新增文档必须登记到该表（中英文两份同步）。
+**判定规则**：同一事实若已在某处定义，其他文档只写一句摘要并链接过去，不复制细节。`README.md` 的「文档」表登记用户可见的版本文档；模板与写作规范入口见本文件。新增用户文档必须同步登记到中英文两份表。
 
 **版本绑定（强制）**：除 `docs/templates/` 外，`docs/` 下的每一份文档都必须位于 `docs/v<version>/` 目录中，且 front matter 的 `version` 与目录一致。**不要**在 `docs/` 根下新建 `plans/`、`design/`、`adr/`、`runbooks/`；不要为尚未开始的版本提前写文档。
 
@@ -113,8 +113,11 @@
 
 ```text
 docs/
-├── templates/
-│   └── plan.md                    # 跨版本共享的规划模板
+├── templates/                     # 跨版本共享：只放模板与写作规范
+│   ├── plan.md
+│   ├── design.md
+│   ├── adr.md
+│   └── runbook.md
 └── v0.0.3/                        # 只对应 v0.0.3 开发版本
     ├── plan.md                    # 版本规划（固定入口）
     ├── design/
@@ -126,10 +129,20 @@ docs/
 ```
 
 - 版本目录：`docs/v<MAJOR>.<MINOR>.<PATCH>/`，一个版本一个目录；目录内所有文档的 `version` 必须与该版本一致。
-- 固定入口：`plan.md`；设计文档 `design/<topic>.md`；决策记录 `adr/NNNN-<topic>.md`；运维手册 `runbooks/<topic>.md`。
 - 文件名统一 **小写 kebab-case 英文**，不含空格和中文；ADR 四位编号从 `0001` 起，只增不改。
 - `docs/templates/` 是唯一跨版本共享的目录，只放模板，不放实际文档。
-- **不要**再新增 `docs/README.md` 之类的“文档规范”文件；规范只在本文件维护。
+- **不要**再新增 `docs/README.md` 之类的“文档规范”文件。
+
+**文档类型与模板**
+
+| 文档类型 | 模板（含写作规范） | 存放位置 |
+| --- | --- | --- |
+| 版本规划 | [`docs/templates/plan.md`](docs/templates/plan.md) | `docs/v<version>/plan.md` |
+| 设计 / 架构 / 限制 | [`docs/templates/design.md`](docs/templates/design.md) | `docs/v<version>/design/<topic>.md` |
+| 架构决策 | [`docs/templates/adr.md`](docs/templates/adr.md) | `docs/v<version>/adr/NNNN-<topic>.md` |
+| 运维手册 | [`docs/templates/runbook.md`](docs/templates/runbook.md) | `docs/v<version>/runbooks/<topic>.md` |
+
+**写作规范只放在模板文件内**：复制模板后按文件头部的注释执行，删除注释再提交。`AGENTS.md` 只定义目录、版本绑定、front matter、生命周期和提交前检查，不再重复各类型的章节要求。
 
 ### 4. 文档头（必填）
 
@@ -142,33 +155,17 @@ status: draft | review | approved | implementing | done | superseded
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
+template: docs/templates/<type>.md
 related: [ROADMAP.md, DEV-MEMORY.md]
 ---
 ```
 
 - `status` 只能取上述值；`updated` 必须是最后修改日期。
 - `version` 必须与所在目录 `docs/v<version>/` 一致；`related` 用相对仓库根目录的路径。
+- `docs/` 下的文档必须含 `template`，指向实际使用的模板；`ROADMAP.md` / `DEV-MEMORY.md` 不需要。
 - 发布后不再更新的文档标 `done`；被新文档取代的标 `superseded` 并在正文首行写明替代链接。
 
-### 5. 各类文档的必备章节
-
-- **规划（`v<version>/plan.md`）**：背景与目标、范围与非目标、现状与差距、工作包（变更点 / 验收 / 风险）、里程碑与排期、验证矩阵、决策记录、完成定义（DoD）。模板见 [`docs/templates/plan.md`](docs/templates/plan.md)。
-- **设计（`v<version>/design/`）**：问题、约束、方案对比、选定方案与理由、影响面（接口 / 数据 / 兼容性）、回滚方式。
-- **运维（`v<version>/runbooks/`）**：适用场景、前置检查、操作步骤（可直接复制）、验证、回滚、常见故障。
-- **决策（`v<version>/adr/`）**：背景、决策、备选方案、后果（正面 / 负面）。
-
-### 6. 写作规则
-
-1. 正文中文；代码、路径、标识符、环境变量保留英文原文（英文 README 除外）。
-2. 版本号、端口、默认值、测试数必须与代码一致；不确定时写“待核实”，不要猜。
-3. 命令必须可直接复制执行，并标注工作目录与前置条件。
-4. 用具体日期或版本，避免“目前”“最新”“以后”等易过时措辞。
-5. 列举优先用表格；步骤优先用有序列表；代码块必须标注语言。
-6. 文档内链接用相对路径，不写绝对路径或本机路径。
-7. 不记录一次性调试过程；结论进文档，过程交给 `git log`。
-8. 修改文档必须同步更新 front matter 的 `updated`。
-
-### 7. 生命周期
+### 5. 生命周期
 
 ```text
 draft → review → approved → implementing → done
@@ -183,14 +180,14 @@ draft → review → approved → implementing → done
 - 下一版本开始：新建 `docs/vX.Y.Z+1/`，不修改已冻结的上一版本目录；历史由版本目录 + `git log` 共同保留。
 - 被替代的文档标 `superseded` 并在正文首行写明替代链接；不要直接删除已发布版本的文档。
 
-### 8. 提交前检查
+### 6. 提交前检查
 
 - [ ] front matter 完整，`updated` 是今天，`version` 与所在 `docs/v<version>/` 目录一致
+- [ ] `docs/` 下的文档含 `template`，且内容符合该模板头部的写作规范
 - [ ] 文档位于当前开发版本的目录，没有在 `docs/` 根下新建 `plans/` / `design/` / `adr/` / `runbooks/`
 - [ ] 数字、端口、命令与代码一致
 - [ ] 没有复制其他文档已有的细节
 - [ ] 相对链接可打开
-- [ ] 中文标点统一，代码块标注语言
 - [ ] 中英文 README 内容对等（章节、表格、命令、版本号）
 
 ## 验收标准

@@ -4,6 +4,7 @@ status: approved
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
+template: docs/templates/design.md
 related: [README.md, docs/v0.0.3/plan.md]
 ---
 
@@ -11,7 +12,18 @@ related: [README.md, docs/v0.0.3/plan.md]
 
 > 面向开发者。使用说明见 [`README.md`](../../../README.md)。
 
-## 1. 设计要点
+## 1. 背景与范围
+
+- 目标：说明 v0.0.3 的架构分层、包结构与关键数据流，供开发、评审与排障使用。
+- 范围：只覆盖当前版本；使用说明见 `README.md`，已知限制与风险见 [`limitations.md`](limitations.md)。
+
+## 2. 约束
+
+- JDK 25、Spring Boot `4.2.0-RC1`、Spring Cloud `2026.0.0-RC1`、Spring AI `2.0.2`。
+- 只使用 Embedding 模型，不创建 ChatModel / ChatClient。
+- 向量库固定 Qdrant；standalone 模式零新增外部依赖。
+
+## 3. 设计要点
 
 - **仅向量模型**：`spring.ai.model.chat=none`，不创建 ChatModel / ChatClient。
 - **阈值与预算**：`rag.min-score=0.35`；单片段超长时以命中子块（`matched_text`）为中心做窗口截断，总上下文 12000 全宽字符当量，预算不足时跳过当前片段继续尝试装载后续更短片段。
@@ -28,7 +40,7 @@ related: [README.md, docs/v0.0.3/plan.md]
 - **重切写入顺序**：能枚举旧 point id 时先写新片段再删旧片段，失败时旧数据仍可检索；无法枚举时回退先删后写。
 - **错误收敛**：MCP 工具把运行期异常转为 `{"error": "..."}`，不抛协议层异常。
 
-## 2. 包结构
+## 4. 包结构
 
 ```text
 mcp/            RagMcpTools：rag_* 共 13 个工具（入库/检索/重建/任务查询/目录导入）
@@ -52,10 +64,23 @@ docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord*.c
 
 `VectorStore` 与 `EmbeddingModel` 均按 Spring AI 接口注入。
 
-## 3. 关键数据流
+## 5. 关键数据流
 
 **入库**：`rag_ingest` / `rag_update` / 目录导入 → `RagService` 归档原文 → `ChunkingService` 切分 → `EmbeddingModel` 批量向量化 → Qdrant upsert（子块 + 父块）。
 
 **检索**：`rag_search` / `rag_query` → 熔断器 → `KnowledgeBaseProbe` 空库短路 → Embedding → Qdrant 相似度检索 → Parent-Child 按 `parent_id` 去重回取父块 → MMR → 上下文拼装。
 
 **重建**：MCP 提交任务 → `IndexActivityGuard` 获取索引活动锁 → `ReindexTaskService` 异步线程 → 逐篇 `RagService.reindexArchived` → 检查点写入 `_reindex_state` → 完成释放锁。
+
+## 6. 影响面与限制
+
+- **接口**：MCP 端点 `/mcp` 与 13 个工具签名保持稳定；`rag_query` 仍只返回增强上下文。
+- **数据**：主集合存子块与父块，独立集合 `<collection>_reindex_state` 存任务快照与锁；归档目录存原文与摘要索引。
+- **兼容性**：`ChunkingSignature` 版本与项目版本同步，升级可能触发一次全量重切。
+- **运维**：`/actuator/health` 暴露锁、leader、熔断状态；distributed 模式依赖 Redis 与共享归档卷。
+- **限制与风险**：见 [`limitations.md`](limitations.md)。
+
+## 7. 回滚与演进
+
+- **回滚**：配置回退到上一版本；归档保留原文，可用 `rag_rebuild` 按当前配置重建；`ChunkingSignature` 变更后首次启动会自动重切。
+- **演进**：v0.0.3 的集群与幂等改造见 [`../plan.md`](../plan.md)；跨版本决策见 [`../adr/`](../adr/)。

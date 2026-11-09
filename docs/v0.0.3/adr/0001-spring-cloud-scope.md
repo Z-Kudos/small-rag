@@ -4,6 +4,7 @@ status: approved
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
+template: docs/templates/adr.md
 related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 ---
 

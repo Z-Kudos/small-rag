@@ -20,7 +20,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 - 规划：[`docs/v0.0.3/plan.md`](docs/v0.0.3/plan.md)。
 - 里程碑：M1（WP1 + WP2）→ M2（WP3 + WP5）→ M3（WP4 + WP6）。
 - 下一步：`feature/cluster-safety`（WP1 集群会话 + WP2 fencing）。
-- 文档：`README.md`（简体中文）/ `README.en.md`（English）双语；规范只维护在 `AGENTS.md`；版本文档统一放在 `docs/v0.0.3/`。
+- 文档：`README.md`（简体中文）/ `README.en.md`（English）双语；版本文档统一放在 `docs/v0.0.3/`；模板与写作规范在 `docs/templates/`。
 
 **已确认决策（2026-11-09）**
 
@@ -142,4 +142,8 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 | [`docs/v0.0.3/design/architecture.md`](docs/v0.0.3/design/architecture.md) | 架构、包结构、关键数据流 |
 | [`docs/v0.0.3/design/limitations.md`](docs/v0.0.3/design/limitations.md) | 已知限制与风险 |
 | [`docs/v0.0.3/adr/0001-spring-cloud-scope.md`](docs/v0.0.3/adr/0001-spring-cloud-scope.md) | Spring Cloud 组件范围决策 |
+| [`docs/templates/plan.md`](docs/templates/plan.md) | 版本规划模板（含写作规范） |
+| [`docs/templates/design.md`](docs/templates/design.md) | 设计 / 架构 / 限制模板（含写作规范） |
+| [`docs/templates/adr.md`](docs/templates/adr.md) | 架构决策模板（含写作规范） |
+| [`docs/templates/runbook.md`](docs/templates/runbook.md) | 运维手册模板（含写作规范） |
 | [`AGENTS.md`](AGENTS.md) | 版本基线、构建命令、代码约束 |

@@ -4,12 +4,38 @@ status: draft
 version: <x.y.z>
 updated: <YYYY-MM-DD>
 owners: [zjk]
+template: docs/templates/plan.md
 related: [ROADMAP.md, DEV-MEMORY.md]
 ---
 
-# <版本> 规划：<主题>
+<!--
+写作规范（复制本模板后删除本段注释）
 
-> 存放位置：`docs/v<version>/plan.md`（本模板跨版本共享）。
+存放位置：docs/v<version>/plan.md
+必填章节：
+1. 背景与目标
+2. 现状与差距
+3. 工作包
+4. 里程碑与排期
+5. 验证矩阵
+6. 决策记录
+7. 完成定义（DoD）
+
+规则：
+- 目标必须可验证；非目标要明确写出排除项。
+- 工作包每项写目标、变更点、验收、风险；验收尽量是命令或可观察结果。
+- 决策记录只写结论与日期；不可逆或影响面大的决策另建 docs/v<version>/adr/NNNN-<topic>.md。
+- 版本号、端口、默认值、测试数必须与代码一致；不确定写“待核实”。
+- 版本发布后 status 改 done，该版本目录冻结；下一版本新建 docs/vX.Y.Z/。
+
+通用规则：
+- 正文中文；代码、路径、标识符、环境变量保留英文原文。
+- 命令必须可直接复制执行，并标注工作目录与前置条件。
+- 代码块必须标注语言；文档内链接用相对路径。
+- 不记录一次性调试过程；修改文档同步更新 front matter 的 updated。
+-->
+
+# <版本> 规划：<主题>
 
 > 一句话说明本版本要解决的核心问题。
 
@@ -61,7 +87,7 @@ related: [ROADMAP.md, DEV-MEMORY.md]
 | --- | --- | --- | --- |
 | D1 | | | |
 
-不可逆或影响面大的决策另建 `adr/NNNN-*.md`。
+不可逆或影响面大的决策另建 `adr/NNNN-<topic>.md`。
 
 ## 7. 完成定义（DoD）
 
