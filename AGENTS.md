@@ -17,7 +17,7 @@
 ## 依赖与构建
 
 - parent 用 `spring-boot-starter-parent`；`spring-cloud-dependencies` 与 `spring-ai-bom` 均以 `import` 引入。
-- Starter 清单：`spring-ai-starter-mcp-server-webmvc`、`spring-ai-starter-model-openai`（**不存在 `spring-ai-starter-model-embedding`**）、`spring-ai-starter-vector-store-qdrant`、`spring-boot-starter-web`、`spring-boot-starter-data-redis`（distributed 模式锁；standalone 不会连接）、`spring-cloud-starter-consul-discovery` / `spring-cloud-starter-consul-config`（默认关闭；discovery 已显式排除未使用的 `spring-cloud-starter-loadbalancer`）、`spring-boot-starter-actuator`（仅 `/actuator/health`）、`resilience4j-circuitbreaker`（检索熔断）、`lombok`（optional）。**Spring Cloud 只保留 Consul 两件套**，不引入 Gateway / Config Server / Bus / Vault / Kubernetes / OpenFeign / CircuitBreaker 包装，见 [`docs/adr/0001-spring-cloud-scope.md`](docs/adr/0001-spring-cloud-scope.md)。
+- Starter 清单：`spring-ai-starter-mcp-server-webmvc`、`spring-ai-starter-model-openai`（**不存在 `spring-ai-starter-model-embedding`**）、`spring-ai-starter-vector-store-qdrant`、`spring-boot-starter-web`、`spring-boot-starter-data-redis`（distributed 模式锁；standalone 不会连接）、`spring-cloud-starter-consul-discovery` / `spring-cloud-starter-consul-config`（默认关闭；discovery 已显式排除未使用的 `spring-cloud-starter-loadbalancer`）、`spring-boot-starter-actuator`（仅 `/actuator/health`）、`resilience4j-circuitbreaker`（检索熔断）、`lombok`（optional）。**Spring Cloud 只保留 Consul 两件套**，不引入 Gateway / Config Server / Bus / Vault / Kubernetes / OpenFeign / CircuitBreaker 包装，见 [`docs/v0.0.3/adr/0001-spring-cloud-scope.md`](docs/v0.0.3/adr/0001-spring-cloud-scope.md)。
 - **不要**同时引入 STDIO 的 `spring-ai-starter-mcp-server` 与 webmvc starter——自动配置冲突。只用 webmvc + `protocol=STREAMABLE`。
 - **JDK 23+ 默认不自动发现注解处理器**：必须 `<maven.compiler.proc>full</maven.compiler.proc>`，否则 Lombok "找不到符号"。
 - 本机构建（默认 JAVA_HOME 是 JDK 21，编不了 release=25）：`JAVA_HOME='D:\java\jdk-27.0.1.0.3' mvn clean package`。
@@ -90,14 +90,13 @@
 | --- | --- | --- | --- |
 | `README.md` / `README.en.md` | 使用者 | 项目介绍、安装、运行、配置、MCP 工具、客户端接入、迁移 | 开发过程、内部实现细节 |
 | `ROADMAP.md` | 维护者 | 版本目标、里程碑、验收、非目标 | 类名、方法、参数细节 |
-| `docs/plans/` | 开发者 | 版本规划、现状差距、工作包、风险、排期 | 使用教程 |
-| `docs/design/` | 开发者 | 跨版本的设计、取舍与已知限制 | 版本排期 |
-| `docs/runbooks/` | 运维 | 部署、排障、故障处理步骤 | 设计论证 |
-| `docs/adr/` | 开发者 | 单个不可逆决策及理由 | 实现细节 |
+| `docs/v<version>/` | 开发者 / 运维 | **当前开发版本**的规划、设计、ADR、运维手册；版本发布后冻结 | 跨版本内容、使用教程 |
 | `DEV-MEMORY.md` | 开发者 / AI | 当前有效状态、坑、待办 | 历史流水、教程 |
 | `AGENTS.md` | AI / 贡献者 | 硬约束、构建命令、代码与文档规范 | 长篇设计 |
 
 **判定规则**：同一事实若已在某处定义，其他文档只写一句摘要并链接过去，不复制细节。`README.md` 的「文档」表是全仓库唯一的文档索引入口，新增文档必须登记到该表（中英文两份同步）。
+
+**版本绑定（强制）**：除 `docs/templates/` 外，`docs/` 下的每一份文档都必须位于 `docs/v<version>/` 目录中，且 front matter 的 `version` 与目录一致。**不要**在 `docs/` 根下新建 `plans/`、`design/`、`adr/`、`runbooks/`；不要为尚未开始的版本提前写文档。
 
 ### 2. README 双语规则
 
@@ -107,7 +106,7 @@
   - `README.en.md`：`[简体中文](README.md) | **English**`
 - 两份内容必须**对等**：章节顺序、表格行、命令、版本号、默认值、端口、链接目标一致，只允许语言不同。改任一份必须同步另一份。
 - 两份都必须含：一句话项目介绍、徽章、目录（TOC）、版本矩阵、文档索引、快速开始、容器部署、分布式模式、配置表、MCP 工具、客户端接入、切分策略、目录导入、测试、安全、贡献、许可证。
-- README 只写**使用说明**；架构、包结构、数据流、已知限制放 `docs/design/`，README 用链接引用。
+- README 只写**使用说明**；架构、包结构、数据流、已知限制放当前版本的 `docs/v<version>/design/`，README 用链接引用。
 - 相对链接以仓库根为基准；英文版链接同样指向中文文档，并在文档表下方注明“设计/规划文档为中文”。
 
 ### 3. 目录与命名
@@ -115,18 +114,21 @@
 ```text
 docs/
 ├── templates/
-│   └── plan.md                            # 规划模板
-├── plans/
-│   └── v0.0.3-standalone-and-cluster.md   # 版本规划
-├── design/                                # 跨版本设计（按需创建）
-├── runbooks/                              # 运维手册（按需创建）
-└── adr/                                   # 架构决策记录（按需创建）
+│   └── plan.md                    # 跨版本共享的规划模板
+└── v0.0.3/                        # 只对应 v0.0.3 开发版本
+    ├── plan.md                    # 版本规划（固定入口）
+    ├── design/
+    │   ├── architecture.md
+    │   └── limitations.md
+    ├── adr/
+    │   └── 0001-spring-cloud-scope.md
+    └── runbooks/                  # 运维手册（按需创建）
 ```
 
-- 文件名统一 **小写 kebab-case 英文**，不含空格和中文。
-- 版本规划：`plans/v<MAJOR>.<MINOR>.<PATCH>-<topic>.md`。
-- 设计文档：`design/<topic>.md`；运维手册：`runbooks/<topic>.md`。
-- 决策记录：`adr/NNNN-<topic>.md`，四位编号从 `0001` 起，只增不改。
+- 版本目录：`docs/v<MAJOR>.<MINOR>.<PATCH>/`，一个版本一个目录；目录内所有文档的 `version` 必须与该版本一致。
+- 固定入口：`plan.md`；设计文档 `design/<topic>.md`；决策记录 `adr/NNNN-<topic>.md`；运维手册 `runbooks/<topic>.md`。
+- 文件名统一 **小写 kebab-case 英文**，不含空格和中文；ADR 四位编号从 `0001` 起，只增不改。
+- `docs/templates/` 是唯一跨版本共享的目录，只放模板，不放实际文档。
 - **不要**再新增 `docs/README.md` 之类的“文档规范”文件；规范只在本文件维护。
 
 ### 4. 文档头（必填）
@@ -145,15 +147,15 @@ related: [ROADMAP.md, DEV-MEMORY.md]
 ```
 
 - `status` 只能取上述值；`updated` 必须是最后修改日期。
-- `related` 用相对仓库根目录的路径。
+- `version` 必须与所在目录 `docs/v<version>/` 一致；`related` 用相对仓库根目录的路径。
 - 发布后不再更新的文档标 `done`；被新文档取代的标 `superseded` 并在正文首行写明替代链接。
 
 ### 5. 各类文档的必备章节
 
-- **规划（`plans/`）**：背景与目标、范围与非目标、现状与差距、工作包（变更点 / 验收 / 风险）、里程碑与排期、验证矩阵、决策记录、完成定义（DoD）。模板见 [`docs/templates/plan.md`](docs/templates/plan.md)。
-- **设计（`design/`）**：问题、约束、方案对比、选定方案与理由、影响面（接口 / 数据 / 兼容性）、回滚方式。
-- **运维（`runbooks/`）**：适用场景、前置检查、操作步骤（可直接复制）、验证、回滚、常见故障。
-- **决策（`adr/`）**：背景、决策、备选方案、后果（正面 / 负面）。
+- **规划（`v<version>/plan.md`）**：背景与目标、范围与非目标、现状与差距、工作包（变更点 / 验收 / 风险）、里程碑与排期、验证矩阵、决策记录、完成定义（DoD）。模板见 [`docs/templates/plan.md`](docs/templates/plan.md)。
+- **设计（`v<version>/design/`）**：问题、约束、方案对比、选定方案与理由、影响面（接口 / 数据 / 兼容性）、回滚方式。
+- **运维（`v<version>/runbooks/`）**：适用场景、前置检查、操作步骤（可直接复制）、验证、回滚、常见故障。
+- **决策（`v<version>/adr/`）**：背景、决策、备选方案、后果（正面 / 负面）。
 
 ### 6. 写作规则
 
@@ -173,15 +175,18 @@ draft → review → approved → implementing → done
                                    ↘ superseded
 ```
 
-- 新版本开始：从模板创建 `plans/vX.Y.Z-<topic>.md`，状态 `draft`。
+- 新版本开始：创建 `docs/vX.Y.Z/`，从模板生成 `plan.md`，状态 `draft`；不要提前为后续版本建目录。
+- 开发期间：该版本的规划、设计、ADR、运维手册只在该目录维护；每次修改同步更新 `updated`。
 - 方案确认：改为 `approved`，并把关键决策同步到 `ROADMAP.md`。
 - 开始编码：改为 `implementing`。
-- 版本发布：改为 `done`，要点合并进 `ROADMAP.md`。
-- 下一版本开始：删除上一版本的 plan（历史由 `git log` 保留）；被替代的设计文档标 `superseded`。
+- 版本发布：改为 `done`，要点合并进 `ROADMAP.md`；该版本目录**冻结**，后续只允许事实性修正。
+- 下一版本开始：新建 `docs/vX.Y.Z+1/`，不修改已冻结的上一版本目录；历史由版本目录 + `git log` 共同保留。
+- 被替代的文档标 `superseded` 并在正文首行写明替代链接；不要直接删除已发布版本的文档。
 
 ### 8. 提交前检查
 
-- [ ] front matter 完整，`updated` 是今天
+- [ ] front matter 完整，`updated` 是今天，`version` 与所在 `docs/v<version>/` 目录一致
+- [ ] 文档位于当前开发版本的目录，没有在 `docs/` 根下新建 `plans/` / `design/` / `adr/` / `runbooks/`
 - [ ] 数字、端口、命令与代码一致
 - [ ] 没有复制其他文档已有的细节
 - [ ] 相对链接可打开

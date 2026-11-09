@@ -4,12 +4,12 @@ status: approved
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
-related: [README.md, docs/plans/v0.0.3-standalone-and-cluster.md]
+related: [README.md, docs/v0.0.3/plan.md]
 ---
 
 # 已知限制与风险
 
-> 使用与部署注意事项见 [`README.md`](../../README.md)。v0.0.3 正在修复的集群问题见 [`docs/plans/v0.0.3-standalone-and-cluster.md`](../plans/v0.0.3-standalone-and-cluster.md)。
+> 使用与部署注意事项见 [`README.md`](../../../README.md)。v0.0.3 正在修复的集群问题见 [`docs/v0.0.3/plan.md`](../plan.md)。
 
 ## 索引写入
 

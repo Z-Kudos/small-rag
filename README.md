@@ -54,15 +54,17 @@
 
 ## 文档
 
+以下为当前开发版本 **v0.0.3** 的文档；版本发布后 `docs/v0.0.3/` 冻结，下一版本另建目录。
+
 | 文档 | 内容 |
 | --- | --- |
 | [ROADMAP.md](ROADMAP.md) | 版本目标、里程碑与验收标准 |
-| [docs/plans/v0.0.3-standalone-and-cluster.md](docs/plans/v0.0.3-standalone-and-cluster.md) | v0.0.3 单机与集群规划 |
-| [docs/design/architecture.md](docs/design/architecture.md) | 架构、包结构、关键数据流 |
-| [docs/design/limitations.md](docs/design/limitations.md) | 已知限制与风险 |
+| [docs/v0.0.3/plan.md](docs/v0.0.3/plan.md) | v0.0.3 单机与集群规划 |
+| [docs/v0.0.3/design/architecture.md](docs/v0.0.3/design/architecture.md) | 架构、包结构、关键数据流 |
+| [docs/v0.0.3/design/limitations.md](docs/v0.0.3/design/limitations.md) | 已知限制与风险 |
 | [DEV-MEMORY.md](DEV-MEMORY.md) | 当前开发状态与已知坑 |
 | [AGENTS.md](AGENTS.md) | 版本基线、构建命令、代码与文档规范 |
-| [docs/adr/0001-spring-cloud-scope.md](docs/adr/0001-spring-cloud-scope.md) | Spring Cloud 组件范围决策 |
+| [docs/v0.0.3/adr/0001-spring-cloud-scope.md](docs/v0.0.3/adr/0001-spring-cloud-scope.md) | Spring Cloud 组件范围决策 |
 
 ## 快速开始（本地）
 

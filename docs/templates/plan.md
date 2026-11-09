@@ -9,6 +9,8 @@ related: [ROADMAP.md, DEV-MEMORY.md]
 
 # <版本> 规划：<主题>
 
+> 存放位置：`docs/v<version>/plan.md`（本模板跨版本共享）。
+
 > 一句话说明本版本要解决的核心问题。
 
 ## 1. 背景与目标

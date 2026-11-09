@@ -4,7 +4,7 @@ status: implementing
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
-related: [AGENTS.md, ROADMAP.md, docs/plans/v0.0.3-standalone-and-cluster.md]
+related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 ---
 
 # DEV-MEMORY — 当前开发状态
@@ -17,10 +17,10 @@ related: [AGENTS.md, ROADMAP.md, docs/plans/v0.0.3-standalone-and-cluster.md]
 - 版本：`0.0.3-SNAPSHOT`，开发分支 `develop`。
 - 上一版：`v0.0.2`（2026-11-07，`main` tag，双远程已推送）。
 - 主题：**单机与集群**。
-- 规划：[`docs/plans/v0.0.3-standalone-and-cluster.md`](docs/plans/v0.0.3-standalone-and-cluster.md)。
+- 规划：[`docs/v0.0.3/plan.md`](docs/v0.0.3/plan.md)。
 - 里程碑：M1（WP1 + WP2）→ M2（WP3 + WP5）→ M3（WP4 + WP6）。
 - 下一步：`feature/cluster-safety`（WP1 集群会话 + WP2 fencing）。
-- 文档：`README.md`（简体中文）/ `README.en.md`（English）双语；规范只维护在 `AGENTS.md`，不再有 `docs/README.md`。
+- 文档：`README.md`（简体中文）/ `README.en.md`（English）双语；规范只维护在 `AGENTS.md`；版本文档统一放在 `docs/v0.0.3/`。
 
 **已确认决策（2026-11-09）**
 
@@ -98,7 +98,7 @@ related: [AGENTS.md, ROADMAP.md, docs/plans/v0.0.3-standalone-and-cluster.md]
 - `SourcesLeaderElection`：竞争 `sources-leader` 租约；启动 / 定时 / watcher 自动扫描仅 leader 执行，手动 `rag_sync_sources` 任意副本可发起。
 - `compose.distributed.yaml`：外部 Qdrant / Redis / Consul / Embedding + HAProxy gateway（`docker/haproxy.cfg`）；应用端口用 `!reset []` 去掉；`small_rag_data` 为共享归档卷；需 Compose v2.24+。
 - Consul：`CONSUL_ENABLED`（默认 false）同时控制 discovery / config；注册 `small-rag`，健康检查 `/actuator/health`；`instance-id` 默认 `${spring.application.name}-${HOSTNAME}-${server.port}`。KV 默认 `KEY_VALUE`（每项一个 key），启动加 `SPRING_CONFIG_IMPORT=optional:consul:`；config watch 默认关闭。
-- Spring Cloud 范围：只保留 Consul discovery / config（可选）；`consul-discovery` 已排除未使用的 `spring-cloud-starter-loadbalancer`。不引入 Gateway / Config Server / Bus / Vault / K8s / Feign / CircuitBreaker 包装，理由见 [`docs/adr/0001-spring-cloud-scope.md`](docs/adr/0001-spring-cloud-scope.md)。
+- Spring Cloud 范围：只保留 Consul discovery / config（可选）；`consul-discovery` 已排除未使用的 `spring-cloud-starter-loadbalancer`。不引入 Gateway / Config Server / Bus / Vault / K8s / Feign / CircuitBreaker 包装，理由见 [`docs/v0.0.3/adr/0001-spring-cloud-scope.md`](docs/v0.0.3/adr/0001-spring-cloud-scope.md)。
 - 已知边界（v0.0.3 待改）：任务快照锁仍是单实例读后写、无 fencing token；`rag_task_status` / `rag_task_resume` 只能看到本实例内存中的任务；HAProxy `roundrobin` 与 `STREAMABLE` 会话不兼容。
 
 ### 4.6 健康与熔断
@@ -138,7 +138,8 @@ related: [AGENTS.md, ROADMAP.md, docs/plans/v0.0.3-standalone-and-cluster.md]
 | [`README.md`](README.md) | 安装、运行、配置、MCP 工具、迁移（简体中文） |
 | [`README.en.md`](README.en.md) | 英文版使用说明 |
 | [`ROADMAP.md`](ROADMAP.md) | 版本目标、里程碑、验收 |
-| [`docs/design/architecture.md`](docs/design/architecture.md) | 架构、包结构、关键数据流 |
-| [`docs/design/limitations.md`](docs/design/limitations.md) | 已知限制与风险 |
-| [`docs/plans/v0.0.3-standalone-and-cluster.md`](docs/plans/v0.0.3-standalone-and-cluster.md) | v0.0.3 规划 |
+| [`docs/v0.0.3/plan.md`](docs/v0.0.3/plan.md) | v0.0.3 规划 |
+| [`docs/v0.0.3/design/architecture.md`](docs/v0.0.3/design/architecture.md) | 架构、包结构、关键数据流 |
+| [`docs/v0.0.3/design/limitations.md`](docs/v0.0.3/design/limitations.md) | 已知限制与风险 |
+| [`docs/v0.0.3/adr/0001-spring-cloud-scope.md`](docs/v0.0.3/adr/0001-spring-cloud-scope.md) | Spring Cloud 组件范围决策 |
 | [`AGENTS.md`](AGENTS.md) | 版本基线、构建命令、代码约束 |

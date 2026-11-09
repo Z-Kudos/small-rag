@@ -4,7 +4,7 @@ status: approved
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
-related: [AGENTS.md, ROADMAP.md, docs/plans/v0.0.3-standalone-and-cluster.md]
+related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 ---
 
 # ADR-0001：Spring Cloud 组件范围

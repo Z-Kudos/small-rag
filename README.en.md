@@ -54,15 +54,17 @@ A **plain-text RAG retrieval** MCP service built on Spring AI: it only ingests a
 
 ## Documentation
 
+The documents below belong to the current development version **v0.0.3**. After release, `docs/v0.0.3/` is frozen and the next version gets its own directory.
+
 | Document | Contents |
 | --- | --- |
 | [ROADMAP.md](ROADMAP.md) | Version goals, milestones, and acceptance criteria |
-| [docs/plans/v0.0.3-standalone-and-cluster.md](docs/plans/v0.0.3-standalone-and-cluster.md) | v0.0.3 standalone and cluster plan |
-| [docs/design/architecture.md](docs/design/architecture.md) | Architecture, packages, key data flows |
-| [docs/design/limitations.md](docs/design/limitations.md) | Known limitations and risks |
+| [docs/v0.0.3/plan.md](docs/v0.0.3/plan.md) | v0.0.3 standalone and cluster plan |
+| [docs/v0.0.3/design/architecture.md](docs/v0.0.3/design/architecture.md) | Architecture, packages, key data flows |
+| [docs/v0.0.3/design/limitations.md](docs/v0.0.3/design/limitations.md) | Known limitations and risks |
 | [DEV-MEMORY.md](DEV-MEMORY.md) | Current development state and pitfalls |
 | [AGENTS.md](AGENTS.md) | Version baseline, build commands, code and documentation rules |
-| [docs/adr/0001-spring-cloud-scope.md](docs/adr/0001-spring-cloud-scope.md) | Spring Cloud component scope decision |
+| [docs/v0.0.3/adr/0001-spring-cloud-scope.md](docs/v0.0.3/adr/0001-spring-cloud-scope.md) | Spring Cloud component scope decision |
 
 > The design and planning documents are written in Chinese.
 

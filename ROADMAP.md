@@ -4,13 +4,13 @@ status: implementing
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
-related: [docs/plans/v0.0.3-standalone-and-cluster.md, DEV-MEMORY.md]
+related: [docs/v0.0.3/plan.md, DEV-MEMORY.md]
 ---
 
 # ROADMAP — v0.0.3（进行中）
 
 > 当前开发版本 `0.0.3-SNAPSHOT`（`develop`）；上一版 `v0.0.2` 已于 2026-11-07 发布。
-> 工作包与验收细节见 [`docs/plans/v0.0.3-standalone-and-cluster.md`](docs/plans/v0.0.3-standalone-and-cluster.md)。
+> 工作包与验收细节见 [`docs/v0.0.3/plan.md`](docs/v0.0.3/plan.md)。
 > 本文只记录版本级目标、里程碑与验收，不记录实现细节。
 
 ## 1. 版本目标

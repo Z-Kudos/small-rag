@@ -4,12 +4,12 @@ status: approved
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
-related: [README.md, docs/plans/v0.0.3-standalone-and-cluster.md]
+related: [README.md, docs/v0.0.3/plan.md]
 ---
 
 # 架构与设计要点
 
-> 面向开发者。使用说明见 [`README.md`](../../README.md)。
+> 面向开发者。使用说明见 [`README.md`](../../../README.md)。
 
 ## 1. 设计要点
 
