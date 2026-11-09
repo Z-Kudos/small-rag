@@ -1,6 +1,6 @@
 ---
 title: v0.0.3 单机与集群规划
-status: implementing
+status: done
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]

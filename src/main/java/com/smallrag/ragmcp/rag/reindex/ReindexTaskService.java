@@ -686,6 +686,9 @@ public class ReindexTaskService {
     private void cleanupOrphans(Task task) {
         try {
             RagService.CleanupResult cleanup = ragService.cleanupOrphans();
+            if (cleanup == null) {
+                return;
+            }
             log.info("重建任务孤儿清理完成: taskId={}, parentPoints={}, orphanParents={}",
                     task.taskId, cleanup.parentPoints(), cleanup.orphanParents());
         } catch (Exception e) {

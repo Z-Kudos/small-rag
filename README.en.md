@@ -54,7 +54,7 @@ A **plain-text RAG retrieval** MCP service built on Spring AI: it only ingests a
 
 ## Documentation
 
-The documents below belong to the current development version **v0.0.3**. After release, `docs/v0.0.3/` is frozen and the next version gets its own directory.
+The documents below belong to the current version **v0.0.3**. After release, `docs/v0.0.3/` is frozen and the next version gets its own directory.
 
 | Document | Contents |
 | --- | --- |
