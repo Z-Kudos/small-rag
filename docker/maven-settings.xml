@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    容器内构建使用的 Maven 设置：所有仓库统一走阿里云公共仓库，避免每次镜像构建
+    都从国外站点拉取依赖（首次构建约数百 MB）。
+
+    - mirrorOf 排除 spring-milestones：Spring Boot / Cloud 的 RC 构件只在
+      repo.spring.io 提供，阿里云没有镜像。
+    - 只影响 Docker 构建阶段；本机构建直接使用 pom.xml 里的 repositories。
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 https://maven.apache.org/xsd/settings-1.2.0.xsd">
+    <mirrors>
+        <mirror>
+            <id>aliyun-public</id>
+            <name>Aliyun Public</name>
+            <url>https://maven.aliyun.com/repository/public</url>
+            <mirrorOf>*,!spring-milestones</mirrorOf>
+        </mirror>
+    </mirrors>
+</settings>

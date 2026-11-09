@@ -14,6 +14,14 @@ import java.util.Optional;
 interface ReindexStateBackend {
 
     /**
+     * 读取单个任务状态。
+     *
+     * @param taskId 任务 id
+     * @return 任务状态；不存在时为空
+     */
+    Optional<ReindexStateStore.PersistedTask> load(String taskId);
+
+    /**
      * 读取全部任务状态。
      *
      * @return 任务状态列表；读取失败应抛出运行时异常
@@ -21,25 +29,25 @@ interface ReindexStateBackend {
     List<ReindexStateStore.PersistedTask> loadAll();
 
     /**
-     * 读取任务锁持有者。
+     * 读取任务锁镜像（诊断用，不是权威锁）。
      *
-     * @return 持有者 taskId；没有锁时为空
+     * @return 锁镜像；没有时为空
      */
-    Optional<String> readOwner();
+    Optional<ReindexStateStore.LockMirror> readLock();
 
     /**
-     * 写入任务锁持有者。
+     * 写入任务锁镜像。
      *
-     * @param taskId 持有者 taskId
+     * @param lock 锁镜像
      */
-    void writeOwner(String taskId);
+    void writeLock(ReindexStateStore.LockMirror lock);
 
     /**
-     * 释放任务锁；仅在当前持有者匹配时删除。
+     * 清除任务锁镜像；仅在当前持有者匹配时删除。
      *
      * @param taskId 期望的持有者 taskId
      */
-    void clearOwner(String taskId);
+    void clearLock(String taskId);
 
     /**
      * 保存或覆盖任务状态。

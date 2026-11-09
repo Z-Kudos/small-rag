@@ -98,16 +98,22 @@ class QdrantReindexStateBackendTest {
 
         backend.save(task);
         assertThat(backend.loadAll()).containsExactly(task);
+        assertThat(backend.load("task-1")).contains(task);
+        assertThat(backend.load("missing")).isEmpty();
 
-        backend.writeOwner("task-1");
-        assertThat(backend.readOwner()).contains("task-1");
+        backend.writeLock(new ReindexStateStore.LockMirror("task-1", "host-1", 5L, "2026-11-09T00:00:00Z"));
+        ReindexStateStore.LockMirror lock = backend.readLock().orElseThrow();
+        assertThat(lock.taskId()).isEqualTo("task-1");
+        assertThat(lock.ownerInstance()).isEqualTo("host-1");
+        assertThat(lock.epoch()).isEqualTo(5L);
+        assertThat(lock.expiresAt()).isEqualTo("2026-11-09T00:00:00Z");
 
         // 非持有者不能清锁
-        backend.clearOwner("task-2");
-        assertThat(backend.readOwner()).contains("task-1");
+        backend.clearLock("task-2");
+        assertThat(backend.readLock()).map(ReindexStateStore.LockMirror::taskId).contains("task-1");
 
-        backend.clearOwner("task-1");
-        assertThat(backend.readOwner()).isEmpty();
+        backend.clearLock("task-1");
+        assertThat(backend.readLock()).isEmpty();
 
         backend.delete("task-1");
         assertThat(backend.loadAll()).isEmpty();
@@ -137,6 +143,6 @@ class QdrantReindexStateBackendTest {
         String now = Instant.now().toString();
         return new ReindexTaskService.ReindexTaskView(taskId, "reindex", "reindexing", 2, 1,
                 1, 0, 50, "doc-1", now, false, false, now, null,
-                false, null, false, null);
+                false, null, false, null, "host-1", 2L, now);
     }
 }

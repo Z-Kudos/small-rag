@@ -218,12 +218,14 @@ public class RagMcpTools {
     /**
      * 查询重建任务进度：传 taskId 查指定任务，不传返回最近一次任务。
      *
+     * <p>任意副本可查：本地内存没有时回读 Qdrant 状态集合。
+     *
      * @param taskId 任务 id；为空表示最近一次任务
      * @return 任务快照（status、total、processed、percent、succeeded、failed、currentDocumentId、
-     *         lastProgressAt、stalled、cancelRequested、revoked、lockReleaseAt 等）；
+     *         lastProgressAt、stalled、cancelRequested、revoked、lockReleaseAt、ownerInstance、epoch、heartbeatAt 等）；
      *         从未执行过重建时返回 {@code status=IDLE}
      */
-    @McpTool(name = "rag_task_status", description = "查询重建任务进度：传 taskId 查指定任务，不传返回最近一次任务；返回 status/total/processed/percent/stalled/cancelRequested/revoked/lockReleaseAt，无任务时 status=IDLE")
+    @McpTool(name = "rag_task_status", description = "查询重建任务进度：传 taskId 查指定任务，不传返回最近一次任务；任意副本可查（本地缺失时回读状态集合）；返回 status/total/processed/percent/stalled/cancelRequested/revoked/lockReleaseAt/ownerInstance/epoch/heartbeatAt，无任务时 status=IDLE")
     public String ragTaskStatus(
             @McpToolParam(description = "任务 id；为空表示最近一次重建任务", required = false) String taskId) {
         log.debug("MCP rag_task_status 调用，taskId={}", taskId);
@@ -240,10 +242,12 @@ public class RagMcpTools {
     /**
      * 请求取消正在执行的重建任务；协作式，当前文档处理完后在文档边界停止。
      *
+     * <p>任意副本可调用：先抢任务租约；原持有者仍在续租时返回持有者信息，无法跨副本中断其线程。
+     *
      * @param taskId 任务 id；为空表示最近一次任务
      * @return 收到取消请求后的任务快照（cancelRequested=true）
      */
-    @McpTool(name = "rag_task_cancel", description = "取消重建任务：运行中为协作式（当前文档处理完后停止）；interrupted 任务立即置为 cancelled 并释放任务锁")
+    @McpTool(name = "rag_task_cancel", description = "取消重建任务：运行中为协作式（当前文档处理完后停止）；interrupted 任务立即置为 cancelled 并释放任务锁；任意副本可调用，原持有者仍在运行且租约有效时返回持有者")
     public String ragTaskCancel(
             @McpToolParam(description = "任务 id；为空表示最近一次重建任务", required = false) String taskId) {
         log.debug("MCP rag_task_cancel 调用，taskId={}", taskId);
@@ -258,10 +262,12 @@ public class RagMcpTools {
     /**
      * 续接重启前未完成的重建任务（status=interrupted），从上次成功的文档之后继续，不重新清空。
      *
+     * <p>任意副本可调用：先抢任务租约，抢到才接管；原持有者仍在运行时返回持有者信息。
+     *
      * @param taskId 任务 id；为空表示最近一次任务
      * @return 续接后的任务快照
      */
-    @McpTool(name = "rag_task_resume", description = "续接重启前未完成的重建任务（status=interrupted）：跳过已成功文档继续重建，不重新清空；传 taskId 指定任务，不传表示最近一次")
+    @McpTool(name = "rag_task_resume", description = "续接重启前未完成的重建任务（status=interrupted）：跳过已成功文档继续重建，不重新清空；任意副本可调用，先抢任务租约，原持有者仍在运行时返回持有者；传 taskId 指定任务，不传表示最近一次")
     public String ragTaskResume(
             @McpToolParam(description = "任务 id；为空表示最近一次重建任务", required = false) String taskId) {
         log.debug("MCP rag_task_resume 调用，taskId={}", taskId);

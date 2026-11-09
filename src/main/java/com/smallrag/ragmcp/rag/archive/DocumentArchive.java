@@ -72,6 +72,35 @@ public class DocumentArchive {
     }
 
     /**
+     * 归档目录路径（用于健康检查与诊断）。
+     *
+     * @return 绝对规范化路径
+     */
+    public Path directory() {
+        return directory;
+    }
+
+    /**
+     * 探测归档目录当前是否可写。
+     *
+     * <p>只读挂载下 {@link Files#isWritable(Path)} 可能仍返回 true，因此做一次真实写入探测。
+     *
+     * @return true 表示可写
+     */
+    public boolean isWritable() {
+        if (!enabled) {
+            return false;
+        }
+        try {
+            Path probe = Files.createTempFile(directory, ".health-", ".tmp");
+            Files.deleteIfExists(probe);
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
      * 保存或覆盖一篇原始文档。
      */
     public synchronized void save(String documentId, String text, Map<String, String> metadata, String chunkSignature) {

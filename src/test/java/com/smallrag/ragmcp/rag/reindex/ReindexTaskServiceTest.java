@@ -5,15 +5,22 @@ import com.smallrag.ragmcp.rag.RagService;
 
 import com.smallrag.ragmcp.config.QdrantProperties;
 import com.smallrag.ragmcp.config.RagProperties;
+import com.smallrag.ragmcp.config.DistributedProperties;
+import com.smallrag.ragmcp.distributed.DistributedLock;
+import com.smallrag.ragmcp.distributed.FencedLease;
+import com.smallrag.ragmcp.distributed.LocalDistributedLock;
+import com.smallrag.ragmcp.distributed.LockHandle;
 import com.smallrag.ragmcp.rag.archive.ArchivedDocument;
 import com.smallrag.ragmcp.rag.archive.ArchivedDocumentSummary;
 import com.smallrag.ragmcp.rag.archive.DocumentArchive;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -43,11 +50,13 @@ class ReindexTaskServiceTest {
     private final RagProperties properties = new RagProperties();
     private final QdrantProperties qdrantProperties = new QdrantProperties();
     private final InMemoryReindexStateBackend stateBackend = new InMemoryReindexStateBackend();
+    private final LocalDistributedLock lock = new LocalDistributedLock();
+    private final DistributedProperties distributed = new DistributedProperties();
     private ReindexTaskService service;
 
     private ReindexTaskService newService() {
         return new ReindexTaskService(ragService, archive, properties, qdrantProperties,
-                new ReindexStateStore(stateBackend), new IndexActivityGuard());
+                new ReindexStateStore(stateBackend), new IndexActivityGuard(), lock, distributed);
     }
 
     @AfterEach
@@ -85,7 +94,7 @@ class ReindexTaskServiceTest {
         IndexActivityGuard guard = new IndexActivityGuard();
         guard.tryAcquire(IndexActivityGuard.SOURCES);
         service = new ReindexTaskService(ragService, archive, properties, qdrantProperties,
-                new ReindexStateStore(stateBackend), guard);
+                new ReindexStateStore(stateBackend), guard, lock, distributed);
         try {
             assertThatThrownBy(() -> service.submit("reindex", false))
                     .isInstanceOf(IllegalStateException.class)
@@ -312,7 +321,6 @@ class ReindexTaskServiceTest {
         stateStore.save(new ReindexStateStore.PersistedTask(
                 view(taskId, "reindex", "reindexing", 2, 1, 1, 0, "doc-1", null),
                 false, Set.of("doc-1")));
-        stateStore.writeOwner(taskId);
 
         when(archive.isEnabled()).thenReturn(true);
         when(ragService.reindexArchived(anyBoolean(), any(), any()))
@@ -334,7 +342,7 @@ class ReindexTaskServiceTest {
     }
 
     @Test
-    void rebuildsMissingLockFromLatestInterruptedTask() {
+    void restoresLatestUnfinishedTaskWhenMirrorIsMissing() {
         String taskId = UUID.randomUUID().toString();
         stateBackend.save(new ReindexStateStore.PersistedTask(
                 view(taskId, "reindex", "reindexing", 2, 1, 1, 0, "doc-1", null),
@@ -358,7 +366,6 @@ class ReindexTaskServiceTest {
         stateStore.save(new ReindexStateStore.PersistedTask(
                 view(taskId, "rebuild", "reindexing", 3, 1, 1, 0, "doc-1", null),
                 true, Set.of("doc-1")));
-        stateStore.writeOwner(taskId);
 
         when(archive.isEnabled()).thenReturn(true);
         when(ragService.reindexArchived(anyBoolean(), any(), any()))
@@ -379,7 +386,6 @@ class ReindexTaskServiceTest {
         stateStore.save(new ReindexStateStore.PersistedTask(
                 view(taskId, "rebuild", "clearing", 3, 0, 0, 0, null, null),
                 false, Set.of()));
-        stateStore.writeOwner(taskId);
 
         when(archive.isEnabled()).thenReturn(true);
         when(archive.listSummaries()).thenReturn(List.of(ArchivedDocumentSummary.of(document("doc-1"))));
@@ -441,6 +447,169 @@ class ReindexTaskServiceTest {
         assertThat(failed.status()).isEqualTo("failed");
         assertThat(failed.error()).isEqualTo("embedding down");
         assertThat(failed.finishedAt()).isNotNull();
+    }
+
+    @Test
+    void doesNotTakeOverTaskLockHeldByAnotherReplica() {
+        String taskId = UUID.randomUUID().toString();
+        stateBackend.save(new ReindexStateStore.PersistedTask(
+                view(taskId, "reindex", "reindexing", 2, 1, 1, 0, "doc-1", null),
+                false, Set.of("doc-1")));
+        when(archive.isEnabled()).thenReturn(true);
+        when(archive.listSummaries()).thenReturn(List.of(ArchivedDocumentSummary.of(document("doc-1"))));
+        // 模拟另一副本已持有权威任务锁
+        lock.tryAcquire(taskLockKey(), "other-task", Duration.ofSeconds(30)).orElseThrow();
+
+        service = newService();
+
+        // 不接管、不改写快照：保持另一副本正在执行的 reindexing 状态
+        assertThat(service.status(taskId).orElseThrow().status()).isEqualTo("reindexing");
+        assertThatThrownBy(() -> service.submit("reindex", false))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("其他副本");
+    }
+
+    @Test
+    void stopsWritingWhenTaskLeaseIsLost() throws Exception {
+        RevocableLock revocable = new RevocableLock();
+        when(archive.isEnabled()).thenReturn(true);
+        when(archive.listSummaries()).thenReturn(List.of(ArchivedDocumentSummary.of(document("doc-1"))));
+
+        AtomicBoolean writableBefore = new AtomicBoolean();
+        AtomicBoolean writableAfter = new AtomicBoolean(true);
+        when(ragService.reindexArchived(anyBoolean(), any(), any())).thenAnswer(invocation -> {
+            ReindexListener listener = invocation.getArgument(1);
+            writableBefore.set(listener.isWritable());
+            // 模拟租约被其他副本接管
+            revocable.revoke();
+            writableAfter.set(listener.isWritable());
+            return new RagService.RebuildResult(1, 1, 0, false);
+        });
+
+        service = new ReindexTaskService(ragService, archive, properties, qdrantProperties,
+                new ReindexStateStore(stateBackend), new IndexActivityGuard(), revocable, distributed);
+        ReindexTaskService.ReindexTaskView submitted = service.submit("reindex", false);
+        assertThat(awaitTerminal(submitted.taskId(), 5).status()).isEqualTo("completed");
+
+        assertThat(writableBefore).isTrue();
+        assertThat(writableAfter).isFalse();
+    }
+
+    @Test
+    void exposesLeaseOwnerAndEpoch() throws Exception {
+        when(archive.isEnabled()).thenReturn(true);
+        when(archive.listSummaries()).thenReturn(List.of(ArchivedDocumentSummary.of(document("doc-1"))));
+        when(ragService.reindexArchived(anyBoolean(), any(), any()))
+                .thenReturn(new RagService.RebuildResult(1, 1, 0, false));
+
+        service = newService();
+        ReindexTaskService.ReindexTaskView submitted = service.submit("reindex", false);
+
+        assertThat(submitted.ownerInstance()).isEqualTo(distributed.getInstanceId());
+        assertThat(submitted.epoch()).isEqualTo(1L);
+        assertThat(submitted.heartbeatAt()).isNotBlank();
+        assertThat(awaitTerminal(submitted.taskId(), 5).status()).isEqualTo("completed");
+    }
+
+    @Test
+    void statusReadsTaskFromAnotherReplica() {
+        service = newService();
+        String taskId = UUID.randomUUID().toString();
+        stateBackend.save(new ReindexStateStore.PersistedTask(
+                view(taskId, "reindex", "reindexing", 4, 2, 2, 0, "doc-2", null),
+                false, Set.of("doc-1")));
+
+        ReindexTaskService.ReindexTaskView remote = service.status(taskId).orElseThrow();
+
+        assertThat(remote.status()).isEqualTo("reindexing");
+        assertThat(remote.processed()).isEqualTo(2);
+        assertThat(remote.ownerInstance()).isEqualTo("host-1");
+        assertThat(remote.epoch()).isEqualTo(1L);
+    }
+
+    @Test
+    void statusPrefersNewerRemoteTaskWhenNoIdGiven() {
+        service = newService();
+        String older = UUID.randomUUID().toString();
+        String newer = UUID.randomUUID().toString();
+        stateBackend.save(new ReindexStateStore.PersistedTask(
+                viewAt(older, "completed", 1, 1, 1, 0, "doc-1", "2026-11-09T00:00:01Z"),
+                true, Set.of("doc-1")));
+        stateBackend.save(new ReindexStateStore.PersistedTask(
+                viewAt(newer, "reindexing", 2, 0, 0, 0, "doc-2", "2026-11-09T00:00:02Z"),
+                false, Set.of()));
+
+        assertThat(service.status(null).orElseThrow().taskId()).isEqualTo(newer);
+    }
+
+    @Test
+    void resumeTakesOverInterruptedTaskFromAnotherReplica() throws Exception {
+        service = newService();
+        String taskId = UUID.randomUUID().toString();
+        stateBackend.save(new ReindexStateStore.PersistedTask(
+                view(taskId, "reindex", "interrupted", 2, 1, 1, 0, "doc-1", null),
+                false, Set.of("doc-1")));
+        // 模拟原持有者已退出：先占后放，epoch 已递增
+        FencedLease previous = FencedLease.acquire(lock, taskLockKey(), taskId,
+                Duration.ofSeconds(30)).orElseThrow();
+        previous.release();
+
+        when(archive.isEnabled()).thenReturn(true);
+        when(ragService.reindexArchived(anyBoolean(), any(), any()))
+                .thenReturn(new RagService.RebuildResult(2, 2, 0, false));
+
+        ReindexTaskService.ReindexTaskView resumed = service.resume(taskId);
+
+        assertThat(resumed.status()).isEqualTo("queued");
+        assertThat(resumed.epoch()).isEqualTo(2L);
+        assertThat(resumed.ownerInstance()).isEqualTo(distributed.getInstanceId());
+        assertThat(awaitTerminal(taskId, 5).status()).isEqualTo("completed");
+        verify(ragService).reindexArchived(eq(false), any(), eq(Set.of("doc-1")));
+    }
+
+    @Test
+    void resumeReportsOwnerWhenAnotherReplicaIsAlive() {
+        service = newService();
+        String taskId = UUID.randomUUID().toString();
+        stateBackend.save(new ReindexStateStore.PersistedTask(
+                view(taskId, "reindex", "interrupted", 2, 1, 1, 0, "doc-1", null),
+                false, Set.of("doc-1")));
+        lock.tryAcquire(taskLockKey(), taskId, Duration.ofSeconds(30)).orElseThrow();
+
+        assertThatThrownBy(() -> service.resume(taskId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("无法续接");
+        assertThat(service.status(taskId).orElseThrow().status()).isEqualTo("interrupted");
+    }
+
+    @Test
+    void cancelTakesOverInterruptedTaskFromAnotherReplica() {
+        service = newService();
+        String taskId = UUID.randomUUID().toString();
+        stateBackend.save(new ReindexStateStore.PersistedTask(
+                view(taskId, "reindex", "interrupted", 2, 1, 1, 0, "doc-1", null),
+                false, Set.of("doc-1")));
+
+        ReindexTaskService.ReindexTaskView cancelled = service.cancel(taskId);
+
+        assertThat(cancelled.status()).isEqualTo("cancelled");
+        assertThat(lock.currentOwner(taskLockKey())).isEmpty();
+    }
+
+    @Test
+    void startupClearsStaleLockMirrorWhenAuthorityIsGone() {
+        String taskId = UUID.randomUUID().toString();
+        ReindexStateStore store = new ReindexStateStore(stateBackend);
+        store.writeLock(new ReindexStateStore.LockMirror("task-1", "dead-replica", 9L,
+                Instant.now().plusSeconds(30).toString()));
+
+        service = newService();
+
+        assertThat(store.readLock()).isEmpty();
+    }
+
+    private String taskLockKey() {
+        return distributed.getLock().getKeyPrefix() + ReindexTaskService.TASK_LOCK_SUFFIX;
     }
 
     private ReindexTaskService.ReindexTaskView awaitTerminal(String taskId, int seconds)
@@ -505,6 +674,63 @@ class ReindexTaskServiceTest {
         int percent = total <= 0 ? 0 : (int) Math.round(processed * 100.0 / total);
         return new ReindexTaskService.ReindexTaskView(taskId, mode, status, total, processed,
                 succeeded, failed, percent, currentDocumentId, now, false, false, now, finishedAt,
-                false, null, false, null);
+                false, null, false, null, "host-1", 1L, now);
+    }
+
+    private static ReindexTaskService.ReindexTaskView viewAt(String taskId, String status,
+            int total, int processed, int succeeded, int failed, String currentDocumentId,
+            String startedAt) {
+        int percent = total <= 0 ? 0 : (int) Math.round(processed * 100.0 / total);
+        return new ReindexTaskService.ReindexTaskView(taskId, "reindex", status, total, processed,
+                succeeded, failed, percent, currentDocumentId, startedAt, false, false, startedAt,
+                null, false, null, false, null, "host-1", 1L, startedAt);
+    }
+
+    /**
+     * 可被“接管”的锁：revoke 后 isHeld 返回 false，模拟租约被其他副本抢走。
+     */
+    private static final class RevocableLock implements DistributedLock {
+
+        private final LocalDistributedLock delegate = new LocalDistributedLock();
+        private volatile boolean revoked;
+
+        void revoke() {
+            revoked = true;
+        }
+
+        @Override
+        public Optional<LockHandle> tryAcquire(String key, String owner, Duration lease) {
+            return delegate.tryAcquire(key, owner, lease);
+        }
+
+        @Override
+        public boolean renew(LockHandle handle, Duration lease) {
+            return !revoked && delegate.renew(handle, lease);
+        }
+
+        @Override
+        public void release(LockHandle handle) {
+            delegate.release(handle);
+        }
+
+        @Override
+        public boolean isHeld(LockHandle handle) {
+            return !revoked && delegate.isHeld(handle);
+        }
+
+        @Override
+        public Optional<String> currentOwner(String key) {
+            return delegate.currentOwner(key);
+        }
+
+        @Override
+        public long nextEpoch(String key) {
+            return delegate.nextEpoch(key);
+        }
+
+        @Override
+        public long currentEpoch(String key) {
+            return delegate.currentEpoch(key);
+        }
     }
 }

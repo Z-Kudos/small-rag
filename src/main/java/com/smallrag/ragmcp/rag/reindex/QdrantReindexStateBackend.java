@@ -31,11 +31,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 把重建任务状态与任务锁写入 Qdrant 的独立集合。
+ * 把重建任务状态与任务锁<b>诊断镜像</b>写入 Qdrant 的独立集合。
  *
  * <p>集合名为 {@code <rag.qdrant.collection-name>_reindex_state}，与向量数据在同一个
  * Qdrant 实例/卷上，因此跟随 Qdrant 的持久化，不依赖应用容器的文件系统。任务快照以
- * JSON 字符串放在 payload 中；锁是一条固定 id 的 point。
+ * JSON 字符串放在 payload 中；锁镜像是一条固定 id 的 point。权威任务锁在
+ * {@code DistributedLock}（Redis / 进程内租约 + epoch），Qdrant 没有 CAS，这里的
+ * point 只用于诊断与跨副本观察，不参与互斥。
  *
  * <p>Qdrant 的 collection 必须配置向量，这里用一个 1 维、全零的哑向量（Distance.Dot），
  * 只为满足约束，不参与检索。状态集合与主集合隔离，不会被 {@code rag_rebuild} 清理，
@@ -53,6 +55,9 @@ final class QdrantReindexStateBackend implements ReindexStateBackend {
     private static final String FIELD_KIND = "kind";
     private static final String FIELD_PAYLOAD = "payload";
     private static final String FIELD_OWNER = "owner";
+    private static final String FIELD_OWNER_INSTANCE = "ownerInstance";
+    private static final String FIELD_EPOCH = "epoch";
+    private static final String FIELD_EXPIRES_AT = "expiresAt";
     private static final String KIND_TASK = "task";
     private static final String KIND_LOCK = "lock";
     private static final String TASK_ID_PREFIX = "small-rag-reindex-task:";
@@ -78,6 +83,23 @@ final class QdrantReindexStateBackend implements ReindexStateBackend {
     @Override
     public String location() {
         return "qdrant:" + collection;
+    }
+
+    @Override
+    public Optional<ReindexStateStore.PersistedTask> load(String taskId) {
+        ensureCollection();
+        try {
+            List<RetrievedPoint> points = client.retrieveAsync(collection,
+                            List.of(PointIdFactory.id(taskPointId(taskId))), true, false, null)
+                    .get(timeoutMs, TimeUnit.MILLISECONDS);
+            if (points.isEmpty()) {
+                return Optional.empty();
+            }
+            return Optional.ofNullable(readTask(points.getFirst()));
+        } catch (Exception e) {
+            invalidate();
+            throw new IllegalStateException("读取重建任务状态失败: " + taskId, e);
+        }
     }
 
     @Override
@@ -114,7 +136,7 @@ final class QdrantReindexStateBackend implements ReindexStateBackend {
     }
 
     @Override
-    public Optional<String> readOwner() {
+    public Optional<ReindexStateStore.LockMirror> readLock() {
         ensureCollection();
         try {
             List<RetrievedPoint> points = client.retrieveAsync(collection,
@@ -123,32 +145,46 @@ final class QdrantReindexStateBackend implements ReindexStateBackend {
             if (points.isEmpty()) {
                 return Optional.empty();
             }
-            Value owner = points.getFirst().getPayloadMap().get(FIELD_OWNER);
+            var payload = points.getFirst().getPayloadMap();
+            Value owner = payload.get(FIELD_OWNER);
             if (owner == null || owner.getStringValue().isBlank()) {
                 return Optional.empty();
             }
-            return Optional.of(owner.getStringValue());
+            Value instance = payload.get(FIELD_OWNER_INSTANCE);
+            Value epoch = payload.get(FIELD_EPOCH);
+            Value expiresAt = payload.get(FIELD_EXPIRES_AT);
+            return Optional.of(new ReindexStateStore.LockMirror(
+                    owner.getStringValue(),
+                    instance == null ? null : instance.getStringValue(),
+                    epoch == null ? 0L : epoch.getIntegerValue(),
+                    expiresAt == null ? null : expiresAt.getStringValue()));
         } catch (Exception e) {
             invalidate();
-            throw new IllegalStateException("读取重建任务锁失败: " + collection, e);
+            throw new IllegalStateException("读取重建任务锁镜像失败: " + collection, e);
         }
     }
 
     @Override
-    public void writeOwner(String taskId) {
+    public void writeLock(ReindexStateStore.LockMirror lock) {
         ensureCollection();
-        PointStruct point = PointStruct.newBuilder()
+        PointStruct.Builder point = PointStruct.newBuilder()
                 .setId(PointIdFactory.id(LOCK_ID))
                 .setVectors(dummyVector())
                 .putPayload(FIELD_KIND, stringValue(KIND_LOCK))
-                .putPayload(FIELD_OWNER, stringValue(taskId))
-                .build();
-        upsert(point);
+                .putPayload(FIELD_OWNER, stringValue(lock.taskId()))
+                .putPayload(FIELD_EPOCH, integerValue(lock.epoch()));
+        if (lock.ownerInstance() != null) {
+            point.putPayload(FIELD_OWNER_INSTANCE, stringValue(lock.ownerInstance()));
+        }
+        if (lock.expiresAt() != null) {
+            point.putPayload(FIELD_EXPIRES_AT, stringValue(lock.expiresAt()));
+        }
+        upsert(point.build());
     }
 
     @Override
-    public void clearOwner(String taskId) {
-        if (readOwner().filter(taskId::equals).isEmpty()) {
+    public void clearLock(String taskId) {
+        if (readLock().filter(lock -> taskId.equals(lock.taskId())).isEmpty()) {
             return;
         }
         try {
@@ -156,7 +192,7 @@ final class QdrantReindexStateBackend implements ReindexStateBackend {
                     .get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             invalidate();
-            throw new IllegalStateException("删除重建任务锁失败: " + collection, e);
+            throw new IllegalStateException("删除重建任务锁镜像失败: " + collection, e);
         }
     }
 
@@ -270,6 +306,10 @@ final class QdrantReindexStateBackend implements ReindexStateBackend {
 
     private static Value stringValue(String value) {
         return Value.newBuilder().setStringValue(value).build();
+    }
+
+    private static Value integerValue(long value) {
+        return Value.newBuilder().setIntegerValue(value).build();
     }
 
     private static UUID taskPointId(String taskId) {

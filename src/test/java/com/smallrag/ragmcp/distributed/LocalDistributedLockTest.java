@@ -65,6 +65,15 @@ class LocalDistributedLockTest {
         assertThat(lock.isHeld(fresh)).isTrue();
     }
 
+    @Test
+    void epochsAreMonotonicPerKey() {
+        assertThat(lock.currentEpoch("k")).isZero();
+        assertThat(lock.nextEpoch("k")).isEqualTo(1L);
+        assertThat(lock.nextEpoch("k")).isEqualTo(2L);
+        assertThat(lock.currentEpoch("k")).isEqualTo(2L);
+        assertThat(lock.currentEpoch("other")).isZero();
+    }
+
     private static void sleep(long millis) {
         try {
             Thread.sleep(millis);

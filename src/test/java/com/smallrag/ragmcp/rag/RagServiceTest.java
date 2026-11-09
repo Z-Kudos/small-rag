@@ -372,6 +372,16 @@ class RagServiceTest {
                 .build();
     }
 
+    private static RetrievedPoint point(UUID id, String chunkType, String parentId) {
+        RetrievedPoint.Builder point = RetrievedPoint.newBuilder()
+                .setId(PointIdFactory.id(id))
+                .putPayload("chunk_type", Value.newBuilder().setStringValue(chunkType).build());
+        if (parentId != null) {
+            point.putPayload("parent_id", Value.newBuilder().setStringValue(parentId).build());
+        }
+        return point.build();
+    }
+
     private static RetrievedPoint parentPoint(String parentId, String text, List<Float> vector) {
         Points.RetrievedPoint.Builder builder = Points.RetrievedPoint.newBuilder()
                 .setId(PointIdFactory.id(RagService.parentPointUuid(parentId)));
@@ -472,6 +482,63 @@ class RagServiceTest {
                 .extracting(PointId::getUuid)
                 .containsExactly(oldPointId.toString());
         verify(vectorStore, never()).delete(any(Filter.Expression.class));
+    }
+
+    @Test
+    void reindexUsesDeterministicChunkIdsForSameSignature() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties),
+                new QdrantProperties(), () -> false, chunkingService(properties),
+                mock(DocumentArchive.class), mock(QdrantClient.class), mock(EmbeddingModel.class));
+        String documentId = UUID.randomUUID().toString();
+
+        service.reindex(documentId, "a".repeat(2000), Map.of());
+        service.reindex(documentId, "a".repeat(2000), Map.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore, times(2)).add(captor.capture());
+        List<Document> first = captor.getAllValues().get(0);
+        List<Document> second = captor.getAllValues().get(1);
+        assertThat(first).extracting(Document::getId)
+                .isEqualTo(second.stream().map(Document::getId).toList());
+    }
+
+    @Test
+    void cleanupOrphansDeletesParentsWithoutChildrenAndLegacyPoints() throws Exception {
+        QdrantClient qdrantClient = mock(QdrantClient.class);
+        RagProperties properties = new RagProperties();
+        QdrantProperties qdrantProperties = new QdrantProperties();
+        when(qdrantClient.deleteAsync(anyString(),
+                any(io.qdrant.client.grpc.Common.Filter.class)))
+                .thenReturn(Futures.immediateFuture(Points.UpdateResult.getDefaultInstance()));
+        when(qdrantClient.deleteAsync(anyString(), anyList()))
+                .thenReturn(Futures.immediateFuture(Points.UpdateResult.getDefaultInstance()));
+        UUID liveParent = UUID.randomUUID();
+        UUID orphanParent = UUID.randomUUID();
+        when(qdrantClient.scrollAsync(any(Points.ScrollPoints.class)))
+                .thenReturn(Futures.immediateFuture(Points.ScrollResponse.newBuilder()
+                        .addResult(point(liveParent, "parent", "doc-1#p0"))
+                        .addResult(point(orphanParent, "parent", "doc-1#p1"))
+                        .addResult(point(UUID.randomUUID(), "child", "doc-1#p0"))
+                        .addResult(point(UUID.randomUUID(), "chunk", null))
+                        .build()));
+        RagService service = new RagService(mock(VectorStore.class), properties,
+                new QueryCircuitBreaker(properties), qdrantProperties, () -> false,
+                chunkingService(properties), mock(DocumentArchive.class), qdrantClient,
+                mock(EmbeddingModel.class));
+
+        RagService.CleanupResult result = service.cleanupOrphans();
+
+        assertThat(result.parentPoints()).isEqualTo(2);
+        assertThat(result.orphanParents()).isEqualTo(1);
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        ArgumentCaptor<List<PointId>> deleted = ArgumentCaptor.forClass((Class) List.class);
+        verify(qdrantClient).deleteAsync(eq(qdrantProperties.getCollectionName()), deleted.capture());
+        assertThat(deleted.getValue())
+                .extracting(PointId::getUuid)
+                .containsExactly(orphanParent.toString());
     }
 
     @Test

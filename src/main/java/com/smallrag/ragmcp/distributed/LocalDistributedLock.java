@@ -19,6 +19,7 @@ public final class LocalDistributedLock implements DistributedLock {
     }
 
     private final Map<String, Entry> locks = new HashMap<>();
+    private final Map<String, Long> epochs = new HashMap<>();
 
     @Override
     public synchronized Optional<LockHandle> tryAcquire(String key, String owner, Duration lease) {
@@ -69,5 +70,17 @@ public final class LocalDistributedLock implements DistributedLock {
             return Optional.empty();
         }
         return Optional.of(current.handle().owner());
+    }
+
+    @Override
+    public synchronized long nextEpoch(String key) {
+        long next = epochs.getOrDefault(key, 0L) + 1;
+        epochs.put(key, next);
+        return next;
+    }
+
+    @Override
+    public synchronized long currentEpoch(String key) {
+        return epochs.getOrDefault(key, 0L);
     }
 }

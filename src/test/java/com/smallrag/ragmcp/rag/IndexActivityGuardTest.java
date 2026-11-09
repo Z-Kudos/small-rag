@@ -133,5 +133,15 @@ class IndexActivityGuardTest {
         public Optional<String> currentOwner(String key) {
             return delegate.currentOwner(key);
         }
+
+        @Override
+        public long nextEpoch(String key) {
+            return delegate.nextEpoch(key);
+        }
+
+        @Override
+        public long currentEpoch(String key) {
+            return delegate.currentEpoch(key);
+        }
     }
 }

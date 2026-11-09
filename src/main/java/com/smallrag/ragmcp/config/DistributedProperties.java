@@ -29,6 +29,11 @@ public class DistributedProperties {
     private String instanceId = defaultInstanceId();
 
     /**
+     * 跨副本任务状态读穿缓存时长：本地内存缺失时，同一任务在此时长内只回读一次 Qdrant。
+     */
+    private Duration taskStatusCacheMs = Duration.ofMillis(2000);
+
+    /**
      * 分布式锁参数。
      */
     private Lock lock = new Lock();

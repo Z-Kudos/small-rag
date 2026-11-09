@@ -13,8 +13,10 @@ FROM ${MAVEN_IMAGE} AS build
 WORKDIR /workspace
 
 COPY pom.xml ./
+# 容器内构建统一走阿里云镜像（Spring RC 构件仍从 repo.spring.io 回退）
+COPY docker/maven-settings.xml ./maven-settings.xml
 COPY src ./src
-RUN mvn -B -q -DskipTests clean package
+RUN mvn -B -q -s /workspace/maven-settings.xml -DskipTests clean package
 
 # ---------- 编译 llama.cpp ----------
 # 编译基底 = 运行基底（qdrant 镜像 = debian:13-slim），产物无 glibc 兼容问题；

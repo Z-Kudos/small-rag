@@ -27,6 +27,8 @@ public final class RedisDistributedLock implements DistributedLock {
                     + "return redis.call('del', KEYS[1]) else return 0 end",
             Long.class);
 
+    private static final String EPOCH_SUFFIX = ":epoch";
+
     private final StringRedisTemplate redis;
 
     public RedisDistributedLock(StringRedisTemplate redis) {
@@ -62,5 +64,27 @@ public final class RedisDistributedLock implements DistributedLock {
     public Optional<String> currentOwner(String key) {
         String value = redis.opsForValue().get(key);
         return value == null ? Optional.empty() : Optional.of(LockHandle.ownerOf(value));
+    }
+
+    @Override
+    public long nextEpoch(String key) {
+        Long epoch = redis.opsForValue().increment(key + EPOCH_SUFFIX);
+        if (epoch == null) {
+            throw new IllegalStateException("Redis 未返回栅栏 epoch: " + key);
+        }
+        return epoch;
+    }
+
+    @Override
+    public long currentEpoch(String key) {
+        String value = redis.opsForValue().get(key + EPOCH_SUFFIX);
+        if (value == null || value.isBlank()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("栅栏 epoch 不是数字: " + key, e);
+        }
     }
 }

@@ -90,4 +90,20 @@ class RedisDistributedLockTest {
         when(valueOperations.get("k")).thenReturn(null);
         assertThat(lock.isHeld(handle)).isFalse();
     }
+
+    @Test
+    void epochUsesIncrAndReadsCounterKey() {
+        when(redis.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment("k:epoch")).thenReturn(1L, 2L);
+        RedisDistributedLock lock = new RedisDistributedLock(redis);
+
+        assertThat(lock.nextEpoch("k")).isEqualTo(1L);
+        assertThat(lock.nextEpoch("k")).isEqualTo(2L);
+
+        when(valueOperations.get("k:epoch")).thenReturn("2");
+        assertThat(lock.currentEpoch("k")).isEqualTo(2L);
+
+        when(valueOperations.get("k:epoch")).thenReturn(null);
+        assertThat(lock.currentEpoch("k")).isZero();
+    }
 }
