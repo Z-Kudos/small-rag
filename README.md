@@ -62,6 +62,7 @@
 | [docs/design/limitations.md](docs/design/limitations.md) | 已知限制与风险 |
 | [DEV-MEMORY.md](DEV-MEMORY.md) | 当前开发状态与已知坑 |
 | [AGENTS.md](AGENTS.md) | 版本基线、构建命令、代码与文档规范 |
+| [docs/adr/0001-spring-cloud-scope.md](docs/adr/0001-spring-cloud-scope.md) | Spring Cloud 组件范围决策 |
 
 ## 快速开始（本地）
 

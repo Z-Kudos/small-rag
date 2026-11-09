@@ -17,7 +17,7 @@
 ## 依赖与构建
 
 - parent 用 `spring-boot-starter-parent`；`spring-cloud-dependencies` 与 `spring-ai-bom` 均以 `import` 引入。
-- Starter 清单：`spring-ai-starter-mcp-server-webmvc`、`spring-ai-starter-model-openai`（**不存在 `spring-ai-starter-model-embedding`**）、`spring-ai-starter-vector-store-qdrant`、`spring-boot-starter-web`、`spring-boot-starter-data-redis`（distributed 模式锁；standalone 不会连接）、`spring-cloud-starter-consul-discovery` / `spring-cloud-starter-consul-config`（默认关闭）、`spring-boot-starter-actuator`（仅 `/actuator/health`）、`resilience4j-circuitbreaker`（检索熔断）、`lombok`（optional）。
+- Starter 清单：`spring-ai-starter-mcp-server-webmvc`、`spring-ai-starter-model-openai`（**不存在 `spring-ai-starter-model-embedding`**）、`spring-ai-starter-vector-store-qdrant`、`spring-boot-starter-web`、`spring-boot-starter-data-redis`（distributed 模式锁；standalone 不会连接）、`spring-cloud-starter-consul-discovery` / `spring-cloud-starter-consul-config`（默认关闭；discovery 已显式排除未使用的 `spring-cloud-starter-loadbalancer`）、`spring-boot-starter-actuator`（仅 `/actuator/health`）、`resilience4j-circuitbreaker`（检索熔断）、`lombok`（optional）。**Spring Cloud 只保留 Consul 两件套**，不引入 Gateway / Config Server / Bus / Vault / Kubernetes / OpenFeign / CircuitBreaker 包装，见 [`docs/adr/0001-spring-cloud-scope.md`](docs/adr/0001-spring-cloud-scope.md)。
 - **不要**同时引入 STDIO 的 `spring-ai-starter-mcp-server` 与 webmvc starter——自动配置冲突。只用 webmvc + `protocol=STREAMABLE`。
 - **JDK 23+ 默认不自动发现注解处理器**：必须 `<maven.compiler.proc>full</maven.compiler.proc>`，否则 Lombok "找不到符号"。
 - 本机构建（默认 JAVA_HOME 是 JDK 21，编不了 release=25）：`JAVA_HOME='D:\java\jdk-27.0.1.0.3' mvn clean package`。

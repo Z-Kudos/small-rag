@@ -98,6 +98,7 @@ related: [AGENTS.md, ROADMAP.md, docs/plans/v0.0.3-standalone-and-cluster.md]
 - `SourcesLeaderElection`：竞争 `sources-leader` 租约；启动 / 定时 / watcher 自动扫描仅 leader 执行，手动 `rag_sync_sources` 任意副本可发起。
 - `compose.distributed.yaml`：外部 Qdrant / Redis / Consul / Embedding + HAProxy gateway（`docker/haproxy.cfg`）；应用端口用 `!reset []` 去掉；`small_rag_data` 为共享归档卷；需 Compose v2.24+。
 - Consul：`CONSUL_ENABLED`（默认 false）同时控制 discovery / config；注册 `small-rag`，健康检查 `/actuator/health`；`instance-id` 默认 `${spring.application.name}-${HOSTNAME}-${server.port}`。KV 默认 `KEY_VALUE`（每项一个 key），启动加 `SPRING_CONFIG_IMPORT=optional:consul:`；config watch 默认关闭。
+- Spring Cloud 范围：只保留 Consul discovery / config（可选）；`consul-discovery` 已排除未使用的 `spring-cloud-starter-loadbalancer`。不引入 Gateway / Config Server / Bus / Vault / K8s / Feign / CircuitBreaker 包装，理由见 [`docs/adr/0001-spring-cloud-scope.md`](docs/adr/0001-spring-cloud-scope.md)。
 - 已知边界（v0.0.3 待改）：任务快照锁仍是单实例读后写、无 fencing token；`rag_task_status` / `rag_task_resume` 只能看到本实例内存中的任务；HAProxy `roundrobin` 与 `STREAMABLE` 会话不兼容。
 
 ### 4.6 健康与熔断

@@ -62,6 +62,7 @@ A **plain-text RAG retrieval** MCP service built on Spring AI: it only ingests a
 | [docs/design/limitations.md](docs/design/limitations.md) | Known limitations and risks |
 | [DEV-MEMORY.md](DEV-MEMORY.md) | Current development state and pitfalls |
 | [AGENTS.md](AGENTS.md) | Version baseline, build commands, code and documentation rules |
+| [docs/adr/0001-spring-cloud-scope.md](docs/adr/0001-spring-cloud-scope.md) | Spring Cloud component scope decision |
 
 > The design and planning documents are written in Chinese.
 
