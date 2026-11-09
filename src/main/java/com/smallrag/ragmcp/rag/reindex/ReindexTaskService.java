@@ -105,6 +105,13 @@ public class ReindexTaskService {
     private final AtomicReference<String> runningTaskId = new AtomicReference<>();
 
     /**
+     * 跨副本状态读穿缓存：本地没有该任务时，短时间内的重复查询不反复打 Qdrant。
+     */
+    private final Map<String, CachedStatus> statusCache = new ConcurrentHashMap<>();
+
+    private static final String LATEST_CACHE_KEY = "\u0000latest";
+
+    /**
      * 权威任务锁：{@code <prefix>reindex-task} 租约 + fencing epoch；同一时刻只有一个副本持有。
      */
     private volatile FencedLease taskLease;
@@ -148,6 +155,7 @@ public class ReindexTaskService {
      * 并等待续接；接管失败说明其他副本仍在执行，本实例不改写任何快照。
      */
     private void restore() {
+        verifyLockMirror();
         for (ReindexStateStore.PersistedTask persisted : stateStore.loadAll()) {
             Task task = new Task(persisted);
             tasks.put(task.taskId, task);
@@ -216,6 +224,33 @@ public class ReindexTaskService {
                     return known != null && known.isTerminal();
                 })
                 .ifPresent(lock -> stateStore.clearLock(lock.taskId()));
+    }
+
+    /**
+     * 启动一致性校验：Qdrant 镜像必须与权威任务锁一致，以 Redis / 进程内锁为准。
+     *
+     * <p>镜像只用于诊断，但长期指向错误的持有者会误导排障。权威锁为空（持有者已
+     * 退出或租约过期）或持有者 taskId 不一致时清除镜像；锁存储不可用时跳过。
+     */
+    private void verifyLockMirror() {
+        Optional<ReindexStateStore.LockMirror> mirror = stateStore.readLock();
+        if (mirror.isEmpty()) {
+            return;
+        }
+        String taskId = mirror.get().taskId();
+        try {
+            Optional<String> authority = lock.currentOwner(taskLockKey());
+            if (authority.isEmpty()) {
+                stateStore.clearLock(taskId);
+                log.warn("启动一致性校验：权威任务锁为空，已清除过期镜像: taskId={}", taskId);
+            } else if (!authority.get().equals(taskId)) {
+                stateStore.clearLock(taskId);
+                log.warn("启动一致性校验：镜像与权威任务锁不一致，以权威锁为准并清除镜像: "
+                        + "mirror={}, authority={}", taskId, authority.get());
+            }
+        } catch (Exception e) {
+            log.debug("启动一致性校验无法读取权威任务锁，跳过: {}", e.toString());
+        }
     }
 
     /**
@@ -310,21 +345,29 @@ public class ReindexTaskService {
     /**
      * 续接 {@code interrupted} 状态的任务：从上次成功的文档之后继续，不重新清空。
      *
+     * <p>任意副本都可调用：本地内存没有该任务时从 Qdrant 状态集合读取；随后尝试
+     * 抢占权威任务锁（epoch 递增），抢到才接管。持有副本仍在续租时返回持有者信息。
+     *
      * @param taskId 任务 id；为空表示最近一次任务
      * @return 续接后的任务快照
      * @throws IllegalArgumentException 没有可续接的任务
-     * @throws IllegalStateException    任务不在 {@code interrupted} 状态或任务锁已丢失
+     * @throws IllegalStateException    任务已结束、正在本实例执行或任务锁由其他副本持有
      */
     public ReindexTaskView resume(String taskId) {
-        Task task = resolve(taskId)
+        Task task = resolveForOperation(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("没有可续接的重建任务"));
-        if (!task.isInterrupted()) {
-            throw new IllegalStateException("只有 interrupted 状态的任务可以续接，当前: "
-                    + task.snapshot().status());
+        if (task.isTerminal()) {
+            throw new IllegalStateException("任务已结束，无法续接: " + task.taskId);
+        }
+        if (Objects.equals(runningTaskId.get(), task.taskId) && !task.isInterrupted()) {
+            throw new IllegalStateException("任务正在本实例执行，无需续接: " + task.taskId);
         }
         if (!acquireOwnership(task)) {
-            throw new IllegalStateException("任务锁由其他副本持有，无法续接: "
-                    + taskLockOwner().orElse("unknown"));
+            throw new IllegalStateException("任务由 " + ownerDescription(task) + " 持有，无法续接");
+        }
+        if (!task.isInterrupted()) {
+            // 持有者已失联、租约过期：先落为 interrupted，再按续接流程执行
+            task.markInterrupted();
         }
         ensureActivity(task.taskId);
         if (!task.beginResume()) {
@@ -428,45 +471,174 @@ public class ReindexTaskService {
     /**
      * 请求取消任务：运行中在文档边界停止；{@code interrupted} 任务立即置为 cancelled 并释放锁。
      *
+     * <p>任意副本都可调用：本地没有该任务时先从状态集合读取；随后尝试抢占任务锁。
+     * 原持有者仍在续租时无法跨副本中断其线程，返回持有者信息；持有者失联（租约过期）
+     * 时可接管并直接置为 cancelled。
+     *
      * @param taskId 任务 id；为空表示最近一次任务
      * @return 收到取消请求后的任务快照
      * @throws IllegalArgumentException 没有可取消的任务
-     * @throws IllegalStateException    任务已经结束
+     * @throws IllegalStateException    任务已经结束或任务锁由其他副本持有
      */
     public ReindexTaskView cancel(String taskId) {
-        Task task = resolve(taskId)
+        Task task = resolveForOperation(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("没有可取消的重建任务"));
         if (task.isTerminal()) {
             throw new IllegalStateException("任务已结束，无法取消: " + task.taskId);
         }
-        if (task.isInterrupted()) {
-            task.abandon();
-            releaseLock(task);
-            trim();
-            log.info("已放弃重启时中断的重建任务并释放任务锁: taskId={}", task.taskId);
+        if (Objects.equals(runningTaskId.get(), task.taskId) && !task.isInterrupted()) {
+            task.requestCancel();
+            log.info("已请求取消重建任务（协作式，文档边界生效）: taskId={}", task.taskId);
             return task.snapshot();
         }
-        task.requestCancel();
-        log.info("已请求取消重建任务（协作式，文档边界生效）: taskId={}", task.taskId);
+        if (!acquireOwnership(task)) {
+            throw new IllegalStateException("任务由 " + ownerDescription(task)
+                    + " 持有，无法在非持有副本取消；请等待任务结束或在对该副本操作");
+        }
+        if (!task.isInterrupted()) {
+            task.markInterrupted();
+        }
+        task.abandon();
+        releaseLock(task);
+        trim();
+        log.info("已放弃重建任务并释放任务锁: taskId={}, epoch={}", task.taskId,
+                taskLease == null ? 0L : taskLease.epoch());
         return task.snapshot();
     }
 
     /**
      * 查询任务进度；taskId 为空时返回最近一次任务（含已结束的）。
      *
+     * <p>本地内存没有时回读 Qdrant 状态集合（短缓存），因此任意副本都能看到
+     * 当前持有者与其他副本提交的任务；运行中进度仍以持有者持久化的快照为准。
+     *
      * @param taskId 任务 id，可为空
      * @return 任务快照；从未提交过任务或任务已被清理时为空
      */
     public Optional<ReindexTaskView> status(String taskId) {
-        return resolve(taskId).map(Task::snapshot);
+        if (taskId != null && !taskId.isBlank()) {
+            Task local = tasks.get(taskId);
+            if (local != null) {
+                return Optional.of(local.snapshot());
+            }
+            return remoteStatus(taskId, taskId);
+        }
+        Task latestLocal = latestLocalTask();
+        ReindexTaskView localView = latestLocal == null ? null : latestLocal.snapshot();
+        ReindexTaskView remoteView = remoteStatus(LATEST_CACHE_KEY, null).orElse(null);
+        return Optional.ofNullable(newer(localView, remoteView));
     }
 
-    private Optional<Task> resolve(String taskId) {
-        if (taskId == null || taskId.isBlank()) {
-            String latest = taskOrder.peekLast();
-            return latest == null ? Optional.empty() : Optional.ofNullable(tasks.get(latest));
+    /**
+     * 读取本地最近一次任务（含终态）。
+     */
+    private Task latestLocalTask() {
+        String latest = taskOrder.peekLast();
+        return latest == null ? null : tasks.get(latest);
+    }
+
+    /**
+     * 选择 {@code startedAt} 较晚的快照；任意一方为空时返回另一方。
+     */
+    private static ReindexTaskView newer(ReindexTaskView left, ReindexTaskView right) {
+        if (left == null) {
+            return right;
         }
-        return Optional.ofNullable(tasks.get(taskId));
+        if (right == null) {
+            return left;
+        }
+        String leftStarted = String.valueOf(left.startedAt());
+        String rightStarted = String.valueOf(right.startedAt());
+        return rightStarted.compareTo(leftStarted) > 0 ? right : left;
+    }
+
+    /**
+     * 回读 Qdrant 中的任务快照，使用读穿缓存避免高频查询打爆状态集合。
+     */
+    private Optional<ReindexTaskView> remoteStatus(String cacheKey, String taskId) {
+        long now = System.currentTimeMillis();
+        long ttl = Math.max(0, distributed.getTaskStatusCacheMs().toMillis());
+        CachedStatus cached = statusCache.get(cacheKey);
+        if (cached != null && now - cached.fetchedAtMillis() < ttl) {
+            return Optional.of(cached.view());
+        }
+        Optional<ReindexStateStore.PersistedTask> persisted = taskId == null
+                ? stateStore.loadLatest()
+                : stateStore.load(taskId);
+        if (persisted.isEmpty()) {
+            statusCache.remove(cacheKey);
+            return Optional.empty();
+        }
+        ReindexTaskView view = persisted.get().view();
+        statusCache.put(cacheKey, new CachedStatus(view, now));
+        return Optional.of(view);
+    }
+
+    /**
+     * 查询任务（含跨副本）：本地优先；本地没有时从状态集合读取并纳入本地视图。
+     */
+    private Optional<Task> resolveForOperation(String taskId) {
+        if (taskId != null && !taskId.isBlank()) {
+            Task local = tasks.get(taskId);
+            if (local != null) {
+                return Optional.of(local);
+            }
+        }
+        Task local = taskId == null || taskId.isBlank() ? latestLocalTask() : null;
+        Optional<ReindexStateStore.PersistedTask> remote = taskId == null || taskId.isBlank()
+                ? stateStore.loadLatest()
+                : stateStore.load(taskId);
+        if (remote.isEmpty()) {
+            return Optional.ofNullable(local);
+        }
+        Task remoteTask = adopt(remote.get());
+        if (local == null) {
+            return Optional.of(remoteTask);
+        }
+        return isNewer(remoteTask.snapshot(), local.snapshot())
+                ? Optional.of(remoteTask)
+                : Optional.of(local);
+    }
+
+    private static boolean isNewer(ReindexTaskView candidate, ReindexTaskView current) {
+        if (candidate == null) {
+            return false;
+        }
+        if (current == null) {
+            return true;
+        }
+        return String.valueOf(candidate.startedAt())
+                .compareTo(String.valueOf(current.startedAt())) > 0;
+    }
+
+    /**
+     * 把状态集合中的任务纳入本地视图；已存在同一 taskId 时复用本地实例。
+     */
+    private synchronized Task adopt(ReindexStateStore.PersistedTask persisted) {
+        String taskId = persisted.view().taskId();
+        Task existing = tasks.get(taskId);
+        if (existing != null) {
+            return existing;
+        }
+        Task task = new Task(persisted);
+        tasks.put(taskId, task);
+        taskOrder.addLast(taskId);
+        trim();
+        return task;
+    }
+
+    /**
+     * 错误信息中的持有者描述：优先用锁镜像的实例 id / epoch，回退到权威锁 owner。
+     */
+    private String ownerDescription(Task task) {
+        Optional<ReindexStateStore.LockMirror> mirror = stateStore.readLock();
+        if (mirror.isPresent() && task.taskId.equals(mirror.get().taskId())) {
+            ReindexStateStore.LockMirror lockMirror = mirror.get();
+            return (lockMirror.ownerInstance() == null ? "其他副本" : lockMirror.ownerInstance())
+                    + "（taskId=" + task.taskId + ", epoch=" + lockMirror.epoch() + "）";
+        }
+        String owner = taskLockOwner().orElse("其他副本");
+        return owner + "（taskId=" + task.taskId + "）";
     }
 
     private void startWorker(Task task, boolean clearFirst) {
@@ -770,6 +942,40 @@ public class ReindexTaskService {
 
     private static String activityLabel(String taskId) {
         return IndexActivityGuard.reindex(taskId);
+    }
+
+    /**
+     * 当前实例正在执行的任务快照（用于健康检查与排障）。
+     *
+     * @return 运行中任务；空闲时为空
+     */
+    public Optional<ReindexTaskView> runningTask() {
+        String taskId = runningTaskId.get();
+        Task task = taskId == null ? null : tasks.get(taskId);
+        return task == null ? Optional.empty() : Optional.of(task.snapshot());
+    }
+
+    /**
+     * @return 任务状态集合位置（用于健康检查）
+     */
+    public String stateStoreLocation() {
+        return stateStore.location();
+    }
+
+    /**
+     * @return 任务锁诊断镜像（用于健康检查）
+     */
+    public Optional<ReindexStateStore.LockMirror> lockMirror() {
+        return stateStore.readLock();
+    }
+
+    /**
+     * 跨副本任务状态读穿缓存项。
+     *
+     * @param view           缓存的快照
+     * @param fetchedAtMillis 回读时间（毫秒时间戳）
+     */
+    private record CachedStatus(ReindexTaskView view, long fetchedAtMillis) {
     }
 
     /**

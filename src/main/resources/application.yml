@@ -80,7 +80,7 @@ spring:
           使用 rag_ingest 新增文档、rag_update 更新、rag_delete 删除、rag_list 查看归档。
           使用 rag_search 查看命中分块，使用 rag_query 获取带来源与相似度的增强上下文。
           rag_reindex 可手动重建单篇（同步）或全部归档文档（异步）；rag_rebuild 需 confirm=true 才会全量异步重建。
-          异步重建返回 taskId：用 rag_task_status 查询进度（status/total/processed/percent/stalled），用 rag_task_cancel 协作式取消。
+          异步重建返回 taskId：用 rag_task_status 查询进度（status/total/processed/percent/stalled），任意副本可查（本地缺失时回读状态集合）；用 rag_task_cancel 协作式取消。
           任务快照持久化在 Qdrant 的独立状态集合中；任务锁在 standalone 为进程内、distributed 为 Redis 租约（带 fencing epoch）。
           进程重启后未完成任务为 interrupted，默认自动续接，也可用 rag_task_resume 手动续接或 rag_task_cancel 放弃。
           配置 rag.sources 后会自动导入多个 Markdown 源目录：rag_sync_sources 异步触发增量同步（force=true 全量重切），rag_sync_status 查询运行状态与最近一次统计。
@@ -90,12 +90,17 @@ smallrag:
   distributed:
     # 默认 false：保持单容器 standalone；distributed profile 或环境变量打开
     enabled: ${SMALL_RAG_DISTRIBUTED_ENABLED:false}
+    # 跨副本任务状态读穿缓存；本地内存缺失时回读 Qdrant 的最短间隔
+    task-status-cache-ms: ${SMALL_RAG_TASK_STATUS_CACHE_MS:2000}
     lock:
       # 实例失联后，其他副本需等待该租约过期才能接管
       lease: ${SMALL_RAG_LOCK_LEASE:30s}
       # 必须明显小于 lease；每次续租失败即停止本地写入
       renew-interval: ${SMALL_RAG_LOCK_RENEW_INTERVAL:10s}
       key-prefix: ${SMALL_RAG_LOCK_PREFIX:smallrag:lock:}
+  archive:
+    # distributed 多副本必须共享归档目录（RWX）；只用于启动告警与健康检查
+    shared: ${SMALL_RAG_ARCHIVE_SHARED:false}
 
 rag:
   # 原始文档归档目录：自动重切的原文来源；目录不可写时降级为只入库

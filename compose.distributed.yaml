@@ -16,6 +16,8 @@ services:
       SMALL_RAG_DISTRIBUTED_ENABLED: "true"
       # 多副本无粘性会话：MCP 必须无状态，端点仍是 /mcp
       SMALL_RAG_MCP_PROTOCOL: STATELESS
+      # 所有副本挂载同一个 small_rag_data 卷
+      SMALL_RAG_ARCHIVE_SHARED: "true"
       SMALL_RAG_ENSURE_EMBEDDING_MODEL: "false"
       QDRANT_HOST: qdrant
       QDRANT_PORT: "6334"

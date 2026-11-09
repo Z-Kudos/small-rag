@@ -98,6 +98,8 @@ class QdrantReindexStateBackendTest {
 
         backend.save(task);
         assertThat(backend.loadAll()).containsExactly(task);
+        assertThat(backend.load("task-1")).contains(task);
+        assertThat(backend.load("missing")).isEmpty();
 
         backend.writeLock(new ReindexStateStore.LockMirror("task-1", "host-1", 5L, "2026-11-09T00:00:00Z"));
         ReindexStateStore.LockMirror lock = backend.readLock().orElseThrow();

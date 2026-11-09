@@ -91,6 +91,40 @@ public class ReindexStateStore {
     }
 
     /**
+     * 读取单个任务状态；失败只告警并返回空。
+     *
+     * @param taskId 任务 id
+     * @return 任务状态
+     */
+    public synchronized Optional<PersistedTask> load(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return backend.load(taskId);
+        } catch (Exception e) {
+            log.warn("读取重建任务状态失败，按不存在处理: taskId={}, 原因={}", taskId, e.toString());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * 读取最近一次任务（按 {@code startedAt} 取最大）；失败只告警并返回空。
+     *
+     * @return 最近任务
+     */
+    public synchronized Optional<PersistedTask> loadLatest() {
+        try {
+            return backend.loadAll().stream()
+                    .max((left, right) -> String.valueOf(left.view().startedAt())
+                            .compareTo(String.valueOf(right.view().startedAt())));
+        } catch (Exception e) {
+            log.warn("读取最近重建任务失败，按无历史任务处理: {}", e.toString());
+            return Optional.empty();
+        }
+    }
+
+    /**
      * 读取全部任务状态；失败只告警并返回空列表。
      *
      * @return 按 {@code startedAt} 升序排列的任务状态

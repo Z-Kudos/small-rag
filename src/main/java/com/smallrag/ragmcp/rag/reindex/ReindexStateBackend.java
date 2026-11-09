@@ -14,6 +14,14 @@ import java.util.Optional;
 interface ReindexStateBackend {
 
     /**
+     * 读取单个任务状态。
+     *
+     * @param taskId 任务 id
+     * @return 任务状态；不存在时为空
+     */
+    Optional<ReindexStateStore.PersistedTask> load(String taskId);
+
+    /**
      * 读取全部任务状态。
      *
      * @return 任务状态列表；读取失败应抛出运行时异常

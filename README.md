@@ -194,6 +194,7 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 - 两个副本共享 `small_rag_data:/data` 作为归档卷；多主机部署需换成 NFS / CephFS 等 RWX 存储。
 - 应用通过 `SMALL_RAG_DISTRIBUTED_ENABLED=true` 启用 Redis 租约锁；目录导入、重建任务、启动自动重切通过 `index-activity` 活动锁串行化，同一时刻只有一个副本写入。
 - 重建任务另有独立的 `reindex-task` 租约 + 单调 fencing epoch；每次写入前远程校验「仍持有租约 + epoch 仍最新」，旧持有者恢复后无法继续写。
+- 任意副本都能查询任务：本地内存没有时回读 Qdrant 状态集合（默认 2s 读穿缓存）。`rag_task_resume` / `rag_task_cancel` 会先抢任务租约，抢到即接管（epoch 递增）；原持有者仍在续租时返回持有者实例与 taskId。
 - MCP 多副本必须使用无状态传输：`SMALL_RAG_MCP_PROTOCOL=STATELESS`（overlay 已设置），否则会话只存在单副本内存，轮询到其他副本会 404。standalone 保持 `STREAMABLE`。
 - 锁租约默认 30s、每 10s 续租；持有者失联后，其他副本在租约过期后接管。续租失败会立即停止本地写入（`IndexActivityGuard.isHeldBy=false`）。
 - 目录自动扫描（启动 / 定时 / watcher）只由 leader 执行：各副本竞争 `sources-leader` 租约，leader 失联后由其他副本接管；MCP 手动 `rag_sync_sources` 不受 leader 限制，仍由索引活动锁串行化。
@@ -226,7 +227,7 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 
 - `rag_search` / `rag_query` 经过 Resilience4j 熔断：默认窗口 20 次、最少 10 次调用、失败率 50% 打开、30s 后进入半开。Embedding 或 Qdrant 持续失败时快速返回“知识库检索暂时不可用（熔断已打开）”，不再占用请求线程；入库与重建不受影响。
 - 可用 `RAG_QUERY_BREAKER_*` 环境变量调整，或 `RAG_QUERY_BREAKER_ENABLED=false` 关闭。
-- `GET /actuator/health` 返回实例 id、是否 distributed、活动索引锁、目录扫描 leader、熔断状态与 active profiles，便于确认多副本中谁在写入。
+- `GET /actuator/health` 返回实例 id、是否 distributed、活动索引锁、目录扫描 leader、重建任务（owner / epoch / heartbeat / 状态集合）、归档卷（enabled / writable / dir / shared）、熔断状态与 active profiles，便于确认多副本中谁在写入。
 
 ## 配置
 
@@ -281,6 +282,8 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 | `QDRANT_USE_TLS` | `false` | 是否启用 TLS |
 | `QDRANT_REQUEST_TIMEOUT_MS` | `30000` | 常规 Qdrant RPC（写入 / 删除 / 检索）deadline；与初始化超时分开 |
 | `SMALL_RAG_DISTRIBUTED_ENABLED` | `false` | 启用 distributed 模式（Redis 租约锁）；standalone 不连接 Redis |
+| `SMALL_RAG_TASK_STATUS_CACHE_MS` | `2000` | 跨副本任务状态读穿缓存（毫秒）；本地没有任务时回读 Qdrant 的最短间隔 |
+| `SMALL_RAG_ARCHIVE_SHARED` | `false` | 声明归档目录由多副本共享（distributed 应为 `true`）；用于启动告警与 health |
 | `SMALL_RAG_MCP_PROTOCOL` | `STREAMABLE` | MCP 传输协议：standalone 用 `STREAMABLE`，多副本必须 `STATELESS`（否则跨副本会话 404） |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | `localhost` / `6379` / 空 | Redis 连接（仅 distributed 使用） |
 | `SMALL_RAG_LOCK_LEASE` | `30s` | 索引活动锁租约 |
@@ -327,7 +330,7 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 - `rag_reindex`：只重建已归档文档，不清理归档之外的残留片段；单篇重建仍同步返回片段数。
 - `rag_rebuild`：先删 `chunk_type=chunk` / `chunk_type=child` / `chunk_type=parent` 的片段再全量重建；归档为空时拒绝执行。
 - `rag_reindex`（全量）/ `rag_rebuild` 为**异步任务**：同一时刻只允许一个重建任务，重复提交返回错误。任务快照（保留最近 20 个）存放在 Qdrant 的独立集合 `<QDRANT_COLLECTION>_reindex_state`（与向量数据同一 Qdrant / 同一持久化卷，不依赖应用容器文件系统；集合不影响检索、空库探活与 `rag_rebuild` 清理）。**任务锁的权威实现在 `DistributedLock`**：standalone 为进程内租约，distributed 为 Redis 租约 `reindex-task` + 单调 epoch；状态集合里的锁 point 只是诊断镜像（`ownerInstance` / `epoch` / `expiresAt`），不参与互斥。进程重启后恢复进度：未完成任务为 `interrupted` 并**重新持有任务锁**，默认由 `REINDEX_RESUME_ON_STARTUP=true` 自动续接（跳过已完成文档、不重复清空）；关闭自动续接时可用 `rag_task_resume` 手动续接，或用 `rag_task_cancel` 放弃并释放锁。优雅关机会把在跑任务保存为 `interrupted` 并让出租约，重启可立即续接；崩溃时靠租约过期（≤30s）接管。硬超时已撤销写权限的任务不会续接。
-- `rag_task_status` 返回 `status`（`queued` / `clearing` / `reindexing` / `interrupted` / `completed` / `aborted` / `cancelled` / `failed`）、`total`、`processed`、`percent`、`succeeded`、`failed`、`currentDocumentId`、`lastProgressAt`、`stalled`、`cancelRequested`、`startedAt`、`finishedAt`、`error`、`revoked`、`lockReleaseAt`、`ownerInstance`、`epoch`、`heartbeatAt`。
+- `rag_task_status` 返回 `status`（`queued` / `clearing` / `reindexing` / `interrupted` / `completed` / `aborted` / `cancelled` / `failed`）、`total`、`processed`、`percent`、`succeeded`、`failed`、`currentDocumentId`、`lastProgressAt`、`stalled`、`cancelRequested`、`startedAt`、`finishedAt`、`error`、`revoked`、`lockReleaseAt`、`ownerInstance`、`epoch`、`heartbeatAt`。本地没有该任务时从状态集合回读，因此任意副本都能看到持有者与其他副本提交的任务。
 - 看门狗：超过 `REINDEX_STALL_TIMEOUT_SECONDS` 无进度只标记 `stalled` 并告警，**保留任务锁**；超过 `REINDEX_HARD_TIMEOUT_SECONDS` 才**撤销写权限**（此后拒绝一切 Qdrant 写入）、主动取消在途 Embedding 调用并中断工作线程。
 - 锁释放：线程在 `REINDEX_JOIN_TIMEOUT_SECONDS` 内退出则立即释放；否则进入 `REINDEX_RECOVERY_GRACE_SECONDS` 宽限期，到期强制释放任务锁。撤销后旧任务无法再发起写入，宽限期只需覆盖撤销瞬间的在途请求（有 `QDRANT_REQUEST_TIMEOUT_MS` 上界），因此**无需重启**；此时提交新任务会提示“已撤销，正在释放任务锁”。
 - `rag_task_cancel`：运行中为协作式取消，当前文档处理完后停止，最终 `status=cancelled`；卡在阻塞调用时依靠 Embedding 超时、主动取消或看门狗硬超时兜底。对 `interrupted` 任务则立即置为 `cancelled` 并释放任务锁（放弃续接）。

@@ -18,9 +18,9 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 - 上一版：`v0.0.2`（2026-11-07，`main` tag，双远程已推送）。
 - 主题：**单机与集群**。
 - 规划：[`docs/v0.0.3/plan.md`](docs/v0.0.3/plan.md)。
-- 里程碑：M1（WP1 + WP2）✅ → M2（WP3 + WP5）→ M3（WP4 + WP6）。
-- 下一步：`feature/cluster-ops`（WP3 跨副本任务状态 + WP5 观测）。
-- 已完成：`feature/cluster-safety`（WP1 集群会话 + WP2 fencing），待合回 `develop`。
+- 里程碑：M1（WP1 + WP2）✅ → M2（WP3 + WP5）✅ → M3（WP4 + WP6）。
+- 下一步：`feature/idempotent-ingest`（WP4 确定性 chunk id + WP6 Testcontainers/CI）。
+- 已完成：`feature/cluster-safety`（WP1 + WP2）、`feature/cluster-ops`（WP3 + WP5），待合回 `develop`。
 - 文档：`README.md`（简体中文）/ `README.en.md`（English）双语；版本文档统一放在 `docs/v0.0.3/`；模板与写作规范在 `docs/templates/`。
 
 **已确认决策（2026-11-09）**
@@ -35,7 +35,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 ## 2. 构建与验证
 
 - JDK 25（`maven.compiler.release=25`）；本机 `mvn -v` 已指向 JDK 25，若默认不是 25 用 `JAVA_HOME` 指定。
-- 构建：`mvn clean package`；单测：`mvn test`（默认不依赖外部服务，**165** 个测试全绿，`*RedisIT` 跳过）。
+- 构建：`mvn clean package`；单测：`mvn test`（默认不依赖外部服务，**172** 个测试全绿，`*RedisIT` 跳过）。
 - Redis 集成测试：`redis-server --port 6390 --save '' --appendonly no --daemonize yes`，再 `mvn test -Dtest='*RedisIT' -Dsmallrag.redis.it=true`。
 - 切分断点校准：`mvn test -Dtest=BreakpointPercentileCalibration -Dcalibrate=true`（需本机 OpenAI 兼容 Embedding，可用 `EMBEDDING_*` 覆盖）。
 - 镜像：`podman compose -f compose.yaml build small-rag` 冷构建 **126s**，产出 `small-rag:0.0.3`（649 MB）。
@@ -78,6 +78,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 - **任务所有权**：`FencedLease` 持有 `<lock-prefix>reindex-task` 租约并递增单调 epoch；standalone 用 `LocalDistributedLock`，distributed 用 Redis（`INCR <key>:epoch`）；续租线程每 10s 刷新心跳，`isWritable()` 每次写入前远程校验 owner+token+epoch。Redis 不可用时拒绝写索引（fail-closed）。
 - 状态持久化：`ReindexStateStore` + `QdrantReindexStateBackend` 写入独立集合 `<collection>_reindex_state`（1 维 Dot 哑向量 + JSON payload）；含 `cleared` 与 `completedDocumentIds` 检查点。任务锁 point 仅作诊断镜像（`ownerInstance` / `epoch` / `expiresAt`），Qdrant 无 CAS，不参与互斥。
 - 重启：先抢到任务租约才把最近未完成任务标 `interrupted`（抢不到说明其他副本仍在执行，不改写快照）；`REINDEX_RESUME_ON_STARTUP=true` 时自动续接，`false` 时等 `rag_task_resume` / `rag_task_cancel`。优雅停机保存 `interrupted` 后让出租约，重启可立即续接；崩溃靠租约过期（≤30s）接管。
+- 跨副本：`rag_task_status` 本地缺失时回读 Qdrant（`task-status-cache-ms` 默认 2s）；`rag_task_resume` / `rag_task_cancel` 先抢任务租约，抢到即接管（epoch 递增），抢不到返回锁镜像中的 `ownerInstance` / `taskId`。
 - 看门狗：每 30s 检查；超过 1800s 无进度只标 `stalled` 并保留锁；超过 3600s 撤销写权限 + 取消在途 Embedding + 中断线程，10s 内退出则释放锁，否则 120s 宽限期后强制释放并置 `failed`。
 - `RagService.reindexArchived(clearFirst, listener, skipDocumentIds)` 逐篇回调检查点；清空前校验归档非空，清空后重读归档列表。
 
@@ -102,12 +103,13 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 - `compose.distributed.yaml`：外部 Qdrant / Redis / Consul / Embedding + HAProxy gateway（`docker/haproxy.cfg`）；应用端口用 `!reset []` 去掉；`small_rag_data` 为共享归档卷；需 Compose v2.24+。
 - Consul：`CONSUL_ENABLED`（默认 false）同时控制 discovery / config；注册 `small-rag`，健康检查 `/actuator/health`；`instance-id` 默认 `${spring.application.name}-${HOSTNAME}-${server.port}`。KV 默认 `KEY_VALUE`（每项一个 key），启动加 `SPRING_CONFIG_IMPORT=optional:consul:`；config watch 默认关闭。
 - Spring Cloud 范围：只保留 Consul discovery / config（可选）；`consul-discovery` 已排除未使用的 `spring-cloud-starter-loadbalancer`。不引入 Gateway / Config Server / Bus / Vault / K8s / Feign / CircuitBreaker 包装，理由见 [`docs/v0.0.3/adr/0001-spring-cloud-scope.md`](docs/v0.0.3/adr/0001-spring-cloud-scope.md)。
-- 已知边界（v0.0.3 待改）：`rag_task_status` / `rag_task_resume` / `rag_task_cancel` 仍只能看到本实例内存中的任务（WP3 修复）；跨副本操作会提示持有者。
+- 已知边界（v0.0.3 待改）：原持有者仍在运行且租约有效时，其他副本无法强制中断其线程，`rag_task_cancel` 只返回持有者；`rag_task_*` 依赖 Qdrant 状态集合，Qdrant 不可用时退化为本实例内存视图。
 
 ### 4.6 健康与熔断
 
 - `QueryCircuitBreaker`（`rag.query-breaker.*`）只包 `rag_search` / `rag_query`；默认窗口 20、最小调用 10、失败率 50%、打开 30s、半开 3 次；打开时抛 `QueryUnavailableException`，入库 / 重建不受影响。
-- `/actuator/health` 只暴露 health；`IndexLockHealthIndicator` 输出 `instanceId`、`distributed`、`profiles`、`activeLock`、`sourcesLeader`、`queryCircuit`、`queryFailureRate`。Redis 健康检查由 data-redis 自动提供（仅 distributed 开启）。
+- `/actuator/health` 只暴露 health；`IndexLockHealthIndicator` 输出 `instanceId`、`distributed`、`profiles`、`activeLock`、`sourcesLeader`、`archive`（enabled / writable / dir / shared）、`reindexTask`（status / taskId / ownerInstance / epoch / lastHeartbeat / stateStore / lockMirror）、`queryCircuit`、`queryFailureRate`。Redis 健康检查由 data-redis 自动提供（仅 distributed 开启）。
+- 启动一致性：权威任务锁为空或 taskId 与 Qdrant 镜像不一致时，以权威锁为准清除镜像；distributed 且 `SMALL_RAG_ARCHIVE_SHARED!=true` 时 `ClusterStartupGuard` 启动告警。
 - Spring Boot 4 包名：`org.springframework.boot.health.contributor.Health/HealthIndicator`（不是 `org.springframework.boot.actuate.health`）。
 
 ## 5. 关键约束与坑
@@ -129,7 +131,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 
 ## 6. 待办
 
-- v0.0.3：M1（WP1 + WP2）已完成；下一步 WP3 跨副本任务状态 + WP5 观测，然后 WP4 确定性 chunk id + WP6 Testcontainers/CI（见 plan）。
+- v0.0.3：M1（WP1 + WP2）与 M2（WP3 + WP5）已完成；下一步 WP4 确定性 chunk id + WP6 Testcontainers/CI（见 plan）。
 - P3：Spring Cloud Gateway 仍可选，不阻塞本版本。
 - 真实语料端到端验证 MMR 效果（需 Qdrant + 实际知识库人工评估）。
 - 混合主题语料校准 `SEMANTIC_BREAKPOINT_PERCENTILE`（当前校准语料同质，分布扁平）。

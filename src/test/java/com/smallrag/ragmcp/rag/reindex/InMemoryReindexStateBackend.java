@@ -18,6 +18,11 @@ class InMemoryReindexStateBackend implements ReindexStateBackend {
     private final AtomicReference<ReindexStateStore.LockMirror> lock = new AtomicReference<>();
 
     @Override
+    public Optional<ReindexStateStore.PersistedTask> load(String taskId) {
+        return Optional.ofNullable(tasks.get(taskId));
+    }
+
+    @Override
     public synchronized List<ReindexStateStore.PersistedTask> loadAll() {
         return List.copyOf(tasks.values());
     }

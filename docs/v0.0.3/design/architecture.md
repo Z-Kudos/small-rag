@@ -41,6 +41,7 @@ related: [README.md, docs/v0.0.3/plan.md]
 - **错误收敛**：MCP 工具把运行期异常转为 `{"error": "..."}`，不抛协议层异常。
 - **集群会话**：standalone 使用 `STREAMABLE`；distributed 多副本使用 `STATELESS`（`SMALL_RAG_MCP_PROTOCOL`），会话不再保存在单副本内存，gateway 可继续 `roundrobin`。`McpTransportGuard` 在 distributed 且非 `STATELESS` 时启动告警。
 - **任务所有权**：重建任务持有 `<lock-prefix>reindex-task` 租约 + 单调 fence epoch（standalone 进程内、distributed Redis）；每次 Qdrant 变更前远程校验持有者、token 与 epoch 仍最新，旧持有者恢复后不能继续写入。distributed 下 Redis 不可用时 fail-closed。Qdrant `_reindex_state` 的任务锁 point 只作诊断镜像，不参与互斥。
+- **跨副本任务视图**：`rag_task_status` 本地缺失时回读 Qdrant 状态集合（`task-status-cache-ms` 读穿缓存）；`rag_task_resume` / `rag_task_cancel` 先抢 `reindex-task` 租约，抢到即接管（epoch 递增），抢不到返回锁镜像中的持有者实例。启动时校验镜像与权威锁一致，以权威锁为准清理过期镜像。
 
 ## 4. 包结构
 
@@ -58,7 +59,8 @@ rag/chunking/   ChunkingService、ChunkingStrategy、ChunkingSignature、TextChu
                 TextChunker、RecursiveTextChunker、MarkdownChunker、SemanticTextChunker
 rag/archive/    DocumentArchive、ArchivedDocument、ArchivedDocumentSummary（原文归档、摘要索引与签名记录）
 distributed/    DistributedLock、LockHandle、FencedLease、LocalDistributedLock、RedisDistributedLock
-config/         QdrantConfig、McpServerConfig、McpTransportGuard（协议与运行形态校验）、EmbeddingConfig（HTTP 超时）、
+config/         QdrantConfig、McpServerConfig、McpTransportGuard（协议与运行形态校验）、
+                ClusterStartupGuard（共享归档告警）、ArchiveProperties、EmbeddingConfig（HTTP 超时）、
                 DistributedLockConfig、DistributedProperties、RagProperties、QdrantProperties、
                 IndexLockHealthIndicator
 docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord*.conf
@@ -74,12 +76,14 @@ docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord*.c
 
 **重建**：MCP 提交任务 → `IndexActivityGuard` 获取索引活动锁（与目录导入互斥）→ `FencedLease` 获取 `reindex-task` 租约并递增 epoch → `ReindexTaskService` 异步线程 → 逐篇 `RagService.reindexArchived`（每次写入校验租约 + epoch）→ 检查点与锁诊断镜像写入 `_reindex_state` → 完成释放租约与活动锁。
 
+**跨副本任务操作**：任意副本 `rag_task_status` → 本地快照优先，缺失时回读 `_reindex_state`（2s 缓存）；`rag_task_resume` / `rag_task_cancel` → 回读任务 → 抢 `reindex-task` 租约（epoch 递增）→ 续接 / 放弃；抢不到则返回锁镜像中的持有者实例。
+
 ## 6. 影响面与限制
 
 - **接口**：MCP 端点 `/mcp` 与 13 个工具签名保持稳定；`rag_query` 仍只返回增强上下文。
 - **数据**：主集合存子块与父块，独立集合 `<collection>_reindex_state` 存任务快照与任务锁诊断镜像；归档目录存原文与摘要索引。
 - **兼容性**：`ChunkingSignature` 版本与项目版本同步，升级可能触发一次全量重切；`rag_task_status` 新增 `ownerInstance` / `epoch` / `heartbeatAt`，旧快照缺字段按空值恢复。
-- **运维**：`/actuator/health` 暴露锁、leader、熔断状态；distributed 模式依赖 Redis 与共享归档卷。
+- **运维**：`/actuator/health` 暴露锁、leader、重建任务（owner/epoch/heartbeat/stateStore）、归档卷（enabled/writable/dir/shared）与熔断状态；distributed 模式依赖 Redis 与共享归档卷。
 - **限制与风险**：见 [`limitations.md`](limitations.md)。
 
 ## 7. 回滚与演进

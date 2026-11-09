@@ -102,7 +102,9 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 
 **风险**：Qdrant 无 CAS，权威必须是 Redis；distributed 模式下 Redis 不可用时**拒绝写索引**（fail-closed），standalone 不受影响。
 
-### WP3 跨副本任务状态与操作（P1）
+### WP3 跨副本任务状态与操作（P1）— 已完成
+
+**状态**：2026-11-09 完成。`ReindexStateStore` 新增 `load` / `loadLatest`；`status()` 本地缺失时回读 Qdrant（`task-status-cache-ms`，默认 2s）；`resume` / `cancel` 抢任务租约后接管，抢不到返回持有者实例；`rag_task_status` 早已包含 `ownerInstance` / `epoch` / `heartbeatAt`。
 
 **目标**：任意副本都能查询 / 续接 / 取消任务。
 
@@ -137,7 +139,9 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 
 **风险**：id 方案变更需要一次全量重切；对已有部署是破坏性变更，release note 必须写明。
 
-### WP5 观测与一致性诊断（P1）
+### WP5 观测与一致性诊断（P1）— 已完成
+
+**状态**：2026-11-09 完成。`/actuator/health` 新增 `archive` 与 `reindexTask` 明细；启动时校验权威锁与 Qdrant 镜像并清理过期镜像；distributed 未声明 `SMALL_RAG_ARCHIVE_SHARED=true` 时启动告警。
 
 **方案**
 
@@ -192,7 +196,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | 分支 | 覆盖 | 主要提交 |
 | --- | --- | --- |
 | `feature/cluster-safety` | WP1 + WP2 | ✅ 已完成：`feat: stateless MCP in distributed mode and fenced reindex task lease` |
-| `feature/cluster-ops` | WP3 + WP5 | `feat: expose reindex tasks across replicas`、`feat: report archive and task owner in health` |
+| `feature/cluster-ops` | WP3 + WP5 | ✅ 已完成：`feat: expose reindex tasks across replicas and report cluster health` |
 | `feature/idempotent-ingest` | WP4 + WP6 | `refactor: make chunk point ids deterministic`、`test: add Testcontainers end-to-end coverage`、`ci: run unit and container tests` |
 
 顺序：`cluster-safety` → `cluster-ops` → `idempotent-ingest`。前两个分支不改变 chunk id，可独立发布验证。
@@ -206,7 +210,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | `spring.ai.mcp.server.protocol` | `STREAMABLE` | 环境变量 `SMALL_RAG_MCP_PROTOCOL`；distributed 设 `STATELESS` |
 | `smallrag.distributed.reindex-fencing-enabled` | — | 未实现开关：fencing 始终启用，关闭会破坏互斥语义 |
 | `smallrag.distributed.task-status-cache-ms` | `2000` | 跨副本状态读穿缓存 |
-| `smallrag.archive.shared` | `false` | distributed 部署设 `true`，health 据此判断共享卷 |
+| `smallrag.archive.shared` | `false` | distributed 部署设 `true`，health / 启动告警据此判断共享卷 |
 | `SMALL_RAG_ARCHIVE_SHARED` | `false` | 上述配置的环境变量入口 |
 
 **破坏性变更**：WP4 的 chunk id 方案变更 + `ChunkingSignature` 升版本，升级后首次启动会自动全量重切；release note 必须写明。

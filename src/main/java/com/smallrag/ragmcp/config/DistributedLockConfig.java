@@ -17,7 +17,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
  * @author zjk
  */
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(DistributedProperties.class)
+@EnableConfigurationProperties({DistributedProperties.class, ArchiveProperties.class})
 @Slf4j
 public class DistributedLockConfig {
 

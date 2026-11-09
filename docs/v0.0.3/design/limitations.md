@@ -47,7 +47,7 @@ related: [README.md, docs/v0.0.3/plan.md]
 ### 3.4 集群
 
 - **MCP 会话**：standalone 使用 `STREAMABLE`（会话保存在单实例内存）；distributed 必须设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS`，会话不再依赖单副本，HAProxy 保持 `roundrobin`。漏配时启动只告警，跨副本调用仍可能 404。`STATELESS` 不支持 server-initiated notifications（当前未使用）。
-- **任务可见性**：`rag_task_status` / `rag_task_resume` / `rag_task_cancel` 目前仍只读本实例内存中的任务，跨副本不可见；在非持有副本上操作会按任务锁提示持有者。v0.0.3 WP3 修复。
+- **跨副本任务操作**：任意副本都能 `rag_task_status`（本地缺失时回读 Qdrant，默认 2s 缓存）；`rag_task_resume` / `rag_task_cancel` 通过抢 `reindex-task` 租约接管，原持有者仍在续租时无法中断其线程，只返回持有者实例与 taskId。Qdrant 状态集合不可用时只能看到本实例内存中的任务。
 - **Redis 故障**：索引活动锁与 leader 选举失败，重建 / 目录导入停止并返回可读错误；检索不受影响。恢复后自动重新竞选。
 - **归档卷**：distributed 模式必须共享且可写；多主机需 RWX 存储（NFS / CephFS），否则无法自动重切 / 续接。
 
@@ -58,10 +58,10 @@ related: [README.md, docs/v0.0.3/plan.md]
 
 ## 4. 影响与缓解
 
-- **影响**：索引写入窗口可能导致短暂重复片段；跨副本任务状态仍不可见；归档卷不可写时自动重切失效。
-- **缓解**：升级前备份归档与 Qdrant 快照；集群部署使用共享 RWX 卷并设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS`；异常后执行 `rag_rebuild`；按 `plan.md` 的 WP3 / WP4 修复任务可见性与幂等问题。
+- **影响**：索引写入窗口可能导致短暂重复片段；原持有者仍在运行时无法跨副本强制中断；Qdrant 状态集合不可用时跨副本任务视图退化；归档卷不可写时自动重切失效。
+- **缓解**：升级前备份归档与 Qdrant 快照；集群部署使用共享 RWX 卷、设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS` 与 `SMALL_RAG_ARCHIVE_SHARED=true`；异常后执行 `rag_rebuild`；按 `plan.md` 的 WP4 修复幂等问题。
 
 ## 5. 演进
 
-- v0.0.3 计划 / 已落地：WP1 `STATELESS`（已完成）、WP2 Redis 租约 + fencing epoch（已完成）、WP3 跨副本任务状态、WP4 确定性 chunk id、WP5 观测、WP6 Testcontainers。
+- v0.0.3 计划 / 已落地：WP1 `STATELESS`（已完成）、WP2 Redis 租约 + fencing epoch（已完成）、WP3 跨副本任务状态（已完成）、WP4 确定性 chunk id、WP5 观测与一致性诊断（已完成）、WP6 Testcontainers。
 - 修复完成后在下一版本的 `docs/v<next>/design/limitations.md` 更新；本文随 v0.0.3 冻结。

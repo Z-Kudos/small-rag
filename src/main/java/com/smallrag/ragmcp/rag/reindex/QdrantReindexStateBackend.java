@@ -86,6 +86,23 @@ final class QdrantReindexStateBackend implements ReindexStateBackend {
     }
 
     @Override
+    public Optional<ReindexStateStore.PersistedTask> load(String taskId) {
+        ensureCollection();
+        try {
+            List<RetrievedPoint> points = client.retrieveAsync(collection,
+                            List.of(PointIdFactory.id(taskPointId(taskId))), true, false, null)
+                    .get(timeoutMs, TimeUnit.MILLISECONDS);
+            if (points.isEmpty()) {
+                return Optional.empty();
+            }
+            return Optional.ofNullable(readTask(points.getFirst()));
+        } catch (Exception e) {
+            invalidate();
+            throw new IllegalStateException("读取重建任务状态失败: " + taskId, e);
+        }
+    }
+
+    @Override
     public List<ReindexStateStore.PersistedTask> loadAll() {
         ensureCollection();
         List<ReindexStateStore.PersistedTask> tasks = new ArrayList<>();
