@@ -18,9 +18,9 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 - 上一版：`v0.0.2`（2026-11-07，`main` tag，双远程已推送）。
 - 主题：**单机与集群**。
 - 规划：[`docs/v0.0.3/plan.md`](docs/v0.0.3/plan.md)。
-- 里程碑：M1（WP1 + WP2）✅ → M2（WP3 + WP5）✅ → M3（WP4 + WP6）。
-- 下一步：`feature/idempotent-ingest`（WP4 确定性 chunk id + WP6 Testcontainers/CI）。
-- 已完成：`feature/cluster-safety`（WP1 + WP2）、`feature/cluster-ops`（WP3 + WP5），待合回 `develop`。
+- 里程碑：M1（WP1 + WP2）✅ → M2（WP3 + WP5）✅ → M3（WP4 + WP6）✅。
+- 下一步：v0.0.3 收尾与发布（release/v0.0.3，合入 main 并打 tag）。
+- 已完成：`feature/cluster-safety`、`feature/cluster-ops`、`feature/idempotent-ingest`，待合回 `develop`。
 - 文档：`README.md`（简体中文）/ `README.en.md`（English）双语；版本文档统一放在 `docs/v0.0.3/`；模板与写作规范在 `docs/templates/`。
 
 **已确认决策（2026-11-09）**
@@ -35,7 +35,8 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 ## 2. 构建与验证
 
 - JDK 25（`maven.compiler.release=25`）；本机 `mvn -v` 已指向 JDK 25，若默认不是 25 用 `JAVA_HOME` 指定。
-- 构建：`mvn clean package`；单测：`mvn test`（默认不依赖外部服务，**172** 个测试全绿，`*RedisIT` 跳过）。
+- 构建：`mvn clean package`；单测：`mvn test`（默认不依赖外部服务，**174** 个测试全绿，`*RedisIT` / `*ContainerIT` 跳过）。
+- 容器 E2E：`mvn verify -Pcontainer-it`（Testcontainers，需 Docker/Podman）。`RagQdrantContainerIT`（3）+ `RedisLockContainerIT`（3）全绿；本机镜像可用 `-Dsmallrag.qdrant.image=...` / `-Dsmallrag.redis.image=...` 覆盖。
 - Redis 集成测试：`redis-server --port 6390 --save '' --appendonly no --daemonize yes`，再 `mvn test -Dtest='*RedisIT' -Dsmallrag.redis.it=true`。
 - 切分断点校准：`mvn test -Dtest=BreakpointPercentileCalibration -Dcalibrate=true`（需本机 OpenAI 兼容 Embedding，可用 `EMBEDDING_*` 覆盖）。
 - 镜像：`podman compose -f compose.yaml build small-rag` 冷构建 **126s**，产出 `small-rag:0.0.3`（649 MB）。
@@ -57,6 +58,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 - 策略 4 种：`fixed` / `recursive` / `semantic` / `parent-child`（默认）。`markdown` 不是策略，`MarkdownChunker` 是 semantic 与 parent-child 共用的内部引擎。
 - semantic = 标题分节 + 节内文本块与累积质心比较合并；代码 / 表格 / 数学块独立成块；超长文本块回落 `SemanticTextChunker` 句子级切分。
 - 长度度量 = 全宽字符当量（`TextWeights`：CJK=1、拉丁=0.25）；英文硬切回退单词边界。
+- 子块 point id = `chunk:<docId>:<signature>:<index>` 确定性生成；同一配置重复 upsert 覆盖同一批 point，切分配置变化时签名变化后仍先写新片段再删旧片段。
 - `SEMANTIC_BREAKPOINT_PERCENTILE`：技术文档语料 0.1–0.4 输出一致，比绝对阈值 0.75 少约 5% 碎块；推荐 `0.2`，默认 0（绝对阈值）。
 - Parent-Child：父块独立存储（`chunk_type=parent`，id=`RagService.parentPointUuid(parentId)`），子块只带 `parent_id`；检索按 id 取回父块，缺失时回退子块原文。
 - MMR：`rag.mmr-lambda` 默认 0.7（=1 关闭）；候选 topK×4 → MMR → topK；Parent-Child 复用父块向量，零额外模型调用。
@@ -80,7 +82,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 - 重启：先抢到任务租约才把最近未完成任务标 `interrupted`（抢不到说明其他副本仍在执行，不改写快照）；`REINDEX_RESUME_ON_STARTUP=true` 时自动续接，`false` 时等 `rag_task_resume` / `rag_task_cancel`。优雅停机保存 `interrupted` 后让出租约，重启可立即续接；崩溃靠租约过期（≤30s）接管。
 - 跨副本：`rag_task_status` 本地缺失时回读 Qdrant（`task-status-cache-ms` 默认 2s）；`rag_task_resume` / `rag_task_cancel` 先抢任务租约，抢到即接管（epoch 递增），抢不到返回锁镜像中的 `ownerInstance` / `taskId`。
 - 看门狗：每 30s 检查；超过 1800s 无进度只标 `stalled` 并保留锁；超过 3600s 撤销写权限 + 取消在途 Embedding + 中断线程，10s 内退出则释放锁，否则 120s 宽限期后强制释放并置 `failed`。
-- `RagService.reindexArchived(clearFirst, listener, skipDocumentIds)` 逐篇回调检查点；清空前校验归档非空，清空后重读归档列表。
+- `RagService.reindexArchived(clearFirst, listener, skipDocumentIds)` 逐篇回调检查点；清空前校验归档非空，清空后重读归档列表；`rag_rebuild` 完成后清理无子块父块与缺 `chunk_type` 的旧片段。
 
 ### 4.4 目录导入
 
@@ -127,11 +129,11 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 - **Embedding 超时**：用 OpenAI SDK / OkHttp（`EMBEDDING_CONNECT_TIMEOUT_MS=10000`、`EMBEDDING_READ_TIMEOUT_MS=120000`）；`spring.http.client.*` 不生效。`CancellationScope` 通过 `ThreadLocal` 登记在途 `Call`，撤销时立即 cancel。
 - **归档摘要索引**：内容陈旧但 id 集合一致时可能保留旧签名。
 - **目录导入**：watcher 受 inotify 限制，失败退化定时扫描；label 变化生成新 id，旧 label 需 `delete-orphan-roots=true` 清理；`lastRun` 不持久化。
-- **已知纰漏**：`rag_ingest` 失败只做尽力清理；单篇 reindex 写入窗口内可能短暂重复；`rag_rebuild` 只清 `chunk_type=chunk/child/parent`，无 `chunk_type` 的旧片段不清。
+- **已知纰漏**：`rag_ingest` 失败只做尽力清理；单篇 reindex 写入窗口内可能短暂重复（确定性 id 已消除同签名重复，签名切换窗口仍存在）。
 
 ## 6. 待办
 
-- v0.0.3：M1（WP1 + WP2）与 M2（WP3 + WP5）已完成；下一步 WP4 确定性 chunk id + WP6 Testcontainers/CI（见 plan）。
+- v0.0.3：WP1–WP6 已完成；进入发布收尾（文档冻结、release/v0.0.3 → main + tag）。
 - P3：Spring Cloud Gateway 仍可选，不阻塞本版本。
 - 真实语料端到端验证 MMR 效果（需 Qdrant + 实际知识库人工评估）。
 - 混合主题语料校准 `SEMANTIC_BREAKPOINT_PERCENTILE`（当前校准语料同质，分布扁平）。

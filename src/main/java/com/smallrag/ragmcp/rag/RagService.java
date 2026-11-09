@@ -326,6 +326,105 @@ public class RagService {
         }
     }
 
+    /**
+     * 清理全量重建后的孤儿片段：无对应子块的父块，以及缺少 {@code chunk_type} 但带
+     * {@code doc_id} 的旧版本片段。
+     *
+     * <p>只应在 {@code rag_rebuild} 完成文档重建后调用；普通单篇重建已按 doc_id 删除
+     * 旧 point，不需要全集合扫描。
+     *
+     * @return 清理统计
+     */
+    public CleanupResult cleanupOrphans() {
+        String collection = qdrantProperties.getCollectionName();
+        long timeout = Math.max(1L, qdrantProperties.getRequestTimeoutMs());
+
+        // 旧版本片段：有 doc_id 但没有 chunk_type，无法被 rag_rebuild 的类型过滤命中
+        Filter legacy = Filter.newBuilder()
+                .addMust(Condition.newBuilder().setIsEmpty(
+                        io.qdrant.client.grpc.Common.IsEmptyCondition.newBuilder()
+                                .setKey(ChunkingService.FIELD_CHUNK_TYPE)))
+                .addMustNot(Condition.newBuilder().setIsEmpty(
+                        io.qdrant.client.grpc.Common.IsEmptyCondition.newBuilder()
+                                .setKey("doc_id")))
+                .build();
+        try {
+            qdrantClient.deleteAsync(collection, legacy).get(timeout, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            throw new IllegalStateException("清理旧版本片段失败: " + collection, e);
+        }
+
+        Map<UUID, String> parents = new LinkedHashMap<>();
+        Set<String> liveParentIds = new HashSet<>();
+        Filter typed = Filter.newBuilder()
+                .addShould(Condition.newBuilder().setField(FieldCondition.newBuilder()
+                        .setKey(ChunkingService.FIELD_CHUNK_TYPE)
+                        .setMatch(Match.newBuilder().setKeyword(ChunkingService.CHUNK_TYPE_PARENT))))
+                .addShould(Condition.newBuilder().setField(FieldCondition.newBuilder()
+                        .setKey(ChunkingService.FIELD_CHUNK_TYPE)
+                        .setMatch(Match.newBuilder().setKeyword(ChunkingService.CHUNK_TYPE_CHILD))))
+                .addShould(Condition.newBuilder().setField(FieldCondition.newBuilder()
+                        .setKey(ChunkingService.FIELD_CHUNK_TYPE)
+                        .setMatch(Match.newBuilder().setKeyword(ChunkingService.CHUNK_TYPE_CHUNK))))
+                .build();
+        WithPayloadSelector include = WithPayloadSelector.newBuilder()
+                .setInclude(io.qdrant.client.grpc.Points.PayloadIncludeSelector.newBuilder()
+                        .addFields(ChunkingService.FIELD_CHUNK_TYPE)
+                        .addFields(ChunkingService.FIELD_PARENT_ID))
+                .build();
+        PointId offset = null;
+        do {
+            ScrollPoints.Builder request = ScrollPoints.newBuilder()
+                    .setCollectionName(collection)
+                    .setFilter(typed)
+                    .setLimit(256)
+                    .setWithPayload(include);
+            if (offset != null) {
+                request.setOffset(offset);
+            }
+            ScrollResponse response;
+            try {
+                response = qdrantClient.scrollAsync(request.build())
+                        .get(timeout, TimeUnit.MILLISECONDS);
+            } catch (Exception e) {
+                throw new IllegalStateException("扫描孤儿父块失败: " + collection, e);
+            }
+            for (RetrievedPoint point : response.getResultList()) {
+                Map<String, Value> payload = point.getPayloadMap();
+                String type = valueOf(payload.get(ChunkingService.FIELD_CHUNK_TYPE));
+                String parentId = valueOf(payload.get(ChunkingService.FIELD_PARENT_ID));
+                if (ChunkingService.CHUNK_TYPE_PARENT.equals(type)) {
+                    parents.put(UUID.fromString(point.getId().getUuid()), parentId);
+                } else if (parentId != null) {
+                    liveParentIds.add(parentId);
+                }
+            }
+            offset = response.hasNextPageOffset() ? response.getNextPageOffset() : null;
+        } while (offset != null);
+
+        List<PointId> orphans = new ArrayList<>();
+        for (Map.Entry<UUID, String> entry : parents.entrySet()) {
+            String parentId = entry.getValue();
+            if (parentId == null || parentId.isBlank() || !liveParentIds.contains(parentId)) {
+                orphans.add(PointIdFactory.id(entry.getKey()));
+            }
+        }
+        if (!orphans.isEmpty()) {
+            try {
+                qdrantClient.deleteAsync(collection, orphans).get(timeout, TimeUnit.MILLISECONDS);
+            } catch (Exception e) {
+                throw new IllegalStateException("删除孤儿父块失败: " + orphans.size(), e);
+            }
+        }
+        log.info("孤儿片段清理完成: legacyFilter=true, parents={}, orphanParents={}",
+                parents.size(), orphans.size());
+        return new CleanupResult(parents.size(), orphans.size());
+    }
+
+    private static String valueOf(Value value) {
+        return value == null || value.getStringValue().isBlank() ? null : value.getStringValue();
+    }
+
     private static Set<UUID> documentPointIds(List<Document> documents) {
         Set<UUID> ids = new HashSet<>();
         for (Document document : documents) {
@@ -640,7 +739,7 @@ public class RagService {
             throw new IllegalArgumentException("text 不能为空");
         }
         String ingestedAt = Instant.now().toString();
-        String generation = UUID.randomUUID().toString();
+        String signature = currentSignature();
 
         List<Document> documents = new ArrayList<>(chunks.size() + chunked.parents().size());
         for (int i = 0; i < chunks.size(); i++) {
@@ -649,7 +748,7 @@ public class RagService {
             documentMetadata.put("chunk_index", i);
             documentMetadata.put("chunk_count", chunks.size());
             documents.add(Document.builder()
-                    .id(chunkPointUuid(documentId, generation, i).toString())
+                    .id(chunkPointUuid(documentId, signature, i).toString())
                     .text(chunk.text())
                     .metadata(documentMetadata)
                     .build());
@@ -908,10 +1007,18 @@ public class RagService {
     }
 
     /**
-     * 子块 point id：每次重切使用新的 generation，便于先写新片段再按 id 删除旧片段。
+     * 子块 point id：由文档 id、切分配置签名与块序号确定性生成。
+     *
+     * <p>同一文档在相同切分配置下重复写入会覆盖同一批 point，不再依赖“先写后删旧”；
+     * 切分配置变化时签名变化，新旧 id 不同，仍由 {@code reindex} 写入后删除旧片段。
+     *
+     * @param documentId 文档 id
+     * @param signature  切分配置签名
+     * @param index      块序号
+     * @return 稳定的 point UUID
      */
-    private static UUID chunkPointUuid(String documentId, String generation, int index) {
-        return UUID.nameUUIDFromBytes(("chunk:" + documentId + ":" + generation + ":" + index)
+    private static UUID chunkPointUuid(String documentId, String signature, int index) {
+        return UUID.nameUUIDFromBytes(("chunk:" + documentId + ":" + signature + ":" + index)
                 .getBytes(StandardCharsets.UTF_8));
     }
 
@@ -1073,6 +1180,15 @@ public class RagService {
      * @param aborted   是否因连续失败而中止
      */
     public record RebuildResult(int total, int succeeded, int failed, boolean aborted) {
+    }
+
+    /**
+     * 孤儿清理统计。
+     *
+     * @param parentPoints   扫描到的父块总数
+     * @param orphanParents  已删除的无子块父块数
+     */
+    public record CleanupResult(int parentPoints, int orphanParents) {
     }
 
     /**

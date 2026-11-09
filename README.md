@@ -328,7 +328,8 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 
 - `rag_update`：先更新归档再切分替换旧片段；`metadata` 不传时沿用归档中的元数据。
 - `rag_reindex`：只重建已归档文档，不清理归档之外的残留片段；单篇重建仍同步返回片段数。
-- `rag_rebuild`：先删 `chunk_type=chunk` / `chunk_type=child` / `chunk_type=parent` 的片段再全量重建；归档为空时拒绝执行。
+- `rag_rebuild`：先删 `chunk_type=chunk` / `chunk_type=child` / `chunk_type=parent` 的片段再全量重建；归档为空时拒绝执行。完成后清理无对应子块的父块与缺少 `chunk_type` 的旧版本片段。
+- **幂等写入**：子块 point id 由 `chunk:<docId>:<切分签名>:<index>` 确定性生成，同一文档在相同切分配置下重复 upsert 会覆盖同一批片段，不会产生重复；切分配置变化时签名变化，仍按“写新片段 → 删旧片段”替换。
 - `rag_reindex`（全量）/ `rag_rebuild` 为**异步任务**：同一时刻只允许一个重建任务，重复提交返回错误。任务快照（保留最近 20 个）存放在 Qdrant 的独立集合 `<QDRANT_COLLECTION>_reindex_state`（与向量数据同一 Qdrant / 同一持久化卷，不依赖应用容器文件系统；集合不影响检索、空库探活与 `rag_rebuild` 清理）。**任务锁的权威实现在 `DistributedLock`**：standalone 为进程内租约，distributed 为 Redis 租约 `reindex-task` + 单调 epoch；状态集合里的锁 point 只是诊断镜像（`ownerInstance` / `epoch` / `expiresAt`），不参与互斥。进程重启后恢复进度：未完成任务为 `interrupted` 并**重新持有任务锁**，默认由 `REINDEX_RESUME_ON_STARTUP=true` 自动续接（跳过已完成文档、不重复清空）；关闭自动续接时可用 `rag_task_resume` 手动续接，或用 `rag_task_cancel` 放弃并释放锁。优雅关机会把在跑任务保存为 `interrupted` 并让出租约，重启可立即续接；崩溃时靠租约过期（≤30s）接管。硬超时已撤销写权限的任务不会续接。
 - `rag_task_status` 返回 `status`（`queued` / `clearing` / `reindexing` / `interrupted` / `completed` / `aborted` / `cancelled` / `failed`）、`total`、`processed`、`percent`、`succeeded`、`failed`、`currentDocumentId`、`lastProgressAt`、`stalled`、`cancelRequested`、`startedAt`、`finishedAt`、`error`、`revoked`、`lockReleaseAt`、`ownerInstance`、`epoch`、`heartbeatAt`。本地没有该任务时从状态集合回读，因此任意副本都能看到持有者与其他副本提交的任务。
 - 看门狗：超过 `REINDEX_STALL_TIMEOUT_SECONDS` 无进度只标记 `stalled` 并告警，**保留任务锁**；超过 `REINDEX_HARD_TIMEOUT_SECONDS` 才**撤销写权限**（此后拒绝一切 Qdrant 写入）、主动取消在途 Embedding 调用并中断工作线程。
@@ -505,6 +506,9 @@ mvn test
 ```
 
 单测不依赖 Qdrant / 模型密钥；端到端需启动 Qdrant 并配置 Embedding 服务。
+
+- 容器化 E2E（需要 Docker / Podman）：`mvn verify -Pcontainer-it`。Testcontainers 启动真实 Qdrant，覆盖“入库 → 检索”、重复 upsert 幂等与孤儿父块清理；默认镜像 `qdrant/qdrant:latest`，可用 `-Dsmallrag.qdrant.image=...` 覆盖。
+- GitHub Actions 分两个 job：`mvn -B clean verify` 跑单测，`mvn -B verify -Pcontainer-it` 跑容器化 E2E。
 
 - 离线评测：`RagPipelineEvaluationTest` 用确定性哈希向量 + `SimpleVectorStore` 跑通“入库 → 切分 → 检索 → 文档级指标”，回归 recall@k / MRR / nDCG 与 MMR；不依赖外部服务，指标不代表真实语义模型效果。
 - Redis 集成测试（默认跳过）：`mvn test -Dtest='*RedisIT' -Dsmallrag.redis.it=true`，需本机 Redis `localhost:6390`。

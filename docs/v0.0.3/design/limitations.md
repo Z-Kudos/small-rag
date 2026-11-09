@@ -28,8 +28,8 @@ related: [README.md, docs/v0.0.3/plan.md]
 ### 3.1 索引写入
 
 - **索引失败窗口**：单篇重建能枚举旧 point id 时先写新片段再删旧片段，Embedding / Qdrant 失败不会让文档不可检索；只有无法枚举 id 时才回退为先删后写。写入窗口内可能短暂返回新旧重复片段，删除旧片段失败会保留重复并由下次重切清理。
-- **旧数据清理**：`rag_rebuild` 只按 `chunk_type=chunk/child/parent` 清理；更早版本写入、没有 `chunk_type` 的片段不会被清理，需换新集合。
-- **幂等性**：当前 chunk point id 含随机 `generation`，重复写入依赖“写后删旧”；v0.0.3 将改为确定性 id（见规划 WP4）。
+- **旧数据清理**：`rag_rebuild` 删除 `chunk_type=chunk/child/parent` 的片段并在完成后清理孤儿父块与缺少 `chunk_type` 的旧片段；仍建议升级前备份归档与 Qdrant 快照。
+- **幂等性**：子块 point id 为 `chunk:<docId>:<切分签名>:<index>` 确定性生成，同一文档在相同切分配置下重复 upsert 覆盖同一批片段；切分配置变化时签名变化，仍按“写新片段 → 删旧片段”替换。v0.0.3 升级会因 `ChunkingSignature` 版本变化触发一次全量重切。
 
 ### 3.2 归档与状态
 
@@ -58,10 +58,10 @@ related: [README.md, docs/v0.0.3/plan.md]
 
 ## 4. 影响与缓解
 
-- **影响**：索引写入窗口可能导致短暂重复片段；原持有者仍在运行时无法跨副本强制中断；Qdrant 状态集合不可用时跨副本任务视图退化；归档卷不可写时自动重切失效。
-- **缓解**：升级前备份归档与 Qdrant 快照；集群部署使用共享 RWX 卷、设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS` 与 `SMALL_RAG_ARCHIVE_SHARED=true`；异常后执行 `rag_rebuild`；按 `plan.md` 的 WP4 修复幂等问题。
+- **影响**：索引写入窗口可能导致短暂重复片段；原持有者仍在运行时无法跨副本强制中断；Qdrant 状态集合不可用时跨副本任务视图退化；升级到确定性 chunk id 会触发一次全量重切。
+- **缓解**：升级前备份归档与 Qdrant 快照；集群部署使用共享 RWX 卷、设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS` 与 `SMALL_RAG_ARCHIVE_SHARED=true`；异常后执行 `rag_rebuild`。
 
 ## 5. 演进
 
-- v0.0.3 计划 / 已落地：WP1 `STATELESS`（已完成）、WP2 Redis 租约 + fencing epoch（已完成）、WP3 跨副本任务状态（已完成）、WP4 确定性 chunk id、WP5 观测与一致性诊断（已完成）、WP6 Testcontainers。
+- v0.0.3 计划 / 已落地：WP1 `STATELESS`（已完成）、WP2 Redis 租约 + fencing epoch（已完成）、WP3 跨副本任务状态（已完成）、WP4 确定性 chunk id 与孤儿清理（已完成）、WP5 观测与一致性诊断（已完成）、WP6 Testcontainers + CI（已完成）。
 - 修复完成后在下一版本的 `docs/v<next>/design/limitations.md` 更新；本文随 v0.0.3 冻结。

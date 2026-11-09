@@ -121,7 +121,9 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 - `kill A` → B `rag_task_resume` 成功续接，跳过已完成文档。
 - A 存活时 B `resume` 返回「任务由 instance-X 持有」。
 
-### WP4 幂等写入与重复片段清理（P1）
+### WP4 幂等写入与重复片段清理（P1）— 已完成
+
+**状态**：2026-11-09 完成。子块 id 改为 `chunk:<docId>:<signature>:<index>`；`rag_rebuild` 完成后清理无子块父块与缺 `chunk_type` 的旧片段；容器 E2E 覆盖重复 upsert 片段数恒定与孤儿清理。
 
 **目标**：重复 upsert 不产生重复片段；中断后残留可清理。
 
@@ -154,10 +156,12 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 - 归档只读时 health 显示 `archive=DOWN` 或 `writable=false`。
 - 两个副本 health 都能看到同一任务的 owner / epoch。
 
-### WP6 测试与文档（P2）
+### WP6 测试与文档（P2）— 已完成
 
-- Testcontainers（Qdrant + Redis + 假 Embedding）E2E：`@Tag("container")`，默认 `mvn test` 跳过。
-- 双副本故障注入：`kill -9`、Redis 重启、Qdrant 短暂不可用。
+**状态**：2026-11-09 完成。新增 `RagQdrantContainerIT`（Testcontainers + 真实 Qdrant + 确定性哈希 Embedding，覆盖入库/检索、重复 upsert 幂等、孤儿清理）与 `RedisLockContainerIT`（真实 Redis 锁互斥、租约过期接管、epoch 单调）；`mvn verify -Pcontainer-it` 运行，GitHub Actions 分 `unit` / `container-it` 两个 job。
+
+- Testcontainers E2E：`*ContainerIT`，默认 `mvn test` 跳过，`-Pcontainer-it` 运行。
+- 故障注入：租约过期接管与旧 epoch 拒绝已在 Redis IT 覆盖；`kill -9` / Qdrant 短暂不可用仍以单元测试与部署手册为主。
 - 真实语料评测 opt-in：`-Dsmallrag.eval.real=true`（需外部 Embedding）。
 - 文档：standalone → distributed 迁移、容量、故障处理、STATELESS 限制。
 
@@ -175,9 +179,10 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | --- | --- | --- |
 | 启动 | jar + all-in-one 镜像 | 2 副本 + 外部依赖 |
 | MCP | STREAMABLE 全链路 | STATELESS 经 gateway 连续 50 次调用 |
-| 重建互斥 | 进程内锁 | Redis 锁 + epoch |
+| 重建互斥 | 进程内锁 | Redis 锁 + epoch（IT 覆盖） |
 | 故障 | — | kill -9 持有者、Redis 重启、Qdrant 短暂不可用 |
 | 归档 | 本地卷 | 共享卷 + health 校验 |
+| 容器 E2E | — | `mvn verify -Pcontainer-it`（Qdrant + Redis） |
 
 ## 7. 决策记录（2026-11-09）
 
@@ -197,7 +202,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | --- | --- | --- |
 | `feature/cluster-safety` | WP1 + WP2 | ✅ 已完成：`feat: stateless MCP in distributed mode and fenced reindex task lease` |
 | `feature/cluster-ops` | WP3 + WP5 | ✅ 已完成：`feat: expose reindex tasks across replicas and report cluster health` |
-| `feature/idempotent-ingest` | WP4 + WP6 | `refactor: make chunk point ids deterministic`、`test: add Testcontainers end-to-end coverage`、`ci: run unit and container tests` |
+| `feature/idempotent-ingest` | WP4 + WP6 | ✅ 已完成：`refactor: make chunk point ids deterministic`、`test: add Testcontainers container coverage`、`ci: run unit and container tests` |
 
 顺序：`cluster-safety` → `cluster-ops` → `idempotent-ingest`。前两个分支不改变 chunk id，可独立发布验证。
 

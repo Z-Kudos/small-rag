@@ -658,7 +658,11 @@ public class ReindexTaskService {
         try (CancellationScope scope = CancellationScope.open()) {
             task.bindScope(scope);
             try {
-                ragService.reindexArchived(clearFirst, task, task.completedDocumentIds());
+                RagService.RebuildResult result =
+                        ragService.reindexArchived(clearFirst, task, task.completedDocumentIds());
+                if ("rebuild".equals(task.mode) && !result.aborted() && !task.isCancelled()) {
+                    cleanupOrphans(task);
+                }
                 task.finish();
             } catch (Exception e) {
                 log.error("重建任务失败: taskId={}, 原因={}", task.taskId, e.toString());
@@ -673,6 +677,20 @@ public class ReindexTaskService {
             releaseLock(task);
             Thread.interrupted();
             trim();
+        }
+    }
+
+    /**
+     * 全量重建完成后的孤儿清理；失败只告警，不影响已成功的重建。
+     */
+    private void cleanupOrphans(Task task) {
+        try {
+            RagService.CleanupResult cleanup = ragService.cleanupOrphans();
+            log.info("重建任务孤儿清理完成: taskId={}, parentPoints={}, orphanParents={}",
+                    task.taskId, cleanup.parentPoints(), cleanup.orphanParents());
+        } catch (Exception e) {
+            log.warn("重建任务孤儿清理失败（不影响重建结果）: taskId={}, 原因={}",
+                    task.taskId, e.toString());
         }
     }
 
