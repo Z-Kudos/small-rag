@@ -1,71 +1,84 @@
-# ROADMAP — v0.0.2（已发布）/ v0.0.3（进行中）
+---
+title: ROADMAP
+status: implementing
+version: 0.0.3
+updated: 2026-11-09
+owners: [zjk]
+related: [docs/plans/v0.0.3-standalone-and-cluster.md, DEV-MEMORY.md]
+---
 
-> v0.0.2 已于 2026-11-07 发布（tag `v0.0.2`）。目标：在**不破坏现有单容器一键运行**的前提下，增加可选的分布式多副本能力，并补齐 RAG 评测与集成测试。
-> v0.0.3 继续完成 P2 剩余任务 fencing/跨副本任务状态与 P4 真实语料评测、Testcontainers；P3 Gateway 仍为可选。
+# ROADMAP — v0.0.3（进行中）
 
-## 1. 两种运行模式
+> 当前开发版本 `0.0.3-SNAPSHOT`（`develop`）；上一版 `v0.0.2` 已于 2026-11-07 发布。
+> 工作包与验收细节见 [`docs/plans/v0.0.3-standalone-and-cluster.md`](docs/plans/v0.0.3-standalone-and-cluster.md)。
+> 本文只记录版本级目标、里程碑与验收，不记录实现细节。
+
+## 1. 版本目标
+
+v0.0.3 主题：**单机与集群**——一套语义、两种形态。
+
+- **standalone（默认）**：单容器、零新增外部依赖，行为与 v0.0.2 一致。
+- **distributed（可选）**：多副本安全接管、跨副本任务可见、不依赖粘性会话。
+
+## 2. 运行形态
 
 | 维度 | standalone（默认） | distributed（可选） |
 | --- | --- | --- |
-| 进程 | 单容器 supervisord：app + Qdrant + llama-server | app × N，外部 Qdrant / Redis / Consul / Embedding |
-| 配置 | `application.yml` + 环境变量 | `distributed` profile + Consul KV（可选） |
-| 重建/导入互斥 | 进程内 + Qdrant 状态集合（现状） | Redis 租约锁 + fencing token |
-| 原文归档 | 本地卷 | 共享 RWX 卷（NFS/CephFS）；对象存储留待后续 |
-| 目录扫描 / watcher | 每实例执行 | 仅 leader 执行 |
-| 查询保护 | 超时 + 重试 | Resilience4j 熔断 + 超时 |
-| 网关 | 无 | 可选 Spring Cloud Gateway（`/mcp`） |
+| 开关 | 无 | `SMALL_RAG_DISTRIBUTED_ENABLED=true` + `compose.distributed.yaml` |
+| 进程 | 单容器 supervisord：app + Qdrant + llama-server | app × N + 外部 Qdrant / Redis / Consul / Embedding |
+| MCP 传输 | `STREAMABLE` | `STATELESS`（v0.0.3 起） |
+| 重建 / 导入互斥 | 进程内锁 + Qdrant 状态集合 | Redis 租约锁 + fencing token |
+| 原文归档 | 本地卷 | 共享 RWX 卷（NFS / CephFS） |
+| 目录扫描 | 每实例执行 | 仅 leader 执行 |
+| 查询保护 | 超时 | Resilience4j 熔断 + 超时 |
+| 网关 | 无 | HAProxy（`/mcp`）；Spring Cloud Gateway 可选 |
 
-`standalone` 必须保持零新增外部依赖，`distributed` 通过 profile 与 compose overlay 显式开启。
+> distributed 不是 Spring profile，而是 `smallrag.distributed.enabled` 开关 + compose overlay。
 
-## 2. 里程碑
+## 3. 里程碑
 
-### P0 双模式骨架 + 分布式锁
-- 新增 `smallrag.distributed.enabled`（默认 `false`）与 `distributed` profile。
-- `DistributedLock` 抽象：
-  - `LocalDistributedLock`：进程内，standalone 使用；
-  - `RedisDistributedLock`：`SET NX PX` + Lua 释放/续租，多副本使用。
-- 重建任务、目录导入、启动自动重切全部走同一把锁；锁丢失立即停止写入。
-- 同一镜像支持 `SMALL_RAG_RUNTIME=all-in-one|app-only`，避免多副本时重复启动 Qdrant/llama-server。
-- 新增 `compose.distributed.yaml`：外部 Qdrant / Redis / Consul / Embedding + 2 个 app 副本 + 共享归档卷。
+### M1 集群可用（进行中）
 
-验收：standalone 构建与测试不变；distributed 下两个副本只有一个能执行重建/扫描。
+- ⬜ **WP1 集群会话**：distributed 使用 `STATELESS`，不依赖粘性会话。
+- ⬜ **WP2 任务所有权**：Redis 租约 + fencing token；Qdrant 锁 point 降级为诊断镜像。
+- 验收：两副本经 gateway 连续 50 次 MCP 调用成功；`kill -9` 持有者后安全接管，旧副本无法继续写入。
 
-### P1 Spring Cloud 服务治理
-- ✅ Resilience4j CircuitBreaker 包住 Embedding 与 Qdrant 查询路径（仅 `rag_search`/`rag_query`），阈值/半开/fallback 可配置；入库与重建不受影响。
-- ✅ 健康检查暴露：`/actuator/health` 提供实例 id、任务持有者/活动锁、熔断状态与当前 profile。
-- ✅ Consul discovery（`spring-cloud-starter-consul-discovery`）：`CONSUL_ENABLED=true` 时注册 `small-rag`，健康检查 `/actuator/health`；默认关闭。
-- ✅ Consul config（`spring-cloud-starter-consul-config`）：`SPRING_CONFIG_IMPORT=optional:consul:` 时读取 KV；默认 `KEY_VALUE` 格式，`fail-fast=false`，config watch 默认关闭。
+### M2 集群可运维
 
-### P2 多副本正确性
-- ✅ 目录导入与定时/启动扫描只由 leader 执行：`SourcesLeaderElection` 持有 `sources-leader` 租约，leader 失联后自动接管；手动同步任意副本可发起，仍由活动锁串行化。
-- ✅ 陈旧写入兜底：活动锁续租失败即 `isHeldBy=false`，且每次写入前调用 `DistributedLock.isHeld(handle)` 远程校验 owner+token；重建任务、目录导入与启动重切均受保护。
-- ✅ 双实例验证：两个 jar 实例只有一个 `sourcesLeader=true`；kill leader 后租约过期由另一副本接管；真实 Redis IT 覆盖锁互斥/续租/接管；分布式端到端验证跨副本入库→检索与重建互斥。
-- ⬜ 任务 owner + lease + fencing token：Qdrant 任务状态锁仍是单实例读后写，`rag_task_status`/`rag_task_resume` 只能看到本实例内存中的任务；需要与 Redis 锁对齐。
-- ⬜ 归档共享存储校验；幂等写入与重复片段清理；Qdrant 状态集合与 Redis 锁的一致性校验。
-- ⬜ 测试：双实例并发 `reindex` / `sync` 的完整互斥、续租、接管与释放（当前覆盖活动锁与 leader 选举）。
+- ⬜ **WP3 跨副本任务状态**：`rag_task_status` / `rag_task_resume` / `rag_task_cancel` 任意副本可用。
+- ⬜ **WP5 观测**：health 增加 `archive` 与 `reindexTask`（owner / epoch）。
+- 验收：任意副本可查 / 续 / 取消；health 能定位 owner / epoch。
 
-### P3 Spring Cloud Gateway（可选）
-- 独立模块或独立 compose 服务，WebFlux Gateway 路由 `/mcp`。
-- 确保流式响应不被缓冲；可选鉴权、限流、灰度。
-- standalone 模式不启用。
+### M3 数据正确性
 
-### P4 RAG 完善与测试
-- ✅ 离线评测骨架：`EvalMetrics`（recall@k / MRR / nDCG@k）+ `RagPipelineEvaluationTest`（真实切分 + SimpleVectorStore + 确定性哈希向量），不依赖外部服务。
-- ⬜ 真实标注语料评测：接入 Qdrant + OpenAI 兼容 Embedding，跑同一组指标并回归 MMR λ / `SEMANTIC_BREAKPOINT_PERCENTILE`。
-- ⬜ Testcontainers Qdrant + 假 Embedding 服务的端到端测试（入库 → 检索 → 查询 → 重建）。
-- ⬜ 文档：双模式部署、从 standalone 迁移到 distributed、容量与故障处理。
+- ⬜ **WP4 幂等写入**：chunk id 确定性化，孤儿 / 重复片段清理。
+- ⬜ **WP6 测试与文档**：Testcontainers E2E 纳入 CI；迁移与限制文档。
+- 验收：重复 upsert 片段数恒定；`mvn verify -Pcontainer-it` 通过。
 
-## 3. 非目标
+## 4. 已完成（v0.0.2）
 
-- 不在 v0.0.2 拆成多个业务微服务（ingest / search 仍在同一应用内）。
-- 不强制所有用户使用 Redis / Consul；standalone 保持零新增外部依赖。
-- 不引入 Kafka / Spring Cloud Stream / Bus（留到确有跨副本事件广播需求时）。
-- 不改变 MCP 工具签名与 `rag_query` 的纯文本语义。
+- ✅ 双运行模式：`SMALL_RAG_RUNTIME=all-in-one|app-only`
+- ✅ 分布式锁：`LocalDistributedLock` / `RedisDistributedLock`（`SET NX PX` + Lua）
+- ✅ 活动锁远程校验与丢失即停写
+- ✅ 目录扫描 leader 选举（`SourcesLeaderElection`）
+- ✅ Resilience4j 检索熔断；`/actuator/health` 诊断
+- ✅ Consul discovery / config（默认关闭）
+- ✅ HAProxy gateway + `compose.distributed.yaml`
+- ✅ 离线 RAG 评测（recall@k / MRR / nDCG）
 
-## 4. 验收标准
+## 5. 非目标（v0.0.3）
 
-1. `mvn clean package` 通过，现有 126 个测试保持绿色。
-2. `docker compose up -d --build` 仍可单容器运行，行为与 v0.0.1 一致。
-3. `docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale app=2` 可运行。
-4. 双副本下同一时刻只有一个重建任务 / 目录扫描；kill 持有者后，另一副本在租约过期后接管。
-5. Embedding 故障时 `rag_query` 快速失败并返回可读错误，不出现线程永久占用。
+- 不拆分为多个微服务。
+- 不强制使用 Redis / Consul；standalone 零新增外部依赖。
+- 不引入 Kafka / Spring Cloud Stream / Bus。
+- 不改变 MCP 工具签名与 `rag_query` 纯文本语义。
+- Spring Cloud Gateway 仍为可选，不阻塞本版本。
+
+## 6. 验收标准
+
+1. `mvn clean package` 通过；全部测试全绿（当前基线 154，`*RedisIT` 默认跳过）。
+2. `mvn verify -Pcontainer-it` 通过（Testcontainers：Qdrant + Redis + 假 Embedding）。
+3. `docker compose up -d --build` 单容器行为与 v0.0.2 一致。
+4. `docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-rag=2` 可运行。
+5. 双副本同一时刻只有一个重建任务 / 目录扫描；`kill` 持有者后租约过期接管。
+6. Embedding 故障时 `rag_query` 快速失败并返回可读错误，不出现线程永久占用。

@@ -15,6 +15,16 @@
 
 > Boot / Cloud 从 `https://repo.spring.io/milestone` 解析，已在 `pom.xml` 配置。
 
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [ROADMAP.md](ROADMAP.md) | 版本目标、里程碑与验收标准 |
+| [docs/README.md](docs/README.md) | 文档规范与索引 |
+| [docs/plans/v0.0.3-standalone-and-cluster.md](docs/plans/v0.0.3-standalone-and-cluster.md) | v0.0.3 单机与集群规划 |
+| [DEV-MEMORY.md](DEV-MEMORY.md) | 当前开发状态与已知坑 |
+| [AGENTS.md](AGENTS.md) | 版本基线、构建命令、代码与文档约束 |
+
 ## 本地运行
 
 前置：JDK 25、Maven 3.9+、Qdrant、任意 OpenAI 兼容 Embedding 服务（本机开发示例用 llama.cpp llama-server，与容器内置的运行时一致）。
@@ -509,7 +519,9 @@ docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord.co
 
 ## v0.0.3 规划
 
-v0.0.2 已于 2026-11-07 发布：在保持**单容器 standalone 默认运行**的前提下，增加了可选的分布式多副本能力（外部 Qdrant / Redis / Consul / Embedding、分布式任务锁、Spring Cloud 服务治理）与离线 RAG 评测。v0.0.3 继续完成 P2 任务 fencing/跨副本任务状态与 P4 真实语料评测、Testcontainers。详见 [ROADMAP.md](ROADMAP.md)。
+v0.0.2 已于 2026-11-07 发布：在保持**单容器 standalone 默认运行**的前提下，增加了可选的分布式多副本能力（外部 Qdrant / Redis / Consul / Embedding、分布式任务锁、Spring Cloud 服务治理）与离线 RAG 评测。
+
+v0.0.3 主题为**单机与集群**：集群会话不依赖粘性、任务所有权加 fencing token、跨副本任务可见、幂等写入与 Testcontainers。里程碑见 [ROADMAP.md](ROADMAP.md)，工作包与验收见 [docs/plans/v0.0.3-standalone-and-cluster.md](docs/plans/v0.0.3-standalone-and-cluster.md)。
 
 ## 测试
 

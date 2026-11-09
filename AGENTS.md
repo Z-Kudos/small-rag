@@ -80,8 +80,14 @@
 - **分支模型（Git Flow）**：长期分支 `main`（生产，随时可构建发布）与 `develop`（集成，功能合并目标）；短期分支 `feature/*`（从 `develop` 切出，squash 合回 `develop`）、`release/x.y.z`（从 `develop` 切出收敛发布，只修 bug，`--no-ff` 合入 `main` 并打 `vX.Y.Z` tag，再回灌 `develop`）、`hotfix/*`（从 `main` 或生产 tag 切出，修复合入 `main` 打补丁 tag 后回灌 `develop`）。禁止直接向 `main`/`develop` push；不设 `stable` 长期分支，生产版本由 `main` 上的 tag 标识。
 - `.gitignore` 覆盖 `target/`、`.idea/`、`*.iml`、`.vscode/`、`*.log`、`data/`。
 - 提交信息用 Conventional Commits。首次提交：`chore: bootstrap small-rag with JDK 25 + Spring Cloud 2026.0.0 + Spring AI 2.0.2`。
-- `README.md` 必须含：版本矩阵、启动命令、`/mcp` 端点说明、入库示例、RC/milestone 说明。
+- `README.md` 必须含：版本矩阵、文档索引、启动命令、`/mcp` 端点说明、入库示例、RC/milestone 说明。
 - **开发记忆（强制）**：每次开发都必须同步更新项目根目录的 `DEV-MEMORY.md`（不存在则创建）——简要记录本次开发所做的更改。要求：尽可能精简且实时，只保留当前有效的状态（架构、接口、行为、关键决策），过时的记忆直接覆盖或删除，不做历史归档（历史归档交给 git log）。
+- **文档规范（强制）**：完整规范见 `docs/README.md`，要点：
+  - 单一事实来源：`README.md` 面向使用者，`ROADMAP.md` 只写版本级里程碑与验收，`docs/plans/` 写版本规划，`docs/design/` 写跨版本设计，`docs/runbooks/` 写运维步骤，`docs/adr/` 写不可逆决策，`DEV-MEMORY.md` 写当前开发状态。同一事实只在一处定义，其余链接引用。
+  - 新建文档必须放在 `docs/` 对应子目录，文件名用小写 kebab-case 英文；版本规划命名 `plans/vX.Y.Z-<topic>.md`，从 `docs/templates/plan.md` 复制。
+  - 文档必须带 YAML front matter：`title` / `status`（draft|review|approved|implementing|done|superseded）/ `version` / `updated` / `owners` / `related`。
+  - 数字、端口、默认值、命令必须与代码一致；不确定写“待核实”。修改文档同步更新 `updated`。
+  - 版本发布后 plan 标 `done`，要点合并进 `ROADMAP.md`；下一版本开始时删除旧 plan（历史交给 git log）。
 
 ## 验收标准
 
