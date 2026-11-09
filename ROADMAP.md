@@ -1,13 +1,13 @@
 ---
 title: ROADMAP
-status: done
+status: implementing
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
 related: [docs/v0.0.3/plan.md, DEV-MEMORY.md]
 ---
 
-# ROADMAP — v0.0.3（已发布）
+# ROADMAP — v0.0.3（已发布，后继变更中）
 
 > 当前版本 `v0.0.3`（2026-11-09 发布）；上一版 `v0.0.2` 已于 2026-11-07 发布。
 > 工作包与验收细节见 [`docs/v0.0.3/plan.md`](docs/v0.0.3/plan.md)。
@@ -31,7 +31,7 @@ v0.0.3 主题：**单机与集群**——一套语义、两种形态。
 | 原文归档 | 本地卷 | 共享 RWX 卷（NFS / CephFS） |
 | 目录扫描 | 每实例执行 | 仅 leader 执行 |
 | 查询保护 | 超时 | Resilience4j 熔断 + 超时 |
-| 网关 | 无 | HAProxy（`/mcp`）；Spring Cloud Gateway 可选 |
+| 网关 | 无 | Spring Cloud Gateway（WebFlux，`/mcp`，Consul + LoadBalancer） |
 
 > distributed 不是 Spring profile，而是 `smallrag.distributed.enabled` 开关 + compose overlay。
 
@@ -55,6 +55,11 @@ v0.0.3 主题：**单机与集群**——一套语义、两种形态。
 - ✅ **WP6 测试与文档**：Testcontainers E2E 纳入 CI；迁移与限制文档。
 - 验收：重复 upsert 片段数恒定；`mvn verify -Pcontainer-it` 通过。
 
+### v0.0.3 后继变更：Spring Cloud 数据面
+
+- ✅ **WP7 网关与配置中心**：Spring Cloud Gateway（WebFlux）替换 HAProxy；Config Server native 后端；检索熔断改用 Spring Cloud CircuitBreaker。
+- 验收：Gateway 通过 Consul + LoadBalancer 路由 `/mcp`；应用可从 Config Server 拉取配置；`mvn test` 覆盖三个模块。
+
 ## 4. 已完成（v0.0.2）
 
 - ✅ 双运行模式：`SMALL_RAG_RUNTIME=all-in-one|app-only`
@@ -72,13 +77,13 @@ v0.0.3 主题：**单机与集群**——一套语义、两种形态。
 - 不强制使用 Redis / Consul；standalone 零新增外部依赖。
 - 不引入 Kafka / Spring Cloud Stream / Bus。
 - 不改变 MCP 工具签名与 `rag_query` 纯文本语义。
-- Spring Cloud Gateway 仍为可选，不阻塞本版本。
+- 不引入 Spring Cloud Bus / Vault / Kubernetes / OpenFeign。
 
 ## 6. 验收标准
 
-1. `mvn clean package` 通过；全部测试全绿（当前基线 174，`*RedisIT` / `*ContainerIT` 默认跳过）。
+1. `mvn clean package` 通过；全部测试全绿（当前基线 179：app 176 + gateway 2 + config-server 1，`*RedisIT` / `*ContainerIT` 默认跳过）。
 2. `mvn verify -Pcontainer-it` 通过（Testcontainers：真实 Qdrant + Redis；Qdrant E2E 使用确定性哈希 Embedding）。
 3. `docker compose up -d --build` 单容器行为与 v0.0.2 一致。
-4. `docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-rag=2` 可运行。
-5. 双副本同一时刻只有一个重建任务 / 目录扫描；`kill` 持有者后租约过期接管。
+4. `docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-rag=2` 可运行（Qdrant / Redis / Consul / Embedding / Config Server / Gateway）。
+5. 双副本同一时刻只有一个重建任务 / 目录扫描；`kill` 持有者后租约过期接管；Gateway 路由不依赖粘性会话。
 6. Embedding 故障时 `rag_query` 快速失败并返回可读错误，不出现线程永久占用。

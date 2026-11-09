@@ -1,6 +1,6 @@
 ---
 title: 已知限制与风险
-status: done
+status: implementing
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
@@ -46,9 +46,11 @@ related: [README.md, docs/v0.0.3/plan.md]
 
 ### 3.4 集群
 
-- **MCP 会话**：standalone 使用 `STREAMABLE`（会话保存在单实例内存）；distributed 必须设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS`，会话不再依赖单副本，HAProxy 保持 `roundrobin`。漏配时启动只告警，跨副本调用仍可能 404。`STATELESS` 不支持 server-initiated notifications（当前未使用）。
+- **MCP 会话**：standalone 使用 `STREAMABLE`（会话保存在单实例内存）；distributed 必须设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS`，会话不再依赖单副本；Spring Cloud Gateway 通过 Consul + LoadBalancer 轮询副本。漏配时启动只告警，跨副本调用仍可能 404。`STATELESS` 不支持 server-initiated notifications（当前未使用）。
 - **跨副本任务操作**：任意副本都能 `rag_task_status`（本地缺失时回读 Qdrant，默认 2s 缓存）；`rag_task_resume` / `rag_task_cancel` 通过抢 `reindex-task` 租约接管，原持有者仍在续租时无法中断其线程，只返回持有者实例与 taskId。Qdrant 状态集合不可用时只能看到本实例内存中的任务。
 - **Redis 故障**：索引活动锁与 leader 选举失败，重建 / 目录导入停止并返回可读错误；检索不受影响。恢复后自动重新竞选。
+- **Gateway / Config Server**：Gateway 依赖 Consul 发现 `small-rag` 实例，Consul 不可用时新副本不会被路由；Config Server 的 native 仓库需与所有环境保持一致，配置变更需重启应用或触发刷新。Config Server 不可用时 `optional:` 允许应用继续用本地配置启动。
+- **熔断实现**：Spring Cloud CircuitBreaker 只提供抽象，状态与失败率诊断仍读取 Resilience4j registry；更换实现时 health 细节会退化。
 - **归档卷**：distributed 模式必须共享且可写；多主机需 RWX 存储（NFS / CephFS），否则无法自动重切 / 续接。
 
 ### 3.5 切分
@@ -58,10 +60,10 @@ related: [README.md, docs/v0.0.3/plan.md]
 
 ## 4. 影响与缓解
 
-- **影响**：索引写入窗口可能导致短暂重复片段；原持有者仍在运行时无法跨副本强制中断；Qdrant 状态集合不可用时跨副本任务视图退化；升级到确定性 chunk id 会触发一次全量重切。
-- **缓解**：升级前备份归档与 Qdrant 快照；集群部署使用共享 RWX 卷、设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS` 与 `SMALL_RAG_ARCHIVE_SHARED=true`；异常后执行 `rag_rebuild`。
+- **影响**：索引写入窗口可能导致短暂重复片段；原持有者仍在运行时无法跨副本强制中断；Qdrant 状态集合不可用时跨副本任务视图退化；升级到确定性 chunk id 会触发一次全量重切；distributed 多两个进程（Gateway / Config Server）。
+- **缓解**：升级前备份归档与 Qdrant 快照；集群部署使用共享 RWX 卷、设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS` 与 `SMALL_RAG_ARCHIVE_SHARED=true`；Config Server 使用 `optional:` 前缀；异常后执行 `rag_rebuild`。
 
 ## 5. 演进
 
-- v0.0.3 计划 / 已落地：WP1 `STATELESS`（已完成）、WP2 Redis 租约 + fencing epoch（已完成）、WP3 跨副本任务状态（已完成）、WP4 确定性 chunk id 与孤儿清理（已完成）、WP5 观测与一致性诊断（已完成）、WP6 Testcontainers + CI（已完成）。
+- v0.0.3 计划 / 已落地：WP1 `STATELESS`（已完成）、WP2 Redis 租约 + fencing epoch（已完成）、WP3 跨副本任务状态（已完成）、WP4 确定性 chunk id 与孤儿清理（已完成）、WP5 观测与一致性诊断（已完成）、WP6 Testcontainers + CI（已完成）、WP7 Spring Cloud Gateway / Config Server / CircuitBreaker（已完成，ADR-0002）。
 - 修复完成后在下一版本的 `docs/v<next>/design/limitations.md` 更新；本文随 v0.0.3 冻结。

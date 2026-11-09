@@ -1,0 +1,29 @@
+server:
+  port: ${CONFIG_SERVER_PORT:8888}
+
+spring:
+  application:
+    name: small-rag-config-server
+  profiles:
+    active: native
+  cloud:
+    config:
+      # Config Server 自身不需要作为 Config Client 拉取配置
+      enabled: false
+      server:
+        native:
+          # 容器部署把 config-repo/ 挂载到 /config；本地可直接指向仓库目录
+          search-locations: ${CONFIG_SERVER_SEARCH_LOCATIONS:file:/config}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    org.springframework.cloud.config: INFO

@@ -36,8 +36,9 @@
 - **异步重建任务**：进度查询、协作式取消、看门狗硬超时、重启续接。
 - **多目录 Markdown 自动导入**：指纹增量、定时 / watcher / MCP 手动触发、删除同步。
 - **双运行模式**：单容器 `all-in-one`（默认）或 `app-only`（分布式）。
-- **可选分布式**：Redis 租约锁、目录扫描 leader 选举、Consul 注册 / 配置、HAProxy gateway。
-- **检索熔断与健康检查**：Embedding / Qdrant 持续失败时快速失败，`/actuator/health` 可诊断。
+- **多模块**：`app`（MCP + RAG）、`gateway`（Spring Cloud Gateway）、`config-server`（Spring Cloud Config Server）；根目录一次构建。
+- **可选分布式**：Spring Cloud Gateway（Consul + LoadBalancer）、Spring Cloud Config Server（native）、Redis 租约锁、目录扫描 leader 选举。
+- **检索熔断与健康检查**：Spring Cloud CircuitBreaker（Resilience4j 实现）在 Embedding / Qdrant 持续失败时快速失败，`/actuator/health` 可诊断。
 
 ## 版本矩阵
 
@@ -64,7 +65,8 @@
 | [docs/v0.0.3/design/limitations.md](docs/v0.0.3/design/limitations.md) | 已知限制与风险 |
 | [DEV-MEMORY.md](DEV-MEMORY.md) | 当前开发状态与已知坑 |
 | [AGENTS.md](AGENTS.md) | 版本基线、构建命令、代码与文档规范 |
-| [docs/v0.0.3/adr/0001-spring-cloud-scope.md](docs/v0.0.3/adr/0001-spring-cloud-scope.md) | Spring Cloud 组件范围决策 |
+| [docs/v0.0.3/adr/0001-spring-cloud-scope.md](docs/v0.0.3/adr/0001-spring-cloud-scope.md) | Spring Cloud 组件范围决策（已 superseded） |
+| [docs/v0.0.3/adr/0002-spring-cloud-data-plane.md](docs/v0.0.3/adr/0002-spring-cloud-data-plane.md) | Spring Cloud Gateway / Config Server / CircuitBreaker 决策 |
 
 ## 快速开始（本地）
 
@@ -87,7 +89,7 @@ export EMBEDDING_BASE_URL=http://localhost:11434/v1
 export EMBEDDING_MODEL=qwen3-embedding-0.6b
 export EMBEDDING_DIMENSION=1024
 
-mvn spring-boot:run
+mvn -pl app spring-boot:run
 ```
 
 MCP 端点：`http://localhost:18080/mcp`。
@@ -182,7 +184,7 @@ make up-sources
 
 ## 分布式模式（可选）
 
-默认仍是单容器 standalone。需要多副本时使用 overlay：Qdrant / Redis / Consul / Embedding 独立部署，应用以 `app-only` 模式运行，HAProxy gateway 统一暴露 18080。
+默认仍是单容器 standalone。需要多副本时使用 overlay：Qdrant / Redis / Consul / Embedding 与 Config Server 独立部署，应用以 `app-only` 模式运行，Spring Cloud Gateway 统一暴露 18080。
 
 ```bash
 docker compose -f compose.yaml -f compose.distributed.yaml build
@@ -198,20 +200,16 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 - MCP 多副本必须使用无状态传输：`SMALL_RAG_MCP_PROTOCOL=STATELESS`（overlay 已设置），否则会话只存在单副本内存，轮询到其他副本会 404。standalone 保持 `STREAMABLE`。
 - 锁租约默认 30s、每 10s 续租；持有者失联后，其他副本在租约过期后接管。续租失败会立即停止本地写入（`IndexActivityGuard.isHeldBy=false`）。
 - 目录自动扫描（启动 / 定时 / watcher）只由 leader 执行：各副本竞争 `sources-leader` 租约，leader 失联后由其他副本接管；MCP 手动 `rag_sync_sources` 不受 leader 限制，仍由索引活动锁串行化。
-- `CONSUL_ENABLED=true` 时应用注册到 Consul（`small-rag` 服务，健康检查 `/actuator/health`），并可按需从 Consul KV 读取配置。overlay 内置单节点 Consul server（生产建议三节点）。
-- Consul 配置默认使用 `KEY_VALUE` 格式：每个配置项一个 key，例如
-  ```bash
-  consul kv put config/small-rag/logging.level.com.smallrag.ragmcp DEBUG
-  ```
-  启动时加 `SPRING_CONFIG_IMPORT=optional:consul:`；若要用单个 `data` key 存 YAML，需设置 `spring.cloud.consul.config.format=YAML`。
-- Gateway 目前用 HAProxy 提供，Spring Cloud Gateway 在 P3 评估。详见 [ROADMAP.md](ROADMAP.md)。
+- `CONSUL_ENABLED=true` 时应用注册到 Consul（`small-rag` 服务，健康检查 `/actuator/health`），Gateway 通过 Consul + Spring Cloud LoadBalancer 发现副本。overlay 内置单节点 Consul server（生产建议三节点）。
+- 配置中心使用 Spring Cloud Config Server（`config-server` 模块，native 后端）：`config-repo/` 只读挂载到 `/config`，应用设置 `CONFIG_SERVER_ENABLED=true` 与 `SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888`；`optional:` 允许配置中心不可用时继续启动。
+- Gateway 使用 Spring Cloud Gateway（WebFlux）路由 `Path=/mcp` → `lb://small-rag`，长响应超时默认 1h；不再使用 HAProxy。
 
 ### 从 standalone 迁移到 distributed
 
 1. 停止单容器实例，保留 `small_rag_data`（归档）与容器内 `/data/qdrant/storage`（向量数据）。
-2. 用 overlay 启动外部 Qdrant / Redis / Consul / Embedding；`small_rag_data` 直接复用，跨主机时换成 RWX 卷。
+2. 用 overlay 启动外部 Qdrant / Redis / Consul / Embedding / Config Server；`small_rag_data` 直接复用，跨主机时换成 RWX 卷。
 3. 向量数据可复制到新的 `qdrant_data` 卷，或清空后重新 `rag_rebuild` / 重新入库；复制时注意 Qdrant 版本一致。
-4. 设置 `SMALL_RAG_DISTRIBUTED_ENABLED=true`、`SMALL_RAG_RUNTIME=app-only`、共享 `SMALL_RAG_ARCHIVE_DIR`，按需打开 `CONSUL_ENABLED`。
+4. 设置 `SMALL_RAG_DISTRIBUTED_ENABLED=true`、`SMALL_RAG_RUNTIME=app-only`、共享 `SMALL_RAG_ARCHIVE_DIR`，并设置 `CONFIG_SERVER_ENABLED=true` / `SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888`；按需打开 `CONSUL_ENABLED`。
 5. 通过 gateway 的 `/mcp` 验证；`/actuator/health` 确认只有一个副本 `sourcesLeader=true`，索引写入由 `activeLock` 指示。
 
 ### 容量与故障处理
@@ -289,11 +287,14 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 | `SMALL_RAG_LOCK_LEASE` | `30s` | 索引活动锁租约 |
 | `SMALL_RAG_LOCK_RENEW_INTERVAL` | `10s` | 续租间隔，必须明显小于租约 |
 | `SMALL_RAG_LOCK_PREFIX` | `smallrag:lock:` | 锁 key 前缀 |
-| `CONSUL_ENABLED` | `false` | 启用 Consul 服务注册与配置（服务名 `small-rag`） |
+| `CONSUL_ENABLED` | `false` | 启用 Consul 服务注册与发现（服务名 `small-rag`） |
 | `CONSUL_HOST` / `CONSUL_PORT` | `localhost` / `8500` | Consul agent 地址 |
 | `CONSUL_REGISTER` | `true` | 是否注册到 Consul |
-| `CONSUL_CONFIG_FAIL_FAST` | `false` | Consul 不可达时是否阻止启动 |
-| `SPRING_CONFIG_IMPORT` | 空 | 设为 `optional:consul:` 时从 Consul KV 读取配置 |
+| `CONFIG_SERVER_ENABLED` | `false` | 启用 Config Server 客户端；distributed overlay 已设置 |
+| `CONFIG_SERVER_FAIL_FAST` | `false` | Config Server 不可达时是否阻止启动 |
+| `SPRING_CONFIG_IMPORT` | 空 | 例如 `optional:configserver:http://config-server:8888` 或 `optional:consul:` |
+| `GATEWAY_RESPONSE_TIMEOUT` | `1h` | Gateway 代理 MCP 的长响应超时 |
+| `GATEWAY_CONNECT_TIMEOUT_MS` | `5000` | Gateway 连接后端超时（毫秒） |
 | `RAG_QUERY_BREAKER_ENABLED` | `true` | `rag_search` / `rag_query` 熔断开关 |
 | `RAG_QUERY_BREAKER_FAILURE_RATE` | `50` | 打开熔断的失败率（%） |
 | `RAG_QUERY_BREAKER_OPEN_WAIT` | `30s` | 熔断打开后进入半开的等待时间 |
@@ -505,8 +506,9 @@ docker compose -f compose.yaml -f compose.sources.yaml up -d --build
 mvn test
 ```
 
-单测不依赖 Qdrant / 模型密钥；端到端需启动 Qdrant 并配置 Embedding 服务。
+单测不依赖 Qdrant / 模型密钥（当前 176 个 app 测试 + 2 个 gateway + 1 个 config-server）；端到端需启动 Qdrant 并配置 Embedding 服务。
 
+- 根目录 `mvn test` 一次跑三个模块；单模块用 `mvn -pl app test`。
 - 容器化 E2E（需要 Docker / Podman）：`mvn verify -Pcontainer-it`。Testcontainers 启动真实 Qdrant，覆盖“入库 → 检索”、重复 upsert 幂等与孤儿父块清理；默认镜像 `qdrant/qdrant:latest`，可用 `-Dsmallrag.qdrant.image=...` 覆盖。
 - GitHub Actions 分两个 job：`mvn -B clean verify` 跑单测，`mvn -B verify -Pcontainer-it` 跑容器化 E2E。
 

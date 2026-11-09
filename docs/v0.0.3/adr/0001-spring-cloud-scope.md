@@ -1,14 +1,16 @@
 ---
 title: Spring Cloud 组件范围
-status: done
+status: superseded
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
 template: docs/templates/adr.md
-related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
+related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md, docs/v0.0.3/adr/0002-spring-cloud-data-plane.md]
 ---
 
 # ADR-0001：Spring Cloud 组件范围
+
+> 已被 [`ADR-0002`](0002-spring-cloud-data-plane.md) 取代：v0.0.3 后继变更引入 Spring Cloud Gateway、Config Server 与 CircuitBreaker 包装。
 
 ## 1. 背景
 

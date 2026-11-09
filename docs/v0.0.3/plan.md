@@ -1,6 +1,6 @@
 ---
 title: v0.0.3 单机与集群规划
-status: done
+status: implementing
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
@@ -30,7 +30,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 - 不强制使用 Redis / Consul。
 - 不引入 Kafka / Spring Cloud Stream / Bus。
 - 不改变 MCP 工具签名与 `rag_query` 纯文本语义。
-- Spring Cloud Gateway 仍为可选，不阻塞本版本。
+- Spring Cloud Gateway / Config Server 已纳入 v0.0.3 后继变更，见 WP7。
 
 ## 2. 原则
 
@@ -165,6 +165,23 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 - 真实语料评测 opt-in：`-Dsmallrag.eval.real=true`（需外部 Embedding）。
 - 文档：standalone → distributed 迁移、容量、故障处理、STATELESS 限制。
 
+### WP7 Spring Cloud 数据面（v0.0.3 后继变更）— 已完成
+
+**状态**：2026-11-09 完成。仓库拆为 `app` / `gateway` / `config-server` 三个 Maven 模块；Gateway 使用 WebFlux + Consul + LoadBalancer 替换 HAProxy；Config Server 使用 native 文件系统后端；检索熔断改用 Spring Cloud CircuitBreaker（Resilience4j 实现）。
+
+**方案**
+
+- `gateway`：`spring-cloud-starter-gateway-server-webflux`，路由 `Path=/mcp` → `lb://small-rag`，长响应超时 1h；Caffeine 缓存 LoadBalancer。
+- `config-server`：`spring-cloud-config-server` + native，`config-repo/` 挂载到 `/config`；应用用 `CONFIG_SERVER_ENABLED` + `SPRING_CONFIG_IMPORT=optional:configserver:...` 拉取。
+- `app`：用 `spring-cloud-starter-circuitbreaker-resilience4j` 替代直接依赖 `resilience4j-circuitbreaker`；`rag.query-breaker.*` 映射到 `CircuitBreakerFactory`。
+- `compose.distributed.yaml` 移除 HAProxy，增加 `config-server` 与 `gateway`；外部依赖增加 Config Server。
+
+**验收**
+
+- `mvn test` 覆盖三个模块；Gateway 路由用 SimpleDiscoveryClient 做端到端代理测试。
+- Config Server native 仓库可返回 `small-rag/default`；应用启动日志出现 `Located environment: name=small-rag`。
+- `mvn verify -Pcontainer-it` 继续通过。
+
 ## 5. 里程碑与排期
 
 | 里程碑 | 内容 | 出口标准 | 预估 |
@@ -192,7 +209,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | D2 | 集群传输 | distributed 默认 `STATELESS`；standalone 保持 `STREAMABLE` |
 | D3 | 幂等改造 | 本期做：chunk id 确定性化，接受一次全量重切 |
 | D4 | 容器化测试 | 纳入 CI：Testcontainers E2E 在 CI 跑 |
-| D5 | Spring Cloud 范围 | 只保留 Consul discovery / config（可选），排除 LoadBalancer；不引入 Gateway / Config Server / Bus / Vault / K8s / Feign / CircuitBreaker 包装（见 ADR-0001） |
+| D5 | Spring Cloud 范围 | 引入 Gateway（WebFlux）、Config Server（native）、CircuitBreaker（Resilience4j 实现）；保留 Consul discovery；移除 HAProxy（见 ADR-0002，ADR-0001 已 superseded） |
 
 ## 8. 实施顺序与分支
 
@@ -203,6 +220,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | `feature/cluster-safety` | WP1 + WP2 | ✅ 已完成：`feat: stateless MCP in distributed mode and fenced reindex task lease` |
 | `feature/cluster-ops` | WP3 + WP5 | ✅ 已完成：`feat: expose reindex tasks across replicas and report cluster health` |
 | `feature/idempotent-ingest` | WP4 + WP6 | ✅ 已完成：`refactor: make chunk point ids deterministic`、`test: add Testcontainers container coverage`、`ci: run unit and container tests` |
+| `feature/spring-cloud-data-plane` | WP7 | ✅ 已完成：引入 Spring Cloud Gateway、Config Server、CircuitBreaker |
 
 顺序：`cluster-safety` → `cluster-ops` → `idempotent-ingest`。前两个分支不改变 chunk id，可独立发布验证。
 
@@ -217,25 +235,29 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | `smallrag.distributed.task-status-cache-ms` | `2000` | 跨副本状态读穿缓存 |
 | `smallrag.archive.shared` | `false` | distributed 部署设 `true`，health / 启动告警据此判断共享卷 |
 | `SMALL_RAG_ARCHIVE_SHARED` | `false` | 上述配置的环境变量入口 |
+| `CONFIG_SERVER_ENABLED` | `false` | 启用 Spring Cloud Config 客户端 |
+| `SPRING_CONFIG_IMPORT` | 空 | `optional:configserver:http://config-server:8888` |
+| `GATEWAY_RESPONSE_TIMEOUT` | `1h` | Gateway 长响应超时 |
+| `GATEWAY_CONNECT_TIMEOUT_MS` | `5000` | Gateway 连接后端超时 |
 
 **破坏性变更**：WP4 的 chunk id 方案变更 + `ChunkingSignature` 升版本，升级后首次启动会自动全量重切；release note 必须写明。
 
 ## 10. CI 设计
 
-仓库当前无 CI 配置。新增 `.github/workflows/ci.yml`（GitHub Actions）：
+`.github/workflows/ci.yml`（GitHub Actions）已落地：
 
 - `unit`：JDK 25（temurin），`mvn -B clean package`，不依赖外部服务。
 - `container-it`：`mvn -B verify -Pcontainer-it`。GitHub 托管的 `ubuntu-latest` 自带 Docker daemon，Testcontainers 可直接使用，**不需要 DinD**。
-- `image`：仅在 `main` / tag 或手动触发时构建镜像（llama.cpp 源码编译较慢，不阻塞日常 PR）。
+- `image`：后续可选；当前 CI 只跑单元与容器 E2E，镜像构建由本地 / 发布流程负责。
 
 > 假设：CI 使用 GitHub Actions（`github` 远程）。Gitee 侧继续作为镜像远程，不额外接 Gitee Go。
 
 ## 11. 完成定义（DoD）
 
-- [ ] `mvn clean package` 通过，单测全绿且默认不依赖外部服务
-- [ ] `mvn verify -Pcontainer-it` 通过（Qdrant + Redis + 假 Embedding）
+- [x] `mvn clean package` 通过，单测全绿且默认不依赖外部服务（app 176 + gateway 2 + config-server 1）
+- [x] `mvn verify -Pcontainer-it` 通过（Qdrant + Redis + 确定性哈希 Embedding）
 - [ ] standalone：jar 冒烟 + all-in-one 镜像冒烟与 v0.0.2 行为一致
-- [ ] distributed：2 副本经 gateway 连续 50 次 MCP 调用成功
+- [ ] distributed：2 副本经 Spring Cloud Gateway 连续 50 次 MCP 调用成功
 - [ ] 故障：`kill -9` 持有者后安全接管，旧副本无法继续写入；Redis 不可用时写索引 fail-closed
 - [ ] `rag_task_status` / `rag_task_resume` / `rag_task_cancel` 在任意副本可用
 - [ ] 同一文档重复 upsert 片段数恒定；`rag_rebuild` 后无孤儿父块

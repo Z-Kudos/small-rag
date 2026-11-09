@@ -1,0 +1,6 @@
+# Config Server native 配置仓库示例。
+# 文件名即 application name：small-rag.yml 对应 spring.application.name=small-rag。
+# 真实环境按 profile 拆分时使用 small-rag-<profile>.yml。
+logging:
+  level:
+    com.smallrag.ragmcp: INFO

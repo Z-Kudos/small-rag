@@ -12,16 +12,17 @@
     </parent>
 
     <groupId>com.smallrag</groupId>
-    <artifactId>small-rag</artifactId>
+    <artifactId>small-rag-parent</artifactId>
     <version>0.0.3</version>
-    <name>small-rag</name>
-    <description>Small pure-text RAG knowledge base exposed as an MCP server</description>
+    <packaging>pom</packaging>
+    <name>small-rag-parent</name>
+    <description>Small pure-text RAG knowledge base and its Spring Cloud data plane</description>
 
-    <developers>
-        <developer>
-            <name>zjk</name>
-        </developer>
-    </developers>
+    <modules>
+        <module>app</module>
+        <module>gateway</module>
+        <module>config-server</module>
+    </modules>
 
     <properties>
         <java.version>25</java.version>
@@ -52,123 +53,6 @@
         </dependencies>
     </dependencyManagement>
 
-    <dependencies>
-        <!-- MCP server over Streamable HTTP (WebMVC transport) -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
-        </dependency>
-
-        <!-- Chat + embedding models (OpenAI compatible endpoint) -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-model-openai</artifactId>
-        </dependency>
-
-        <!-- Qdrant 向量库（纯文本 RAG） -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-vector-store-qdrant</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
-
-        <!-- 分布式模式：Redis 租约锁（standalone 模式不会连接 Redis） -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-redis</artifactId>
-        </dependency>
-
-        <!-- 检索路径熔断（仅 rag_search / rag_query，不影响入库与重建） -->
-        <dependency>
-            <groupId>io.github.resilience4j</groupId>
-            <artifactId>resilience4j-circuitbreaker</artifactId>
-        </dependency>
-
-        <!-- 分布式模式：Consul 服务发现与外部化配置（standalone 默认关闭） -->
-        <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-consul-discovery</artifactId>
-            <exclusions>
-                <!-- 无服务间调用，不需要客户端负载均衡；避免死依赖 -->
-                <exclusion>
-                    <groupId>org.springframework.cloud</groupId>
-                    <artifactId>spring-cloud-starter-loadbalancer</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-consul-config</artifactId>
-        </dependency>
-
-        <!-- 健康检查：暴露实例、锁与熔断状态（/actuator/health） -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-actuator</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <optional>true</optional>
-        </dependency>
-
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>testcontainers</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-                <configuration>
-                    <excludes>
-                        <exclude>
-                            <groupId>org.projectlombok</groupId>
-                            <artifactId>lombok</artifactId>
-                        </exclude>
-                    </excludes>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
-
-    <profiles>
-        <!-- 容器化端到端测试：需要 Docker / Podman，CI 单独 job 运行 -->
-        <profile>
-            <id>container-it</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-failsafe-plugin</artifactId>
-                        <executions>
-                            <execution>
-                                <goals>
-                                    <goal>integration-test</goal>
-                                    <goal>verify</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-    </profiles>
-
     <!--
         仓库顺序 = 解析顺序：命中即停止。
         阿里云公共仓库（聚合 Maven Central）放在最前，避免国内构建时回源到国外站点；
@@ -196,7 +80,6 @@
         </repository>
     </repositories>
 
-    <!-- 插件同样走阿里云，避免 maven-compiler / spring-boot 等插件回源 -->
     <pluginRepositories>
         <pluginRepository>
             <id>aliyun-public</id>

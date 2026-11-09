@@ -36,7 +36,8 @@ A **plain-text RAG retrieval** MCP service built on Spring AI: it only ingests a
 - **Async reindex tasks**: progress queries, cooperative cancellation, watchdog hard timeout, and resume after restart.
 - **Multi-directory Markdown import**: fingerprint-based incremental sync, scheduled / watcher / MCP triggers, and delete propagation.
 - **Two runtime modes**: single-container `all-in-one` (default) or `app-only` (distributed).
-- **Optional distributed mode**: Redis lease lock, directory-scan leader election, Consul registration/config, and an HAProxy gateway.
+- **Multi-module**: `app` (MCP + RAG), `gateway` (Spring Cloud Gateway), and `config-server` (Spring Cloud Config Server), built together from the repository root.
+- **Optional distributed mode**: Spring Cloud Gateway (Consul + LoadBalancer), Spring Cloud Config Server (native), Redis lease lock, and directory-scan leader election.
 - **Circuit breaker and health checks**: fail fast when Embedding / Qdrant keeps failing; diagnose via `/actuator/health`.
 
 ## Version matrix
@@ -64,7 +65,8 @@ The documents below belong to the current version **v0.0.3**. After release, `do
 | [docs/v0.0.3/design/limitations.md](docs/v0.0.3/design/limitations.md) | Known limitations and risks |
 | [DEV-MEMORY.md](DEV-MEMORY.md) | Current development state and pitfalls |
 | [AGENTS.md](AGENTS.md) | Version baseline, build commands, code and documentation rules |
-| [docs/v0.0.3/adr/0001-spring-cloud-scope.md](docs/v0.0.3/adr/0001-spring-cloud-scope.md) | Spring Cloud component scope decision |
+| [docs/v0.0.3/adr/0001-spring-cloud-scope.md](docs/v0.0.3/adr/0001-spring-cloud-scope.md) | Spring Cloud component scope decision (superseded) |
+| [docs/v0.0.3/adr/0002-spring-cloud-data-plane.md](docs/v0.0.3/adr/0002-spring-cloud-data-plane.md) | Spring Cloud Gateway / Config Server / CircuitBreaker decision |
 
 > The design and planning documents are written in Chinese.
 
@@ -89,7 +91,7 @@ export EMBEDDING_BASE_URL=http://localhost:11434/v1
 export EMBEDDING_MODEL=qwen3-embedding-0.6b
 export EMBEDDING_DIMENSION=1024
 
-mvn spring-boot:run
+mvn -pl app spring-boot:run
 ```
 
 MCP endpoint: `http://localhost:18080/mcp`.
@@ -184,7 +186,7 @@ Notes:
 
 ## Distributed mode (optional)
 
-The default is still single-container standalone. For multiple replicas, use the overlay: Qdrant / Redis / Consul / Embedding are deployed separately, the application runs in `app-only` mode, and an HAProxy gateway exposes `18080`.
+The default is still single-container standalone. For multiple replicas, use the overlay: Qdrant / Redis / Consul / Embedding and Config Server are deployed separately, the application runs in `app-only` mode, and Spring Cloud Gateway exposes `18080`.
 
 ```bash
 docker compose -f compose.yaml -f compose.distributed.yaml build
@@ -200,20 +202,16 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 - MCP must be stateless across replicas: `SMALL_RAG_MCP_PROTOCOL=STATELESS` (the overlay sets it). Otherwise the session lives in one replica's memory and requests routed to another replica return 404. Standalone keeps `STREAMABLE`.
 - The lease defaults to 30s with renewal every 10s. If the holder disappears, another replica takes over after the lease expires. A failed renewal immediately stops local writes (`IndexActivityGuard.isHeldBy=false`).
 - Automatic directory scans (startup / scheduled / watcher) run only on the leader: replicas compete for the `sources-leader` lease, and another replica takes over if the leader disappears. Manual MCP `rag_sync_sources` is not leader-restricted and is still serialized by the index activity lock.
-- With `CONSUL_ENABLED=true`, the application registers with Consul (`small-rag` service, health check `/actuator/health`) and can read configuration from Consul KV. The overlay includes a single-node Consul server (three nodes are recommended in production).
-- Consul configuration defaults to `KEY_VALUE` format: one key per configuration item, for example
-  ```bash
-  consul kv put config/small-rag/logging.level.com.smallrag.ragmcp DEBUG
-  ```
-  Add `SPRING_CONFIG_IMPORT=optional:consul:` at startup. To store YAML under a single `data` key, set `spring.cloud.consul.config.format=YAML`.
-- The gateway is currently HAProxy; Spring Cloud Gateway is evaluated in P3. See [ROADMAP.md](ROADMAP.md).
+- With `CONSUL_ENABLED=true`, the application registers with Consul (`small-rag` service, health check `/actuator/health`); the gateway discovers replicas through Consul + Spring Cloud LoadBalancer. The overlay includes a single-node Consul server (three nodes are recommended in production).
+- Configuration uses Spring Cloud Config Server (`config-server` module, native backend): `config-repo/` is mounted read-only at `/config`; set `CONFIG_SERVER_ENABLED=true` and `SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888`. The `optional:` prefix allows startup when the config server is unavailable.
+- The gateway uses Spring Cloud Gateway (WebFlux) to route `Path=/mcp` → `lb://small-rag`, with a 1h long-response timeout. HAProxy is no longer used.
 
 ### Migrating from standalone to distributed
 
 1. Stop the single-container instance and keep `small_rag_data` (archive) and `/data/qdrant/storage` (vector data).
-2. Start external Qdrant / Redis / Consul / Embedding with the overlay; reuse `small_rag_data` directly, or switch to an RWX volume for multi-host deployments.
+2. Start external Qdrant / Redis / Consul / Embedding / Config Server with the overlay; reuse `small_rag_data` directly, or switch to an RWX volume for multi-host deployments.
 3. Copy vector data to the new `qdrant_data` volume, or clear it and run `rag_rebuild` / re-ingest; keep Qdrant versions consistent when copying.
-4. Set `SMALL_RAG_DISTRIBUTED_ENABLED=true`, `SMALL_RAG_RUNTIME=app-only`, share `SMALL_RAG_ARCHIVE_DIR`, and enable `CONSUL_ENABLED` as needed.
+4. Set `SMALL_RAG_DISTRIBUTED_ENABLED=true`, `SMALL_RAG_RUNTIME=app-only`, share `SMALL_RAG_ARCHIVE_DIR`, set `CONFIG_SERVER_ENABLED=true` and `SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888`, and enable `CONSUL_ENABLED` as needed.
 5. Verify through the gateway's `/mcp`; check `/actuator/health` to confirm that exactly one replica has `sourcesLeader=true` and which one holds `activeLock`.
 
 ### Capacity and failure handling
@@ -291,11 +289,14 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 | `SMALL_RAG_LOCK_LEASE` | `30s` | Index activity lock lease |
 | `SMALL_RAG_LOCK_RENEW_INTERVAL` | `10s` | Renewal interval, must be clearly shorter than the lease |
 | `SMALL_RAG_LOCK_PREFIX` | `smallrag:lock:` | Lock key prefix |
-| `CONSUL_ENABLED` | `false` | Enable Consul service registration and configuration (service name `small-rag`) |
+| `CONSUL_ENABLED` | `false` | Enable Consul service registration and discovery (service name `small-rag`) |
 | `CONSUL_HOST` / `CONSUL_PORT` | `localhost` / `8500` | Consul agent address |
 | `CONSUL_REGISTER` | `true` | Whether to register with Consul |
-| `CONSUL_CONFIG_FAIL_FAST` | `false` | Whether to block startup when Consul is unreachable |
-| `SPRING_CONFIG_IMPORT` | empty | Set to `optional:consul:` to read configuration from Consul KV |
+| `CONFIG_SERVER_ENABLED` | `false` | Enable the Config Server client; the distributed overlay sets it |
+| `CONFIG_SERVER_FAIL_FAST` | `false` | Whether to block startup when Config Server is unreachable |
+| `SPRING_CONFIG_IMPORT` | empty | e.g. `optional:configserver:http://config-server:8888` or `optional:consul:` |
+| `GATEWAY_RESPONSE_TIMEOUT` | `1h` | Gateway long-response timeout for MCP |
+| `GATEWAY_CONNECT_TIMEOUT_MS` | `5000` | Gateway backend connect timeout (ms) |
 | `RAG_QUERY_BREAKER_ENABLED` | `true` | Circuit breaker for `rag_search` / `rag_query` |
 | `RAG_QUERY_BREAKER_FAILURE_RATE` | `50` | Failure rate (%) that opens the circuit |
 | `RAG_QUERY_BREAKER_OPEN_WAIT` | `30s` | Wait time before half-open after opening |
@@ -507,8 +508,9 @@ docker compose -f compose.yaml -f compose.sources.yaml up -d --build
 mvn test
 ```
 
-Unit tests do not require Qdrant or model credentials; end-to-end tests require Qdrant and a configured Embedding service.
+Unit tests do not require Qdrant or model credentials (currently 176 app tests + 2 gateway tests + 1 config-server test); end-to-end tests require Qdrant and a configured Embedding service.
 
+- Run `mvn test` at the repository root for all three modules; use `mvn -pl app test` for a single module.
 - Container E2E (requires Docker / Podman): `mvn verify -Pcontainer-it`. Testcontainers starts a real Qdrant and covers "ingest → retrieve", idempotent repeated upserts, and orphan parent cleanup. The default image is `qdrant/qdrant:latest`; override with `-Dsmallrag.qdrant.image=...`.
 - GitHub Actions runs two jobs: `mvn -B clean verify` for unit tests and `mvn -B verify -Pcontainer-it` for the container E2E.
 

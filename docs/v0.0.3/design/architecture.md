@@ -1,6 +1,6 @@
 ---
 title: 架构与设计要点
-status: done
+status: implementing
 version: 0.0.3
 updated: 2026-11-09
 owners: [zjk]
@@ -25,6 +25,7 @@ related: [README.md, docs/v0.0.3/plan.md]
 
 ## 3. 设计要点
 
+- **模块划分**：`app`（MCP + RAG）、`gateway`（Spring Cloud Gateway，WebFlux）、`config-server`（Spring Cloud Config Server，native）。standalone 只运行 `app`；distributed 额外运行 gateway 与 config-server。
 - **仅向量模型**：`spring.ai.model.chat=none`，不创建 ChatModel / ChatClient。
 - **阈值与预算**：`rag.min-score=0.35`；单片段超长时以命中子块（`matched_text`）为中心做窗口截断，总上下文 12000 全宽字符当量，预算不足时跳过当前片段继续尝试装载后续更短片段。
 - **父块独立存储**：父块作为独立 point 与子块同集合写入，子块不再复制父块正文（消除 payload N 倍放大）；检索命中后按 id 取回父块正文与向量，父块缺失时回退为子块原文。
@@ -40,13 +41,17 @@ related: [README.md, docs/v0.0.3/plan.md]
 - **重切写入顺序**：子块 id 由 `chunk:<docId>:<切分签名>:<index>` 确定性生成，相同配置重复写入覆盖同一批 point；签名变化时新旧 id 不同，仍先写新片段再删旧片段，失败时旧数据可检索；无法枚举旧 id 时回退先删后写。
 - **孤儿清理**：`rag_rebuild` 完成后扫描集合，删除无对应子块的父块与缺少 `chunk_type` 的旧版本片段。
 - **错误收敛**：MCP 工具把运行期异常转为 `{"error": "..."}`，不抛协议层异常。
-- **集群会话**：standalone 使用 `STREAMABLE`；distributed 多副本使用 `STATELESS`（`SMALL_RAG_MCP_PROTOCOL`），会话不再保存在单副本内存，gateway 可继续 `roundrobin`。`McpTransportGuard` 在 distributed 且非 `STATELESS` 时启动告警。
+- **检索熔断**：`QueryCircuitBreaker` 只依赖 `CircuitBreakerFactory`，实现由 `spring-cloud-starter-circuitbreaker-resilience4j` 提供；`rag.query-breaker.*` 通过 `QueryCircuitBreakerConfiguration` 映射为 Resilience4j 配置，关闭线程池与 TimeLimiter，保持调用线程语义。
+- **入口网关**：`gateway` 模块使用 Spring Cloud Gateway（WebFlux），路由 `Path=/mcp` → `lb://small-rag`；Consul 提供服务实例，Spring Cloud LoadBalancer 做客户端负载均衡；不再使用 HAProxy。
+- **配置中心**：`config-server` 模块使用 native 文件系统后端，`config-repo/` 挂载到 `/config`；`app` 通过 `optional:configserver:` 拉取配置，Config Server 不依赖 Consul，避免循环依赖。
+- **集群会话**：standalone 使用 `STREAMABLE`；distributed 多副本使用 `STATELESS`（`SMALL_RAG_MCP_PROTOCOL`），会话不再保存在单副本内存，Gateway 可继续轮询任意副本。`McpTransportGuard` 在 distributed 且非 `STATELESS` 时启动告警。
 - **任务所有权**：重建任务持有 `<lock-prefix>reindex-task` 租约 + 单调 fence epoch（standalone 进程内、distributed Redis）；每次 Qdrant 变更前远程校验持有者、token 与 epoch 仍最新，旧持有者恢复后不能继续写入。distributed 下 Redis 不可用时 fail-closed。Qdrant `_reindex_state` 的任务锁 point 只作诊断镜像，不参与互斥。
 - **跨副本任务视图**：`rag_task_status` 本地缺失时回读 Qdrant 状态集合（`task-status-cache-ms` 读穿缓存）；`rag_task_resume` / `rag_task_cancel` 先抢 `reindex-task` 租约，抢到即接管（epoch 递增），抢不到返回锁镜像中的持有者实例。启动时校验镜像与权威锁一致，以权威锁为准清理过期镜像。
 
 ## 4. 包结构
 
 ```text
+app/src/main/java/com/smallrag/ragmcp/
 mcp/            RagMcpTools：rag_* 共 13 个工具（入库/检索/重建/任务查询/目录导入）
 rag/            RagService（入库/检索/上下文/更新删除重建）、IndexActivityGuard（重建与目录导入互斥）、
                 KnowledgeBaseProbe（空库短路）、QueryCircuitBreaker（检索熔断）
@@ -65,11 +70,17 @@ config/         QdrantConfig、McpServerConfig、McpTransportGuard（协议与�
                 DistributedLockConfig、DistributedProperties、RagProperties、QdrantProperties、
                 IndexLockHealthIndicator
 docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord*.conf
+
+gateway/src/main/java/com/smallrag/gateway/       GatewayApplication（WebFlux 路由）
+config-server/src/main/java/com/smallrag/configserver/  ConfigServerApplication（@EnableConfigServer）
+config-repo/      Config Server native 配置仓库（small-rag.yml）
 ```
 
 `VectorStore` 与 `EmbeddingModel` 均按 Spring AI 接口注入。
 
 ## 5. 关键数据流
+
+**请求入口**：MCP 客户端 → `gateway:18080/mcp` → Consul 发现 + LoadBalancer → `app` 副本；Gateway 不解析 MCP 协议，只做 HTTP 代理与长响应超时。
 
 **入库**：`rag_ingest` / `rag_update` / 目录导入 → `RagService` 归档原文 → `ChunkingService` 切分 → `EmbeddingModel` 批量向量化 → Qdrant upsert（子块 + 父块）。
 
@@ -84,7 +95,7 @@ docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord*.c
 - **接口**：MCP 端点 `/mcp` 与 13 个工具签名保持稳定；`rag_query` 仍只返回增强上下文。
 - **数据**：主集合存子块与父块，独立集合 `<collection>_reindex_state` 存任务快照与任务锁诊断镜像；归档目录存原文与摘要索引。
 - **兼容性**：`ChunkingSignature` 版本与项目版本同步，升级可能触发一次全量重切；子块 point id 已改为确定性（`chunk:<docId>:<signature>:<index>`），同一签名下重复写入幂等；`rag_task_status` 新增 `ownerInstance` / `epoch` / `heartbeatAt`，旧快照缺字段按空值恢复。
-- **运维**：`/actuator/health` 暴露锁、leader、重建任务（owner/epoch/heartbeat/stateStore）、归档卷（enabled/writable/dir/shared）与熔断状态；distributed 模式依赖 Redis 与共享归档卷。
+- **运维**：`/actuator/health` 暴露锁、leader、重建任务（owner/epoch/heartbeat/stateStore）、归档卷（enabled/writable/dir/shared）与熔断状态；distributed 模式依赖 Redis、Consul、Gateway、Config Server 与共享归档卷。
 - **限制与风险**：见 [`limitations.md`](limitations.md)。
 
 ## 7. 回滚与演进

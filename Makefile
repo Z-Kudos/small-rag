@@ -3,13 +3,17 @@
 COMPOSE ?= docker compose
 SERVICE ?= small-rag
 
-.PHONY: build up up-sources up-distributed down down-distributed logs ps pull-model
+.PHONY: build build-distributed up up-sources up-distributed down down-distributed logs ps pull-model
 
 # GGUF 模型下载（与容器启动时 start-llama.sh 的逻辑一致，支持断点续传）
 MODEL_URL ?= https://modelscope.cn/models/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/master/Qwen3-Embedding-0.6B-Q8_0.gguf
 
 build:
 	$(COMPOSE) build
+
+# 构建 distributed 全部镜像（small-rag / gateway / config-server）
+build-distributed:
+	$(COMPOSE) -f compose.yaml -f compose.distributed.yaml build
 
 up:
 	$(COMPOSE) up -d --build

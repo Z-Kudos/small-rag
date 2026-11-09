@@ -1,0 +1,228 @@
+server:
+  port: 18080
+
+# 只暴露健康检查；多副本排障时可看到实例 id、活动锁与熔断状态
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+  health:
+    # standalone 模式不连接 Redis；只有 distributed 开启时才纳入健康检查
+    redis:
+      enabled: ${SMALL_RAG_DISTRIBUTED_ENABLED:false}
+
+spring:
+  application:
+    name: small-rag
+  # standalone 模式不会连接 Redis；distributed 模式才使用
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+  cloud:
+    # Spring Cloud CircuitBreaker：只做熔断，不改变调用线程与超时语义
+    circuitbreaker:
+      resilience4j:
+        disable-thread-pool: true
+        disable-time-limiter: true
+    # Config Server 客户端：只有设置 SPRING_CONFIG_IMPORT 时才真正拉取
+    config:
+      enabled: ${CONFIG_SERVER_ENABLED:false}
+      fail-fast: ${CONFIG_SERVER_FAIL_FAST:false}
+    consul:
+      # 默认关闭：standalone 不依赖 Consul；distributed 部署显式打开
+      enabled: ${CONSUL_ENABLED:false}
+      host: ${CONSUL_HOST:localhost}
+      port: ${CONSUL_PORT:8500}
+      discovery:
+        enabled: ${CONSUL_ENABLED:false}
+        register: ${CONSUL_REGISTER:true}
+        # 多副本必须唯一：容器 hostname 唯一；同一主机两个 JVM 用端口区分
+        instance-id: ${CONSUL_INSTANCE_ID:${spring.application.name}-${HOSTNAME:unknown}-${server.port}}
+        prefer-ip-address: true
+        health-check-path: /actuator/health
+        health-check-interval: 15s
+      config:
+        enabled: ${CONSUL_ENABLED:false}
+        # Consul 配置通过 SPRING_CONFIG_IMPORT=optional:consul: 显式启用，
+        # 默认不做 import 检查，避免 standalone 启动报错
+        import-check:
+          enabled: false
+        # Consul 暂时不可达时允许启动，避免配置中心故障放大为服务不可用
+        fail-fast: ${CONSUL_CONFIG_FAIL_FAST:false}
+        # 配置仅在启动时读取（属性未加 @RefreshScope），关闭长轮询避免无意义请求
+        watch:
+          enabled: ${CONSUL_CONFIG_WATCH_ENABLED:false}
+    discovery:
+      client:
+        # standalone 没有服务发现时，不把 UNKNOWN 的 discovery 组件塞进健康检查
+        health-indicator:
+          enabled: ${CONSUL_ENABLED:false}
+        composite-indicator:
+          enabled: ${CONSUL_ENABLED:false}
+  ai:
+    # 仅使用向量（Embedding）模型，不装配 Chat / 生成模型
+    model:
+      chat: none
+      embedding: openai
+    openai:
+      # Embedding 服务：支持通过环境变量切换模型 / 端点 / 密钥
+      api-key: ${EMBEDDING_API_KEY:${OPENAI_API_KEY:demo-key}}
+      base-url: ${EMBEDDING_BASE_URL:${OPENAI_BASE_URL:https://api.openai.com/v1}}
+      embedding:
+        model: ${EMBEDDING_MODEL:${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}}
+    mcp:
+      server:
+        name: small-rag
+        version: 0.0.3
+        # standalone 保持 STREAMABLE（有状态会话）；distributed 多副本必须 STATELESS，
+        # 否则会话只存在于单副本内存，轮询到其他副本会 404。compose.distributed.yaml 已设置。
+        protocol: ${SMALL_RAG_MCP_PROTOCOL:STREAMABLE}
+        instructions: |
+          基于纯文本知识库的 RAG 检索服务（不调用生成模型）。
+          使用 rag_ingest 新增文档、rag_update 更新、rag_delete 删除、rag_list 查看归档。
+          使用 rag_search 查看命中分块，使用 rag_query 获取带来源与相似度的增强上下文。
+          rag_reindex 可手动重建单篇（同步）或全部归档文档（异步）；rag_rebuild 需 confirm=true 才会全量异步重建。
+          异步重建返回 taskId：用 rag_task_status 查询进度（status/total/processed/percent/stalled），任意副本可查（本地缺失时回读状态集合）；用 rag_task_cancel 协作式取消。
+          任务快照持久化在 Qdrant 的独立状态集合中；任务锁在 standalone 为进程内、distributed 为 Redis 租约（带 fencing epoch）。
+          进程重启后未完成任务为 interrupted，默认自动续接，也可用 rag_task_resume 手动续接或 rag_task_cancel 放弃。
+          配置 rag.sources 后会自动导入多个 Markdown 源目录：rag_sync_sources 异步触发增量同步（force=true 全量重切），rag_sync_status 查询运行状态与最近一次统计。
+          知识库为空时 rag_query 会返回“未检索到相关内容”。
+
+smallrag:
+  distributed:
+    # 默认 false：保持单容器 standalone；distributed profile 或环境变量打开
+    enabled: ${SMALL_RAG_DISTRIBUTED_ENABLED:false}
+    # 跨副本任务状态读穿缓存；本地内存缺失时回读 Qdrant 的最短间隔
+    task-status-cache-ms: ${SMALL_RAG_TASK_STATUS_CACHE_MS:2000}
+    lock:
+      # 实例失联后，其他副本需等待该租约过期才能接管
+      lease: ${SMALL_RAG_LOCK_LEASE:30s}
+      # 必须明显小于 lease；每次续租失败即停止本地写入
+      renew-interval: ${SMALL_RAG_LOCK_RENEW_INTERVAL:10s}
+      key-prefix: ${SMALL_RAG_LOCK_PREFIX:smallrag:lock:}
+  archive:
+    # distributed 多副本必须共享归档目录（RWX）；只用于启动告警与健康检查
+    shared: ${SMALL_RAG_ARCHIVE_SHARED:false}
+
+rag:
+  # 原始文档归档目录：自动重切的原文来源；目录不可写时降级为只入库
+  archive-dir: ${SMALL_RAG_ARCHIVE_DIR:./data/documents}
+  # 多目录 Markdown 自动导入：逗号分隔，支持 label=/path；enabled=true 才生效
+  sources:
+    enabled: ${SMALL_RAG_SOURCES_ENABLED:false}
+    directories: ${SMALL_RAG_SOURCE_DIRS:}
+    extensions: ${SMALL_RAG_SOURCE_EXTENSIONS:.md,.markdown}
+    exclude: "${SMALL_RAG_SOURCE_EXCLUDE:**/node_modules/**,**/target/**,**/build/**}"
+    skip-hidden: ${SMALL_RAG_SOURCES_SKIP_HIDDEN:true}
+    follow-symlinks: ${SMALL_RAG_SOURCES_FOLLOW_SYMLINKS:false}
+    scan-on-startup: ${SMALL_RAG_SOURCES_SCAN_ON_STARTUP:true}
+    scan-interval-seconds: ${SMALL_RAG_SOURCES_SCAN_INTERVAL_SECONDS:300}
+    watch-enabled: ${SMALL_RAG_SOURCES_WATCH_ENABLED:true}
+    watch-debounce-seconds: ${SMALL_RAG_SOURCES_WATCH_DEBOUNCE_SECONDS:5}
+    max-file-bytes: ${SMALL_RAG_SOURCES_MAX_FILE_BYTES:2097152}
+    max-files-per-scan: ${SMALL_RAG_SOURCES_MAX_FILES_PER_SCAN:0}
+    delete-missing: ${SMALL_RAG_SOURCES_DELETE_MISSING:false}
+    delete-orphan-roots: ${SMALL_RAG_SOURCES_DELETE_ORPHAN_ROOTS:false}
+    # 留空 = <archive-dir>/.sources/state.json
+    state-file: ${SMALL_RAG_SOURCES_STATE_FILE:}
+  # Embedding（OpenAI 兼容）HTTP 超时：防止服务假死时重建线程被永久占用
+  embedding:
+    connect-timeout-ms: ${EMBEDDING_CONNECT_TIMEOUT_MS:10000}
+    # 单次请求 read/write/总超时；本地 llama.cpp 大批量可能较慢
+    read-timeout-ms: ${EMBEDDING_READ_TIMEOUT_MS:120000}
+  # 检索熔断（仅 rag_search / rag_query）：Embedding/Qdrant 连续失败时快速失败
+  query-breaker:
+    enabled: ${RAG_QUERY_BREAKER_ENABLED:true}
+    sliding-window-size: ${RAG_QUERY_BREAKER_WINDOW:20}
+    minimum-number-of-calls: ${RAG_QUERY_BREAKER_MIN_CALLS:10}
+    failure-rate-threshold: ${RAG_QUERY_BREAKER_FAILURE_RATE:50}
+    wait-duration-in-open-state: ${RAG_QUERY_BREAKER_OPEN_WAIT:30s}
+    permitted-number-of-calls-in-half-open-state: ${RAG_QUERY_BREAKER_HALF_OPEN_CALLS:3}
+    slow-call-duration-threshold: ${RAG_QUERY_BREAKER_SLOW_CALL:10s}
+    slow-call-rate-threshold: ${RAG_QUERY_BREAKER_SLOW_RATE:100}
+  # 异步重建看门狗：停滞只告警，硬超时中断线程；0 表示关闭
+  reindex:
+    stall-timeout-seconds: ${REINDEX_STALL_TIMEOUT_SECONDS:1800}
+    hard-timeout-seconds: ${REINDEX_HARD_TIMEOUT_SECONDS:3600}
+    check-interval-seconds: ${REINDEX_CHECK_INTERVAL_SECONDS:30}
+    join-timeout-seconds: ${REINDEX_JOIN_TIMEOUT_SECONDS:10}
+    # 撤销写权限后等待在途写入结束的宽限期；到期强制释放任务锁（无需重启）
+    recovery-grace-seconds: ${REINDEX_RECOVERY_GRACE_SECONDS:120}
+    # 任务快照与任务锁存放在 Qdrant 的 <collection>_reindex_state 集合，跟随 Qdrant 持久化
+    # 启动时自动续接重启前未完成的任务；false 时停在 interrupted 并继续持锁
+    resume-on-startup: ${REINDEX_RESUME_ON_STARTUP:true}
+  default-top-k: 4
+  max-top-k: 20
+  # MMR 多样性权重 λ（0 < λ < 1 启用，1 = 纯相关排序），默认 0.7
+  mmr-lambda: ${MMR_LAMBDA:0.7}
+  # 相似度阈值：低于该值的片段直接丢弃（0~1，Cosine）
+  min-score: 0.35
+  # 固定/递归/Markdown 切分的目标块大小；语义切分的默认上限也回落到这里
+  chunk-size: ${CHUNK_SIZE:800}
+  chunk-overlap: ${CHUNK_OVERLAP:100}
+  # 返回上下文预算
+  max-context-chars: 12000
+  max-chunk-chars: 1200
+  empty-context-answer: 未检索到相关内容。请先通过 rag_ingest 向知识库写入文本，或换一个查询词重试。
+  # 切分策略：fixed | recursive | semantic | parent-child（默认 parent-child）
+  # 启动时检测切分配置签名，对已归档文档自动重切；未归档历史数据需重新入库
+  chunking:
+    strategy: ${CHUNK_STRATEGY:parent-child}
+    # 启动时检测切分配置签名，发现变化后自动重切已归档文档
+    auto-rechunk: ${CHUNK_AUTO_RECHUNK:true}
+    markdown:
+      # 标题路径分隔符，例如 "指南 > 安装 > Linux"
+      heading-separator: " > "
+    recursive:
+      # 分隔符优先级从粗到细，按字面量匹配
+      separators:
+        - "\n\n"
+        - "\n"
+        - "。"
+        - "！"
+        - "？"
+        - "；"
+        - "…"
+        - ". "
+        - "! "
+        - "? "
+        - "; "
+        - "，"
+        - ", "
+        - " "
+    semantic:
+      # 文本块向量与当前块质心的余弦相似度低于该值时断开（breakpoint-percentile > 0 时忽略）
+      similarity-threshold: ${SEMANTIC_SIMILARITY_THRESHOLD:0.75}
+      # 断点分位数（0~1）：> 0 时取相邻文本块相似度的该分位数作断点，默认 0 使用绝对阈值
+      breakpoint-percentile: ${SEMANTIC_BREAKPOINT_PERCENTILE:0}
+      # 未达到该长度时优先继续合并，避免语义碎块
+      min-chunk-chars: ${SEMANTIC_MIN_CHUNK_CHARS:200}
+      # <= 0 时回落到 rag.chunk-size
+      max-chunk-chars: ${SEMANTIC_MAX_CHUNK_CHARS:0}
+      batch-size: ${SEMANTIC_BATCH_SIZE:64}
+    parent-child:
+      # 父块用于提供上下文，子块写入向量库并参与检索
+      parent-size: ${PARENT_CHUNK_SIZE:2000}
+      # 父块重叠默认 0：子块不跨父块边界，父块重叠只会造成内容重复命中
+      parent-overlap: ${PARENT_CHUNK_OVERLAP:0}
+      child-size: ${CHILD_CHUNK_SIZE:400}
+      child-overlap: ${CHILD_CHUNK_OVERLAP:50}
+  qdrant:
+    host: ${QDRANT_HOST:localhost}
+    # gRPC 端口（REST 是 6333）
+    port: ${QDRANT_PORT:6334}
+    api-key: ${QDRANT_API_KEY:}
+    collection-name: ${QDRANT_COLLECTION:small_rag_text}
+    use-tls: ${QDRANT_USE_TLS:false}
+    # 必须与 Embedding 模型输出维度一致；text-embedding-3-small = 1536
+    dimension: ${EMBEDDING_DIMENSION:${QDRANT_DIMENSION:1536}}
+    init-timeout-ms: 5000
+    # 常规 RPC（写入/删除/检索）deadline，与初始化超时分开
+    request-timeout-ms: ${QDRANT_REQUEST_TIMEOUT_MS:30000}
