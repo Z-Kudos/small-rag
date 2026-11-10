@@ -37,7 +37,7 @@
 - **多目录 Markdown 自动导入**：指纹增量、定时 / watcher / MCP 手动触发、删除同步。
 - **双运行模式**：单容器 `all-in-one`（默认）或 `app-only`（分布式）。
 - **多模块**：`app`（MCP + RAG）、`gateway`（Spring Cloud Gateway）、`config-server`（Spring Cloud Config Server）；根目录一次构建。
-- **可选分布式**：Spring Cloud Gateway（Consul + LoadBalancer）、Spring Cloud Config Server（native）、Redis 租约锁、目录扫描 leader 选举。
+- **可选分布式**：Spring Cloud Gateway（Consul + LoadBalancer）、Spring Cloud Config Server（native）、Redisson `RFencedLock`、目录扫描 leader 选举。
 - **检索熔断与健康检查**：Spring Cloud CircuitBreaker（Resilience4j 实现）在 Embedding / Qdrant 持续失败时快速失败，`/actuator/health` 可诊断。
 
 ## 版本矩阵
@@ -67,6 +67,7 @@
 | [AGENTS.md](AGENTS.md) | 版本基线、构建命令、代码与文档规范 |
 | [docs/v0.0.3/adr/0001-spring-cloud-scope.md](docs/v0.0.3/adr/0001-spring-cloud-scope.md) | Spring Cloud 组件范围决策（已 superseded） |
 | [docs/v0.0.3/adr/0002-spring-cloud-data-plane.md](docs/v0.0.3/adr/0002-spring-cloud-data-plane.md) | Spring Cloud Gateway / Config Server / CircuitBreaker 决策 |
+| [docs/v0.0.3/adr/0003-redisson-distributed-lock.md](docs/v0.0.3/adr/0003-redisson-distributed-lock.md) | 分布式锁使用 Redisson `RFencedLock` 决策 |
 
 ## 快速开始（本地）
 
@@ -194,11 +195,11 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 
 - 需要 Docker Compose v2.24+（overlay 使用 `!reset []` 去掉应用自身的端口映射）。
 - 两个副本共享 `small_rag_data:/data` 作为归档卷；多主机部署需换成 NFS / CephFS 等 RWX 存储。
-- 应用通过 `SMALL_RAG_DISTRIBUTED_ENABLED=true` 启用 Redis 租约锁；目录导入、重建任务、启动自动重切通过 `index-activity` 活动锁串行化，同一时刻只有一个副本写入。
-- 重建任务另有独立的 `reindex-task` 租约 + 单调 fencing epoch；每次写入前远程校验「仍持有租约 + epoch 仍最新」，旧持有者恢复后无法继续写。
+- 应用通过 `SMALL_RAG_DISTRIBUTED_ENABLED=true` 启用 Redisson `RFencedLock`；目录导入、重建任务、启动自动重切通过 `index-activity` 活动锁串行化，同一时刻只有一个副本写入。
+- 重建任务另有独立的 `reindex-task` 租约 + 单调 fencing token；每次写入前远程校验「仍持有锁 + token 仍最新」，旧持有者恢复后无法继续写。
 - 任意副本都能查询任务：本地内存没有时回读 Qdrant 状态集合（默认 2s 读穿缓存）。`rag_task_resume` / `rag_task_cancel` 会先抢任务租约，抢到即接管（epoch 递增）；原持有者仍在续租时返回持有者实例与 taskId。
 - MCP 多副本必须使用无状态传输：`SMALL_RAG_MCP_PROTOCOL=STATELESS`（overlay 已设置），否则会话只存在单副本内存，轮询到其他副本会 404。standalone 保持 `STREAMABLE`。
-- 锁租约默认 30s、每 10s 续租；持有者失联后，其他副本在租约过期后接管。续租失败会立即停止本地写入（`IndexActivityGuard.isHeldBy=false`）。
+- Redisson watchdog 在进程存活期间自动续租；实例优雅退出会主动释放锁，崩溃靠停止续租 + TTL 接管。续租失败会立即停止本地写入（`IndexActivityGuard.isHeldBy=false`）。
 - 目录自动扫描（启动 / 定时 / watcher）只由 leader 执行：各副本竞争 `sources-leader` 租约，leader 失联后由其他副本接管；MCP 手动 `rag_sync_sources` 不受 leader 限制，仍由索引活动锁串行化。
 - `CONSUL_ENABLED=true` 时应用注册到 Consul（`small-rag` 服务，健康检查 `/actuator/health`），Gateway 通过 Consul + Spring Cloud LoadBalancer 发现副本。overlay 内置单节点 Consul server（生产建议三节点）。
 - 配置中心使用 Spring Cloud Config Server（`config-server` 模块，native 后端）：`config-repo/` 只读挂载到 `/config`，应用设置 `CONFIG_SERVER_ENABLED=true` 与 `SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888`；`optional:` 允许配置中心不可用时继续启动。
@@ -225,7 +226,7 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 
 - `rag_search` / `rag_query` 经过 Resilience4j 熔断：默认窗口 20 次、最少 10 次调用、失败率 50% 打开、30s 后进入半开。Embedding 或 Qdrant 持续失败时快速返回“知识库检索暂时不可用（熔断已打开）”，不再占用请求线程；入库与重建不受影响。
 - 可用 `RAG_QUERY_BREAKER_*` 环境变量调整，或 `RAG_QUERY_BREAKER_ENABLED=false` 关闭。
-- `GET /actuator/health` 返回实例 id、是否 distributed、活动索引锁、目录扫描 leader、重建任务（owner / epoch / heartbeat / 状态集合）、归档卷（enabled / writable / dir / shared）、熔断状态与 active profiles，便于确认多副本中谁在写入。
+- `GET /actuator/health` 返回实例 id、是否 distributed、Redisson 状态、活动索引锁、目录扫描 leader、重建任务（owner / epoch / heartbeat / 状态集合）、归档卷（enabled / writable / dir / shared）、熔断状态与 active profiles，便于确认多副本中谁在写入。
 
 ## 配置
 
@@ -279,13 +280,13 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 | `QDRANT_COLLECTION` | `small_rag_text` | 集合名，启动时自动创建 |
 | `QDRANT_USE_TLS` | `false` | 是否启用 TLS |
 | `QDRANT_REQUEST_TIMEOUT_MS` | `30000` | 常规 Qdrant RPC（写入 / 删除 / 检索）deadline；与初始化超时分开 |
-| `SMALL_RAG_DISTRIBUTED_ENABLED` | `false` | 启用 distributed 模式（Redis 租约锁）；standalone 不连接 Redis |
+| `SMALL_RAG_DISTRIBUTED_ENABLED` | `false` | 启用 distributed 模式（Redisson RFencedLock）；standalone 不连接 Redis |
 | `SMALL_RAG_TASK_STATUS_CACHE_MS` | `2000` | 跨副本任务状态读穿缓存（毫秒）；本地没有任务时回读 Qdrant 的最短间隔 |
 | `SMALL_RAG_ARCHIVE_SHARED` | `false` | 声明归档目录由多副本共享（distributed 应为 `true`）；用于启动告警与 health |
 | `SMALL_RAG_MCP_PROTOCOL` | `STREAMABLE` | MCP 传输协议：standalone 用 `STREAMABLE`，多副本必须 `STATELESS`（否则跨副本会话 404） |
-| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | `localhost` / `6379` / 空 | Redis 连接（仅 distributed 使用） |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` / `REDIS_DATABASE` | `localhost` / `6379` / 空 / `0` | Redisson 连接（仅 distributed 使用） |
 | `SMALL_RAG_LOCK_LEASE` | `30s` | 索引活动锁租约 |
-| `SMALL_RAG_LOCK_RENEW_INTERVAL` | `10s` | 续租间隔，必须明显小于租约 |
+| `SMALL_RAG_LOCK_RENEW_INTERVAL` | `10s` | owner 诊断镜像刷新间隔，必须明显小于租约 |
 | `SMALL_RAG_LOCK_PREFIX` | `smallrag:lock:` | 锁 key 前缀 |
 | `CONSUL_ENABLED` | `false`（app）/ `true`（gateway） | 启用 Consul 服务注册与发现（服务名 `small-rag`） |
 | `CONSUL_HOST` / `CONSUL_PORT` | `localhost` / `8500` | Consul agent 地址 |
@@ -336,7 +337,7 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 - `rag_reindex`：只重建已归档文档，不清理归档之外的残留片段；单篇重建仍同步返回片段数。
 - `rag_rebuild`：先删 `chunk_type=chunk` / `chunk_type=child` / `chunk_type=parent` 的片段再全量重建；归档为空时拒绝执行。完成后清理无对应子块的父块与缺少 `chunk_type` 的旧版本片段。
 - **幂等写入**：子块 point id 由 `chunk:<docId>:<切分签名>:<index>` 确定性生成，同一文档在相同切分配置下重复 upsert 会覆盖同一批片段，不会产生重复；切分配置变化时签名变化，仍按“写新片段 → 删旧片段”替换。
-- `rag_reindex`（全量）/ `rag_rebuild` 为**异步任务**：同一时刻只允许一个重建任务，重复提交返回错误。任务快照（保留最近 20 个）存放在 Qdrant 的独立集合 `<QDRANT_COLLECTION>_reindex_state`（与向量数据同一 Qdrant / 同一持久化卷，不依赖应用容器文件系统；集合不影响检索、空库探活与 `rag_rebuild` 清理）。**任务锁的权威实现在 `DistributedLock`**：standalone 为进程内租约，distributed 为 Redis 租约 `reindex-task` + 单调 epoch；状态集合里的锁 point 只是诊断镜像（`ownerInstance` / `epoch` / `expiresAt`），不参与互斥。进程重启后恢复进度：未完成任务为 `interrupted` 并**重新持有任务锁**，默认由 `REINDEX_RESUME_ON_STARTUP=true` 自动续接（跳过已完成文档、不重复清空）；关闭自动续接时可用 `rag_task_resume` 手动续接，或用 `rag_task_cancel` 放弃并释放锁。优雅关机会把在跑任务保存为 `interrupted` 并让出租约，重启可立即续接；崩溃时靠租约过期（≤30s）接管。硬超时已撤销写权限的任务不会续接。
+- `rag_reindex`（全量）/ `rag_rebuild` 为**异步任务**：同一时刻只允许一个重建任务，重复提交返回错误。任务快照（保留最近 20 个）存放在 Qdrant 的独立集合 `<QDRANT_COLLECTION>_reindex_state`（与向量数据同一 Qdrant / 同一持久化卷，不依赖应用容器文件系统；集合不影响检索、空库探活与 `rag_rebuild` 清理）。**任务锁的权威实现在 `DistributedLock`**：standalone 为进程内租约，distributed 为 Redisson `reindex-task` RFencedLock + 单调 fencing token；状态集合里的锁 point 只是诊断镜像（`ownerInstance` / `epoch` / `expiresAt`），不参与互斥。进程重启后恢复进度：未完成任务为 `interrupted` 并**重新持有任务锁**，默认由 `REINDEX_RESUME_ON_STARTUP=true` 自动续接（跳过已完成文档、不重复清空）；关闭自动续接时可用 `rag_task_resume` 手动续接，或用 `rag_task_cancel` 放弃并释放锁。优雅关机会把在跑任务保存为 `interrupted` 并让出租约，重启可立即续接；崩溃时靠租约过期（≤30s）接管。硬超时已撤销写权限的任务不会续接。
 - `rag_task_status` 返回 `status`（`queued` / `clearing` / `reindexing` / `interrupted` / `completed` / `aborted` / `cancelled` / `failed`）、`total`、`processed`、`percent`、`succeeded`、`failed`、`currentDocumentId`、`lastProgressAt`、`stalled`、`cancelRequested`、`startedAt`、`finishedAt`、`error`、`revoked`、`lockReleaseAt`、`ownerInstance`、`epoch`、`heartbeatAt`。本地没有该任务时从状态集合回读，因此任意副本都能看到持有者与其他副本提交的任务。
 - 看门狗：超过 `REINDEX_STALL_TIMEOUT_SECONDS` 无进度只标记 `stalled` 并告警，**保留任务锁**；超过 `REINDEX_HARD_TIMEOUT_SECONDS` 才**撤销写权限**（此后拒绝一切 Qdrant 写入）、主动取消在途 Embedding 调用并中断工作线程。
 - 锁释放：线程在 `REINDEX_JOIN_TIMEOUT_SECONDS` 内退出则立即释放；否则进入 `REINDEX_RECOVERY_GRACE_SECONDS` 宽限期，到期强制释放任务锁。撤销后旧任务无法再发起写入，宽限期只需覆盖撤销瞬间的在途请求（有 `QDRANT_REQUEST_TIMEOUT_MS` 上界），因此**无需重启**；此时提交新任务会提示“已撤销，正在释放任务锁”。

@@ -8,8 +8,9 @@ import java.util.Optional;
 /**
  * 进程内锁实现，用于 standalone 单容器模式与单元测试。
  *
- * <p>与 Redis 实现保持相同的租约语义：过期后允许其他持有者获取。进程退出时
- * 所有锁自然消失，因此不需要额外清理。
+ * <p>与 Redisson 实现保持相同的租约与 fencing token 语义：过期后允许其他持有者
+ * 获取，每次获取都会得到严格递增的 token。进程退出时所有锁自然消失，因此不需要
+ * 额外清理。
  *
  * @author zjk
  */
@@ -28,21 +29,23 @@ public final class LocalDistributedLock implements DistributedLock {
         if (current != null && current.handle().expiresAtMillis() > now) {
             return Optional.empty();
         }
-        LockHandle handle = LockHandle.create(key, owner, lease);
+        long token = epochs.getOrDefault(key, 0L) + 1;
+        epochs.put(key, token);
+        LockHandle handle = LockHandle.create(key, owner, lease, token);
         locks.put(key, new Entry(handle));
         return Optional.of(handle);
     }
 
     @Override
     public synchronized boolean renew(LockHandle handle, Duration lease) {
-        long now = System.currentTimeMillis();
         Entry current = locks.get(handle.key());
-        if (current == null || current.handle().expiresAtMillis() <= now
-                || !current.handle().value().equals(handle.value())) {
+        if (current == null || !current.handle().value().equals(handle.value())
+                || current.handle().expiresAtMillis() <= System.currentTimeMillis()) {
             return false;
         }
         locks.put(handle.key(), new Entry(new LockHandle(
-                handle.key(), handle.owner(), handle.token(), now + Math.max(1, lease.toMillis()))));
+                handle.key(), handle.owner(), handle.token(),
+                System.currentTimeMillis() + Math.max(1, lease.toMillis()))));
         return true;
     }
 
@@ -70,17 +73,5 @@ public final class LocalDistributedLock implements DistributedLock {
             return Optional.empty();
         }
         return Optional.of(current.handle().owner());
-    }
-
-    @Override
-    public synchronized long nextEpoch(String key) {
-        long next = epochs.getOrDefault(key, 0L) + 1;
-        epochs.put(key, next);
-        return next;
-    }
-
-    @Override
-    public synchronized long currentEpoch(String key) {
-        return epochs.getOrDefault(key, 0L);
     }
 }

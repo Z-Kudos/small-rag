@@ -86,15 +86,7 @@ class SourcesLeaderElectionTest {
                 return Optional.empty();
             }
 
-            @Override
-            public long nextEpoch(String key) {
-                return 0L;
-            }
 
-            @Override
-            public long currentEpoch(String key) {
-                return 0L;
-            }
         };
         first = new SourcesLeaderElection(failing, properties());
 
@@ -140,14 +132,6 @@ class SourcesLeaderElectionTest {
             return delegate.currentOwner(key);
         }
 
-        @Override
-        public long nextEpoch(String key) {
-            return delegate.nextEpoch(key);
-        }
 
-        @Override
-        public long currentEpoch(String key) {
-            return delegate.currentEpoch(key);
-        }
     }
 }

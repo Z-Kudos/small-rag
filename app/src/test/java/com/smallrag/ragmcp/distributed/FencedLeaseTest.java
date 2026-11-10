@@ -71,7 +71,7 @@ class FencedLeaseTest {
         DistributedLock broken = new DistributedLock() {
             @Override
             public Optional<LockHandle> tryAcquire(String key, String owner, Duration lease) {
-                return delegate.tryAcquire(key, owner, lease);
+                throw new IllegalStateException("redis down");
             }
 
             @Override
@@ -94,15 +94,6 @@ class FencedLeaseTest {
                 return delegate.currentOwner(key);
             }
 
-            @Override
-            public long nextEpoch(String key) {
-                throw new IllegalStateException("redis down");
-            }
-
-            @Override
-            public long currentEpoch(String key) {
-                return delegate.currentEpoch(key);
-            }
         };
 
         assertThatThrownBy(() -> FencedLease.acquire(broken, "k", "owner", Duration.ofSeconds(30)))

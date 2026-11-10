@@ -25,6 +25,7 @@ services:
       QDRANT_PORT: "6334"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      REDIS_DATABASE: "0"
       CONSUL_ENABLED: "true"
       CONSUL_HOST: consul
       CONSUL_PORT: "8500"

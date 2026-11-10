@@ -1,14 +1,13 @@
 package com.smallrag.ragmcp.rag;
 
 import com.smallrag.ragmcp.config.DistributedProperties;
-import com.smallrag.ragmcp.distributed.RedisDistributedLock;
+import com.smallrag.ragmcp.distributed.RedissonDistributedLock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
-import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import org.redisson.api.RedissonClient;
+import org.redisson.config.Config;
 
 import java.time.Duration;
 import java.util.UUID;
@@ -30,18 +29,18 @@ class IndexActivityGuardRedisIT {
 
     private static final int PORT = 6390;
 
-    private LettuceConnectionFactory connectionFactory;
-    private StringRedisTemplate redis;
+    private RedissonClient redissonA;
+    private RedissonClient redissonB;
     private IndexActivityGuard first;
     private IndexActivityGuard second;
 
     @BeforeEach
     void setUp() {
-        RedisStandaloneConfiguration configuration = new RedisStandaloneConfiguration("127.0.0.1", PORT);
-        connectionFactory = new LettuceConnectionFactory(configuration);
-        connectionFactory.afterPropertiesSet();
-        redis = new StringRedisTemplate(connectionFactory);
-        redis.afterPropertiesSet();
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://127.0.0.1:" + PORT).setDatabase(14);
+        config.setLockWatchdogTimeout(Duration.ofSeconds(2).toMillis());
+        redissonA = org.redisson.Redisson.create(config);
+        redissonB = org.redisson.Redisson.create(config);
     }
 
     @AfterEach
@@ -52,34 +51,36 @@ class IndexActivityGuardRedisIT {
         if (second != null) {
             second.shutdown();
         }
-        if (connectionFactory != null) {
-            connectionFactory.destroy();
+        if (redissonA != null) {
+            redissonA.shutdown();
+        }
+        if (redissonB != null) {
+            redissonB.shutdown();
         }
     }
 
     @Test
     void onlyOneReplicaWritesAndLeaseTakeoverWorks() {
         DistributedProperties properties = properties(Duration.ofSeconds(2), Duration.ofMillis(200));
-        first = new IndexActivityGuard(new RedisDistributedLock(redis), properties);
-        second = new IndexActivityGuard(new RedisDistributedLock(redis), properties);
+        first = new IndexActivityGuard(new RedissonDistributedLock(redissonA), properties);
+        second = new IndexActivityGuard(new RedissonDistributedLock(redissonB), properties);
 
         assertThat(first.tryAcquire(IndexActivityGuard.SOURCES)).isTrue();
         assertThat(second.tryAcquire(IndexActivityGuard.SOURCES)).isFalse();
 
-        // 持有者失联（不再续租）：租约到期后另一副本接管
+        // 持有者优雅停机会释放锁；崩溃时靠 Redisson watchdog 停止续租 + TTL 接管
         first.shutdown();
-        sleep(2600);
         assertThat(second.tryAcquire(IndexActivityGuard.SOURCES)).isTrue();
         assertThat(second.isHeldBy(IndexActivityGuard.SOURCES)).isTrue();
-        // 旧持有者的本地状态尚未清理，但远程校验能立即发现租约已被接管
+        // 旧持有者的本地状态尚未清理，但远程校验能发现锁已被接管
         assertThat(first.isHeldBy(IndexActivityGuard.SOURCES)).isFalse();
     }
 
     @Test
     void renewalKeepsLeaseAliveBeyondNominalExpiry() {
         DistributedProperties properties = properties(Duration.ofSeconds(2), Duration.ofMillis(200));
-        first = new IndexActivityGuard(new RedisDistributedLock(redis), properties);
-        second = new IndexActivityGuard(new RedisDistributedLock(redis), properties);
+        first = new IndexActivityGuard(new RedissonDistributedLock(redissonA), properties);
+        second = new IndexActivityGuard(new RedissonDistributedLock(redissonB), properties);
 
         assertThat(first.tryAcquire(IndexActivityGuard.SOURCES)).isTrue();
         sleep(2600);

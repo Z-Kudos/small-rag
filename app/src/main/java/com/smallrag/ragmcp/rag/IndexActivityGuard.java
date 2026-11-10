@@ -26,7 +26,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * 串行化。
  *
  * <p>standalone 模式使用进程内锁；distributed 模式通过 {@link DistributedLock}
- * 使用 Redis 租约锁，跨副本互斥。持有期间后台定时续租；续租失败或异常时立即
+ * 使用 Redisson {@code RFencedLock} 跨副本互斥。进程存活期间由 watchdog 自动续租；
+ * distributed 下 {@link #shutdown()} 会主动释放锁，崩溃时靠 Redisson 停止续租 + TTL 接管。
+ * distributed 模式下 {@code renew} 失败或异常表示远程校验失败，立即
  * 标记锁丢失并停止本地持有权，调用方通过 {@link #isHeldBy(String)} 感知并停止写入。
  *
  * @author zjk
@@ -54,7 +56,7 @@ public class IndexActivityGuard {
     /**
      * Spring 注入入口。
      *
-     * @param lock       本地或 Redis 锁实现
+     * @param lock       本地或 Redisson 锁实现
      * @param properties 分布式配置
      */
     @Autowired
@@ -250,6 +252,17 @@ public class IndexActivityGuard {
     @PreDestroy
     void shutdown() {
         cancelRenewal();
+        LockHandle current = handle;
+        handle = null;
+        owner.set(null);
+        if (current != null) {
+            try {
+                lock.release(current);
+            } catch (Exception e) {
+                log.warn("释放索引活动锁失败: key={}, owner={}, 原因={}",
+                        current.key(), current.owner(), e.toString());
+            }
+        }
         renewer.shutdownNow();
     }
 }

@@ -37,7 +37,7 @@ A **plain-text RAG retrieval** MCP service built on Spring AI: it only ingests a
 - **Multi-directory Markdown import**: fingerprint-based incremental sync, scheduled / watcher / MCP triggers, and delete propagation.
 - **Two runtime modes**: single-container `all-in-one` (default) or `app-only` (distributed).
 - **Multi-module**: `app` (MCP + RAG), `gateway` (Spring Cloud Gateway), and `config-server` (Spring Cloud Config Server), built together from the repository root.
-- **Optional distributed mode**: Spring Cloud Gateway (Consul + LoadBalancer), Spring Cloud Config Server (native), Redis lease lock, and directory-scan leader election.
+- **Optional distributed mode**: Spring Cloud Gateway (Consul + LoadBalancer), Spring Cloud Config Server (native), Redisson `RFencedLock`, and directory-scan leader election.
 - **Circuit breaker and health checks**: fail fast when Embedding / Qdrant keeps failing; diagnose via `/actuator/health`.
 
 ## Version matrix
@@ -67,6 +67,7 @@ The documents below belong to the current version **v0.0.3** and include post-re
 | [AGENTS.md](AGENTS.md) | Version baseline, build commands, code and documentation rules |
 | [docs/v0.0.3/adr/0001-spring-cloud-scope.md](docs/v0.0.3/adr/0001-spring-cloud-scope.md) | Spring Cloud component scope decision (superseded) |
 | [docs/v0.0.3/adr/0002-spring-cloud-data-plane.md](docs/v0.0.3/adr/0002-spring-cloud-data-plane.md) | Spring Cloud Gateway / Config Server / CircuitBreaker decision |
+| [docs/v0.0.3/adr/0003-redisson-distributed-lock.md](docs/v0.0.3/adr/0003-redisson-distributed-lock.md) | Distributed lock uses Redisson `RFencedLock` |
 
 > The design and planning documents are written in Chinese.
 
@@ -196,11 +197,11 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 
 - Requires Docker Compose v2.24+ (the overlay uses `!reset []` to drop the application's own port mapping).
 - Replicas share `small_rag_data:/data` as the archive volume; multi-host deployments need RWX storage such as NFS / CephFS.
-- Set `SMALL_RAG_DISTRIBUTED_ENABLED=true` to enable the Redis lease lock; directory import, reindex tasks, and startup re-chunk are serialized by the `index-activity` lock, so only one replica writes at a time.
-- Reindex tasks additionally hold a dedicated `reindex-task` lease with a monotonic fencing epoch; every write re-checks "lease still held + epoch still current", so a recovered old holder cannot keep writing.
+- Set `SMALL_RAG_DISTRIBUTED_ENABLED=true` to enable Redisson `RFencedLock`; directory import, reindex tasks, and startup re-chunk are serialized by the `index-activity` lock, so only one replica writes at a time.
+- Reindex tasks additionally hold a dedicated `reindex-task` lease with a monotonic fencing token; every write re-checks "lock still held + token still current", so a recovered old holder cannot keep writing.
 - Any replica can query tasks: when a task is absent from local memory it is read from the Qdrant state collection (2s read-through cache by default). `rag_task_resume` / `rag_task_cancel` first try to acquire the task lease and take over on success (epoch increments); when the original holder is still renewing, the error returns the holder instance and taskId.
 - MCP must be stateless across replicas: `SMALL_RAG_MCP_PROTOCOL=STATELESS` (the overlay sets it). Otherwise the session lives in one replica's memory and requests routed to another replica return 404. Standalone keeps `STREAMABLE`.
-- The lease defaults to 30s with renewal every 10s. If the holder disappears, another replica takes over after the lease expires. A failed renewal immediately stops local writes (`IndexActivityGuard.isHeldBy=false`).
+- Redisson watchdog renews automatically while the process is alive; a graceful shutdown releases the lock explicitly, and a crash stops watchdog renewal so takeover happens after TTL expiry. A failed renewal immediately stops local writes (`IndexActivityGuard.isHeldBy=false`).
 - Automatic directory scans (startup / scheduled / watcher) run only on the leader: replicas compete for the `sources-leader` lease, and another replica takes over if the leader disappears. Manual MCP `rag_sync_sources` is not leader-restricted and is still serialized by the index activity lock.
 - With `CONSUL_ENABLED=true`, the application registers with Consul (`small-rag` service, health check `/actuator/health`); the gateway discovers replicas through Consul + Spring Cloud LoadBalancer. The overlay includes a single-node Consul server (three nodes are recommended in production).
 - Configuration uses Spring Cloud Config Server (`config-server` module, native backend): `config-repo/` is mounted read-only at `/config`; set `CONFIG_SERVER_ENABLED=true` and `SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888`. The `optional:` prefix allows startup when the config server is unavailable.
@@ -227,7 +228,7 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 
 - `rag_search` / `rag_query` go through a Resilience4j circuit breaker: default window 20 calls, minimum 10 calls, opens at 50% failure rate, half-open after 30s. When Embedding or Qdrant keeps failing, it returns "knowledge base retrieval temporarily unavailable (circuit open)" without occupying request threads; ingest and reindex are unaffected.
 - Tune with `RAG_QUERY_BREAKER_*` environment variables, or disable with `RAG_QUERY_BREAKER_ENABLED=false`.
-- `GET /actuator/health` returns the instance id, whether distributed mode is on, the active index lock, the directory-scan leader, the reindex task (owner / epoch / heartbeat / state store), the archive volume (enabled / writable / dir / shared), circuit state, and active profiles, making it easy to see which replica is writing.
+- `GET /actuator/health` returns the instance id, whether distributed mode is on, Redisson status, the active index lock, the directory-scan leader, the reindex task (owner / epoch / heartbeat / state store), the archive volume (enabled / writable / dir / shared), circuit state, and active profiles, making it easy to see which replica is writing.
 
 ## Configuration
 
@@ -281,13 +282,13 @@ docker compose -f compose.yaml -f compose.distributed.yaml up -d --scale small-r
 | `QDRANT_COLLECTION` | `small_rag_text` | Collection name, created automatically at startup |
 | `QDRANT_USE_TLS` | `false` | Enable TLS |
 | `QDRANT_REQUEST_TIMEOUT_MS` | `30000` | Deadline for regular Qdrant RPCs (write / delete / search); separate from the init timeout |
-| `SMALL_RAG_DISTRIBUTED_ENABLED` | `false` | Enable distributed mode (Redis lease lock); standalone does not connect to Redis |
+| `SMALL_RAG_DISTRIBUTED_ENABLED` | `false` | Enable distributed mode (Redisson RFencedLock); standalone does not connect to Redis |
 | `SMALL_RAG_TASK_STATUS_CACHE_MS` | `2000` | Cross-replica task-status read-through cache (ms); minimum interval for re-reading Qdrant when a task is not local |
 | `SMALL_RAG_ARCHIVE_SHARED` | `false` | Declare the archive directory as shared across replicas (should be `true` in distributed mode); used by startup warning and health |
 | `SMALL_RAG_MCP_PROTOCOL` | `STREAMABLE` | MCP transport: `STREAMABLE` for standalone, `STATELESS` required for multiple replicas (otherwise cross-replica sessions return 404) |
-| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | `localhost` / `6379` / empty | Redis connection (distributed only) |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` / `REDIS_DATABASE` | `localhost` / `6379` / empty / `0` | Redisson connection (distributed only) |
 | `SMALL_RAG_LOCK_LEASE` | `30s` | Index activity lock lease |
-| `SMALL_RAG_LOCK_RENEW_INTERVAL` | `10s` | Renewal interval, must be clearly shorter than the lease |
+| `SMALL_RAG_LOCK_RENEW_INTERVAL` | `10s` | Owner-diagnostic refresh interval, must be clearly shorter than the lease |
 | `SMALL_RAG_LOCK_PREFIX` | `smallrag:lock:` | Lock key prefix |
 | `CONSUL_ENABLED` | `false` (app) / `true` (gateway) | Enable Consul service registration and discovery (service name `small-rag`) |
 | `CONSUL_HOST` / `CONSUL_PORT` | `localhost` / `8500` | Consul agent address |
@@ -338,7 +339,7 @@ Image overrides: `EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1`, `EMBEDDING_MODE
 - `rag_reindex`: rebuilds only archived documents and does not clean fragments outside the archive; single-document rebuild still returns the fragment count synchronously.
 - `rag_rebuild`: deletes fragments with `chunk_type=chunk` / `chunk_type=child` / `chunk_type=parent` first, then rebuilds everything; refuses to run when the archive is empty. After completion it removes parents without children and legacy fragments missing `chunk_type`.
 - **Idempotent writes**: child point ids are deterministic (`chunk:<docId>:<chunk signature>:<index>`), so repeated upserts of the same document under the same chunking config overwrite the same points instead of creating duplicates. When the chunking config changes the signature changes and the "write new fragments → delete old fragments" flow still applies.
-- `rag_reindex` (full) / `rag_rebuild` are **async tasks**: only one reindex task may run at a time; duplicate submissions return an error. Task snapshots (the latest 20 are kept) live in the separate Qdrant collection `<QDRANT_COLLECTION>_reindex_state` (same Qdrant / persistent volume as the vectors, not dependent on the application container filesystem; the collection does not affect retrieval, empty-KB probing, or `rag_rebuild` cleanup). **The authoritative task lock is implemented by `DistributedLock`**: an in-process lease in standalone, or the Redis `reindex-task` lease plus a monotonic epoch in distributed mode; the lock point in the state collection is only a diagnostic mirror (`ownerInstance` / `epoch` / `expiresAt`) and is not used for mutual exclusion. Progress is restored after a restart: unfinished tasks become `interrupted` and **re-acquire the task lock**; with the default `REINDEX_RESUME_ON_STARTUP=true` they resume automatically (skipping completed documents and not clearing again). When auto-resume is disabled, use `rag_task_resume` to continue manually or `rag_task_cancel` to abandon and release the lock. A graceful shutdown saves running tasks as `interrupted` and yields the lease, so a restart can resume immediately; after a crash, takeover waits for lease expiry (≤30s). Tasks whose write permission was revoked by a hard timeout are not resumed.
+- `rag_reindex` (full) / `rag_rebuild` are **async tasks**: only one reindex task may run at a time; duplicate submissions return an error. Task snapshots (the latest 20 are kept) live in the separate Qdrant collection `<QDRANT_COLLECTION>_reindex_state` (same Qdrant / persistent volume as the vectors, not dependent on the application container filesystem; the collection does not affect retrieval, empty-KB probing, or `rag_rebuild` cleanup). **The authoritative task lock is implemented by `DistributedLock`**: an in-process lease in standalone, or the Redisson `reindex-task` RFencedLock plus a monotonic fencing token in distributed mode; the lock point in the state collection is only a diagnostic mirror (`ownerInstance` / `epoch` / `expiresAt`) and is not used for mutual exclusion. Progress is restored after a restart: unfinished tasks become `interrupted` and **re-acquire the task lock**; with the default `REINDEX_RESUME_ON_STARTUP=true` they resume automatically (skipping completed documents and not clearing again). When auto-resume is disabled, use `rag_task_resume` to continue manually or `rag_task_cancel` to abandon and release the lock. A graceful shutdown saves running tasks as `interrupted` and yields the lease, so a restart can resume immediately; after a crash, takeover waits for lease expiry (≤30s). Tasks whose write permission was revoked by a hard timeout are not resumed.
 - `rag_task_status` returns `status` (`queued` / `clearing` / `reindexing` / `interrupted` / `completed` / `aborted` / `cancelled` / `failed`), `total`, `processed`, `percent`, `succeeded`, `failed`, `currentDocumentId`, `lastProgressAt`, `stalled`, `cancelRequested`, `startedAt`, `finishedAt`, `error`, `revoked`, `lockReleaseAt`, `ownerInstance`, `epoch`, `heartbeatAt`. When a task is absent locally it is read from the state collection, so any replica can see the owner and tasks submitted by other replicas.
 - Watchdog: after `REINDEX_STALL_TIMEOUT_SECONDS` without progress it only marks `stalled` and warns, **keeping the task lock**; only after `REINDEX_HARD_TIMEOUT_SECONDS` does it **revoke write permission** (rejecting all subsequent Qdrant writes), cancel in-flight Embedding calls, and interrupt the worker.
 - Lock release: if the worker exits within `REINDEX_JOIN_TIMEOUT_SECONDS`, the lock is released immediately; otherwise the task enters a `REINDEX_RECOVERY_GRACE_SECONDS` grace period, after which the task lock is force-released. Once revoked, the old task can no longer write, and the grace period only needs to cover requests in flight at the moment of revocation (bounded by `QDRANT_REQUEST_TIMEOUT_MS`), so **no restart is needed**; submitting a new task during this window returns "write permission revoked, releasing task lock".

@@ -46,7 +46,7 @@ public class SourcesLeaderElection implements ApplicationRunner {
     private volatile boolean closing;
 
     /**
-     * @param lock       本地或 Redis 锁实现
+     * @param lock       本地或 Redisson 锁实现
      * @param properties 分布式配置
      */
     @Autowired

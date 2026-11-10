@@ -66,12 +66,16 @@ class LocalDistributedLockTest {
     }
 
     @Test
-    void epochsAreMonotonicPerKey() {
-        assertThat(lock.currentEpoch("k")).isZero();
-        assertThat(lock.nextEpoch("k")).isEqualTo(1L);
-        assertThat(lock.nextEpoch("k")).isEqualTo(2L);
-        assertThat(lock.currentEpoch("k")).isEqualTo(2L);
-        assertThat(lock.currentEpoch("other")).isZero();
+    void fencingTokensAreMonotonicPerKey() {
+        LockHandle first = lock.tryAcquire("k", "a", Duration.ofSeconds(30)).orElseThrow();
+        assertThat(first.fencingToken()).isEqualTo(1L);
+
+        lock.release(first);
+        LockHandle second = lock.tryAcquire("k", "b", Duration.ofSeconds(30)).orElseThrow();
+        assertThat(second.fencingToken()).isEqualTo(2L);
+
+        LockHandle other = lock.tryAcquire("other", "a", Duration.ofSeconds(30)).orElseThrow();
+        assertThat(other.fencingToken()).isEqualTo(1L);
     }
 
     private static void sleep(long millis) {

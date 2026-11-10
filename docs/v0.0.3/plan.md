@@ -2,10 +2,10 @@
 title: v0.0.3 单机与集群规划
 status: implementing
 version: 0.0.3
-updated: 2026-11-09
+updated: 2026-11-10
 owners: [zjk]
 template: docs/templates/plan.md
-related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.md, docs/v0.0.3/design/limitations.md, docs/v0.0.3/adr/0001-spring-cloud-scope.md, docs/v0.0.3/adr/0002-spring-cloud-data-plane.md]
+related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.md, docs/v0.0.3/design/limitations.md, docs/v0.0.3/adr/0001-spring-cloud-scope.md, docs/v0.0.3/adr/0002-spring-cloud-data-plane.md, docs/v0.0.3/adr/0003-redisson-distributed-lock.md]
 ---
 
 # v0.0.3 规划：单机与集群
@@ -184,6 +184,23 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 - Config Server native 仓库可返回 `small-rag/default`；应用启动日志出现 `Located environment: name=small-rag`。
 - `mvn verify -Pcontainer-it` 继续通过。
 
+### WP8 Redisson 分布式锁（v0.0.3 后继变更）— 已完成
+
+**状态**：2026-11-10 完成。distributed 锁从自研 `RedisDistributedLock`（`SET NX PX` + Lua + `INCR epoch`）迁移到 Redisson `RFencedLock`；standalone 仍为进程内锁；移除 `spring-boot-starter-data-redis`。
+
+**方案**
+
+- 新增 `RedissonDistributedLock`：`tryLockAndGetToken(0, -1, MILLISECONDS)`；watchdog 自动续租；`isHeld` 校验 `getToken() == handle.token && isLocked()`。
+- `LockHandle.token` 改为 fencing token（十进制字符串）；`FencedLease` 不再调用 `nextEpoch` / `currentEpoch`。
+- `IndexActivityGuard` / `SourcesLeaderElection` 在 `@PreDestroy` 主动释放锁；崩溃靠 Redisson watchdog 停止续租 + TTL 接管。
+- 移除 `spring-boot-starter-data-redis`；新增 `redisson` 核心依赖；Redis health 由 `RedissonHealthIndicator`（`redisson`）提供。
+
+**验收**
+
+- `mvn test` 全绿：`RedissonDistributedLockTest` 覆盖互斥、token 单调递增、旧持有者 `forceUnlock` 不影响新持有者。
+- `mvn verify -Pcontainer-it` 通过：`RedisLockContainerIT` 覆盖真实 Redis 下的互斥、锁丢失接管、旧 lease 被拒绝。
+- `IndexActivityGuardRedisIT` / `SourcesLeaderElectionRedisIT` 手动 Redis 验收通过。
+
 ## 5. 里程碑与排期
 
 | 里程碑 | 内容 | 出口标准 | 预估 |
@@ -191,6 +208,8 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | M1 集群可用 | WP1 + WP2 | 两副本无会话错误；kill 后安全接管，旧副本写不进 | 3–4 人日 |
 | M2 集群可运维 | WP3 + WP5 | 任意副本查 / 续 / 取消；health 可定位 owner / epoch | 2–3 人日 |
 | M3 数据正确性 | WP4 + WP6 | 幂等回归 + 容器化 E2E + 文档 | 3–4 人日 |
+| WP7 Spring Cloud 数据面 | 后继变更 | Gateway / Config Server / CircuitBreaker 接入 | 2 人日 |
+| WP8 Redisson 分布式锁 | 后继变更 | 锁实现从自研迁移到 Redisson，fence 语义保持不变 | 1 人日 |
 
 ## 6. 验证矩阵
 
@@ -198,7 +217,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | --- | --- | --- |
 | 启动 | jar + all-in-one 镜像 | 2 副本 + 外部依赖 |
 | MCP | STREAMABLE 全链路 | STATELESS 经 gateway 连续 50 次调用 |
-| 重建互斥 | 进程内锁 | Redis 锁 + epoch（IT 覆盖） |
+| 重建互斥 | 进程内锁 | Redisson RFencedLock + fencing token（IT 覆盖） |
 | 故障 | — | kill -9 持有者、Redis 重启、Qdrant 短暂不可用 |
 | 归档 | 本地卷 | 共享卷 + health 校验 |
 | 容器 E2E | — | `mvn verify -Pcontainer-it`（Qdrant + Redis） |
@@ -212,6 +231,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | D3 | 幂等改造 | 本期做：chunk id 确定性化，接受一次全量重切 |
 | D4 | 容器化测试 | 纳入 CI：Testcontainers E2E 在 CI 跑 |
 | D5 | Spring Cloud 范围 | 引入 Gateway（WebFlux）、Config Server（native）、CircuitBreaker（Resilience4j 实现）；保留 Consul discovery；移除 HAProxy（见 ADR-0002，ADR-0001 已 superseded） |
+| D6 | 分布式锁实现 | 使用 Redisson `RFencedLock`（watchdog 续租）；保留 standalone 进程内锁；移除 `spring-boot-starter-data-redis`（见 ADR-0003） |
 
 ## 8. 实施顺序与分支
 
@@ -223,6 +243,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | `feature/cluster-ops` | WP3 + WP5 | ✅ 已完成：`feat: expose reindex tasks across replicas and report cluster health` |
 | `feature/idempotent-ingest` | WP4 + WP6 | ✅ 已完成：`refactor: make chunk point ids deterministic`、`test: add Testcontainers container coverage`、`ci: run unit and container tests` |
 | `feature/spring-cloud-data-plane` | WP7 | ✅ 已完成：引入 Spring Cloud Gateway、Config Server、CircuitBreaker |
+| `feature/redisson-lock` | WP8 | ✅ 已完成：Redisson RFencedLock 替换自研 Redis 锁 |
 
 顺序：`cluster-safety` → `cluster-ops` → `idempotent-ingest`。前两个分支不改变 chunk id，可独立发布验证。
 

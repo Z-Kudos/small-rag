@@ -2,7 +2,7 @@
 title: DEV-MEMORY
 status: implementing
 version: 0.0.3
-updated: 2026-11-09
+updated: 2026-11-10
 owners: [zjk]
 related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 ---
@@ -19,9 +19,9 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 - 上一版：`v0.0.2`（2026-11-07，`main` tag，双远程已推送）。
 - 主题：**单机与集群**。
 - 规划：[`docs/v0.0.3/plan.md`](docs/v0.0.3/plan.md)。
-- 里程碑：M1（WP1 + WP2）✅ → M2（WP3 + WP5）✅ → M3（WP4 + WP6）✅ → WP7（Spring Cloud 数据面）✅。
+- 里程碑：M1（WP1 + WP2）✅ → M2（WP3 + WP5）✅ → M3（WP4 + WP6）✅ → WP7（Spring Cloud 数据面）✅ → WP8（Redisson 锁）✅。
 - 状态：v0.0.3 已发布（`main` + tag）；`develop` 保持 v0.0.3 并包含 Spring Cloud 数据面后继变更，等待确认后再切换下一版本。
-- 已完成：`feature/cluster-safety`、`feature/cluster-ops`、`feature/idempotent-ingest`、`feature/spring-cloud-data-plane`。
+- 已完成：`feature/cluster-safety`、`feature/cluster-ops`、`feature/idempotent-ingest`、`feature/spring-cloud-data-plane`、`feature/redisson-lock`。
 - 文档：`README.md`（简体中文）/ `README.en.md`（English）双语；版本文档统一放在 `docs/v0.0.3/`；模板与写作规范在 `docs/templates/`。
 
 **已确认决策（2026-11-09）**
@@ -38,7 +38,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 
 - JDK 25（`maven.compiler.release=25`）；本机 `mvn -v` 已指向 JDK 25，若默认不是 25 用 `JAVA_HOME` 指定。
 - 构建：`mvn clean package`（根模块一次构建 `app` / `gateway` / `config-server`）；单测：`mvn test`（默认不依赖外部服务，**179** 个测试全绿：app 176 + gateway 2 + config-server 1，`*RedisIT` / `*ContainerIT` 跳过）。
-- 容器 E2E：`mvn verify -Pcontainer-it`（Testcontainers，需 Docker/Podman）。`RagQdrantContainerIT`（3）+ `RedisLockContainerIT`（3）全绿；本机镜像可用 `-Dsmallrag.qdrant.image=...` / `-Dsmallrag.redis.image=...` 覆盖。
+- 容器 E2E：`mvn verify -Pcontainer-it`（Testcontainers，需 Docker/Podman）。`RagQdrantContainerIT`（3）+ `RedisLockContainerIT`（4）全绿；本机镜像可用 `-Dsmallrag.qdrant.image=...` / `-Dsmallrag.redis.image=...` 覆盖。
 - Redis 集成测试：`redis-server --port 6390 --save '' --appendonly no --daemonize yes`，再 `mvn test -Dtest='*RedisIT' -Dsmallrag.redis.it=true`。
 - 切分断点校准：`mvn test -Dtest=BreakpointPercentileCalibration -Dcalibrate=true`（需本机 OpenAI 兼容 Embedding，可用 `EMBEDDING_*` 覆盖）。
 - 镜像：`podman compose -f compose.yaml build small-rag` 冷构建 **126s**，产出 `small-rag:0.0.3`（649 MB）。
@@ -101,24 +101,26 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.3/plan.md]
 - 开关：`smallrag.distributed.enabled`（默认 false）。**不是 Spring profile**，由 `SMALL_RAG_DISTRIBUTED_ENABLED` + `compose.distributed.yaml` 开启。
 - 锁配置：`lock.lease`（30s）、`lock.renew-interval`（10s，下限 10ms）、`lock.key-prefix`；Redis 走 `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD`。
 - `DistributedLock`：`tryAcquire` / `renew` / `release` / `isHeld` / `currentOwner` / `nextEpoch` / `currentEpoch`；`LockHandle` 带 owner + token + 本地到期时间，按 value 匹配，旧持有者不会误删；`FencedLease` 组合租约与 epoch。
-- `IndexActivityGuard`：持锁期间后台续租；续租失败即 `lockLost=true` 并停止续租；`isHeldBy` 每次向锁存储远程校验 owner + token。重建、导入、启动重切在每次写入前校验。`@PreDestroy` 只停止续租，不主动释放。
+- `IndexActivityGuard`：distributed 下由 Redisson watchdog 自动续租；`renew` 只校验状态并刷新 owner 诊断镜像；续租失败即 `lockLost=true`。`isHeldBy` 每次向锁存储远程校验 fencing token。重建、导入、启动重切在每次写入前校验。`@PreDestroy` 会主动释放锁。
 - **MCP 传输**：`SMALL_RAG_MCP_PROTOCOL`（默认 `STREAMABLE`）；`compose.distributed.yaml` 设 `STATELESS`，`McpTransportGuard` 对 distributed + 非 STATELESS 启动告警。
 - `SourcesLeaderElection`：竞争 `sources-leader` 租约；启动 / 定时 / watcher 自动扫描仅 leader 执行，手动 `rag_sync_sources` 任意副本可发起。
 - `compose.distributed.yaml`：外部 Qdrant / Redis / Consul / Embedding / Config Server + Spring Cloud Gateway；应用端口用 `!reset []` 去掉；`small_rag_data` 为共享归档卷；需 Compose v2.24+。
 - Consul：`CONSUL_ENABLED`（默认 false）同时控制 discovery / config；注册 `small-rag`，健康检查 `/actuator/health`；`instance-id` 默认 `${spring.application.name}-${HOSTNAME}-${server.port}`。Consul 只做发现；配置默认走 Config Server（`CONFIG_SERVER_ENABLED` + `optional:configserver:`），Consul KV 仍可选。
 - Spring Cloud 数据面：`gateway`（WebFlux + Consul + LoadBalancer，替换 HAProxy）、`config-server`（native，`config-repo/` → `/config`）、`app` 的检索熔断使用 `spring-cloud-starter-circuitbreaker-resilience4j`（不直接依赖 `resilience4j-circuitbreaker`）；Consul 只做发现。决策见 [`docs/v0.0.3/adr/0002-spring-cloud-data-plane.md`](docs/v0.0.3/adr/0002-spring-cloud-data-plane.md)。
+- 分布式锁：distributed 使用 Redisson `RFencedLock`（每次获取返回单调 fencing token；watchdog 进程存活期间自动续租；`@PreDestroy` 主动释放，崩溃靠 TTL 接管）；standalone 仍为进程内锁。已移除 `spring-boot-starter-data-redis`；Redis 健康检查为 `redisson` 组件。决策见 [`docs/v0.0.3/adr/0003-redisson-distributed-lock.md`](docs/v0.0.3/adr/0003-redisson-distributed-lock.md)。
 - 已知边界（v0.0.3 待改）：原持有者仍在运行且租约有效时，其他副本无法强制中断其线程，`rag_task_cancel` 只返回持有者；`rag_task_*` 依赖 Qdrant 状态集合，Qdrant 不可用时退化为本实例内存视图。
 
 ### 4.6 健康与熔断
 
 - `QueryCircuitBreaker` 使用 Spring Cloud CircuitBreaker API（`CircuitBreakerFactory`，Resilience4j 实现）；`rag.query-breaker.*` 经 `QueryCircuitBreakerConfiguration` 映射；只包 `rag_search` / `rag_query`；默认窗口 20、最小调用 10、失败率 50%、打开 30s、半开 3 次；打开时抛 `QueryUnavailableException`，入库 / 重建不受影响。
-- `/actuator/health` 只暴露 health；`IndexLockHealthIndicator` 输出 `instanceId`、`distributed`、`profiles`、`activeLock`、`sourcesLeader`、`archive`（enabled / writable / dir / shared）、`reindexTask`（status / taskId / ownerInstance / epoch / lastHeartbeat / stateStore / lockMirror）、`queryCircuit`、`queryFailureRate`（底层为 Spring Cloud CircuitBreaker / Resilience4j registry）。Redis 健康检查由 data-redis 自动提供（仅 distributed 开启）。
+- `/actuator/health` 只暴露 health；`IndexLockHealthIndicator` 输出 `instanceId`、`distributed`、`profiles`、`activeLock`、`sourcesLeader`、`archive`（enabled / writable / dir / shared）、`reindexTask`（status / taskId / ownerInstance / epoch / lastHeartbeat / stateStore / lockMirror）、`queryCircuit`、`queryFailureRate`（底层为 Spring Cloud CircuitBreaker / Resilience4j registry）。Redis 健康检查由 `RedissonHealthIndicator` 提供（仅 distributed 开启）。
 - 启动一致性：权威任务锁为空或 taskId 与 Qdrant 镜像不一致时，以权威锁为准清除镜像；distributed 且 `SMALL_RAG_ARCHIVE_SHARED!=true` 时 `ClusterStartupGuard` 启动告警。
 - Spring Boot 4 包名：`org.springframework.boot.health.contributor.Health/HealthIndicator`（不是 `org.springframework.boot.actuate.health`）。
 
 ## 5. 关键约束与坑
 
 - **Spring 多构造器 bean** 必须给 Spring 用的构造器加 `@Autowired`（`IndexActivityGuard`、`QueryCircuitBreaker`、`ReindexStateStore`），否则 Spring 7.1 RC 报 “No default constructor found”；`SmallRagApplicationTest` 只覆盖 app 上下文，Gateway / Config Server 各有独立上下文测试。
+- **Redisson 测试**：`RedisLockContainerIT` 用 testcontainers 真实 Redis 覆盖 RFencedLock；`*RedisIT` 用本机 Redis 6390；测试副本必须用独立 RedissonClient，不能共享同一个 client（同一线程会被 Redisson 视为同一持有者，失去互斥意义）。
 - **Jackson 3**：import 一律 `tools.jackson.*`；`com.fasterxml.jackson.*` 编译失败。
 - **Lombok**：JDK 23+ 需 `<maven.compiler.proc>full</maven.compiler.proc>`。
 - **依赖源**：`pom.xml` 首位 `aliyun-public`，`spring-milestones` 回退；容器构建用 `docker/maven-settings.xml`（`mirrorOf=*,!spring-milestones`）。本机 `~/.m2/settings.xml` 若有 `mirrorOf=*` 会覆盖 pom。

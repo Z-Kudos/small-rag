@@ -19,7 +19,7 @@ import java.time.Duration;
 public class DistributedProperties {
 
     /**
-     * 是否启用分布式模式（Redis 租约锁、Consul 等）。
+     * 是否启用分布式模式（Redisson RFencedLock、Consul 等）。
      */
     private boolean enabled;
 
@@ -37,6 +37,11 @@ public class DistributedProperties {
      * 分布式锁参数。
      */
     private Lock lock = new Lock();
+
+    /**
+     * Redisson 连接参数（distributed 模式必需；standalone 不会连接）。
+     */
+    private Redis redis = new Redis();
 
     /**
      * 锁租约与续租配置。
@@ -58,6 +63,33 @@ public class DistributedProperties {
          * Redis key 前缀。
          */
         private String keyPrefix = "smallrag:lock:";
+    }
+
+    /**
+     * Redisson 单节点连接配置。
+     */
+    @Data
+    public static class Redis {
+
+        /**
+         * Redis 地址。
+         */
+        private String host = "localhost";
+
+        /**
+         * Redis 端口。
+         */
+        private int port = 6379;
+
+        /**
+         * Redis 密码；留空表示不使用密码。
+         */
+        private String password = "";
+
+        /**
+         * Redis 逻辑库。
+         */
+        private int database;
     }
 
     private static String defaultInstanceId() {

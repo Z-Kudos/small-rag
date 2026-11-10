@@ -2,10 +2,10 @@
 title: 架构与设计要点
 status: implementing
 version: 0.0.3
-updated: 2026-11-09
+updated: 2026-11-10
 owners: [zjk]
 template: docs/templates/design.md
-related: [README.md, docs/v0.0.3/plan.md]
+related: [README.md, docs/v0.0.3/plan.md, docs/v0.0.3/adr/0003-redisson-distributed-lock.md]
 ---
 
 # 架构与设计要点
@@ -45,7 +45,8 @@ related: [README.md, docs/v0.0.3/plan.md]
 - **入口网关**：`gateway` 模块使用 Spring Cloud Gateway（WebFlux），路由 `Path=/mcp` → `lb://small-rag`；Consul 提供服务实例，Spring Cloud LoadBalancer 做客户端负载均衡；不再使用 HAProxy。
 - **配置中心**：`config-server` 模块使用 native 文件系统后端，`config-repo/` 挂载到 `/config`；`app` 通过 `optional:configserver:` 拉取配置，Config Server 不依赖 Consul，避免循环依赖。
 - **集群会话**：standalone 使用 `STREAMABLE`；distributed 多副本使用 `STATELESS`（`SMALL_RAG_MCP_PROTOCOL`），会话不再保存在单副本内存，Gateway 可继续轮询任意副本。`McpTransportGuard` 在 distributed 且非 `STATELESS` 时启动告警。
-- **任务所有权**：重建任务持有 `<lock-prefix>reindex-task` 租约 + 单调 fence epoch（standalone 进程内、distributed Redis）；每次 Qdrant 变更前远程校验持有者、token 与 epoch 仍最新，旧持有者恢复后不能继续写入。distributed 下 Redis 不可用时 fail-closed。Qdrant `_reindex_state` 的任务锁 point 只作诊断镜像，不参与互斥。
+- **任务所有权**：重建任务持有 `<lock-prefix>reindex-task` 租约 + 单调 fencing token（standalone 进程内计数器、distributed Redisson `RFencedLock`）；每次 Qdrant 变更前远程校验持有者、token 仍最新，旧持有者恢复后不能继续写入。distributed 下 Redis 不可用时 fail-closed。Qdrant `_reindex_state` 的任务锁 point 只作诊断镜像，不参与互斥。
+- **分布式锁**：distributed 使用 Redisson `RFencedLock`；watchdog 在进程存活期间自动续租，实例优雅退出由 `IndexActivityGuard` / `SourcesLeaderElection` 主动释放，崩溃靠 Redisson 停止续租 + TTL 接管。`<lock-key>:owner` 仅作诊断镜像。
 - **跨副本任务视图**：`rag_task_status` 本地缺失时回读 Qdrant 状态集合（`task-status-cache-ms` 读穿缓存）；`rag_task_resume` / `rag_task_cancel` 先抢 `reindex-task` 租约，抢到即接管（epoch 递增），抢不到返回锁镜像中的持有者实例。启动时校验镜像与权威锁一致，以权威锁为准清理过期镜像。
 
 ## 4. 包结构
@@ -64,11 +65,11 @@ rag/sources/    SourceSyncService（多目录 Markdown 扫描/增量/定时/手�
 rag/chunking/   ChunkingService、ChunkingStrategy、ChunkingSignature、TextChunk、
                 TextChunker、RecursiveTextChunker、MarkdownChunker、SemanticTextChunker
 rag/archive/    DocumentArchive、ArchivedDocument、ArchivedDocumentSummary（原文归档、摘要索引与签名记录）
-distributed/    DistributedLock、LockHandle、FencedLease、LocalDistributedLock、RedisDistributedLock
+distributed/    DistributedLock、LockHandle、FencedLease、LocalDistributedLock、RedissonDistributedLock
 config/         QdrantConfig、McpServerConfig、McpTransportGuard（协议与运行形态校验）、
                 ClusterStartupGuard（共享归档告警）、ArchiveProperties、EmbeddingConfig（HTTP 超时）、
                 DistributedLockConfig、DistributedProperties、RagProperties、QdrantProperties、
-                IndexLockHealthIndicator
+                IndexLockHealthIndicator、RedissonHealthIndicator
 docker/         start-qdrant.sh / start-llama.sh / start-app.sh / supervisord*.conf
 
 gateway/src/main/java/com/smallrag/gateway/       GatewayApplication（WebFlux 路由）

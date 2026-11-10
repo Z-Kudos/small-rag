@@ -2,7 +2,7 @@
 title: ROADMAP
 status: implementing
 version: 0.0.3
-updated: 2026-11-09
+updated: 2026-11-10
 owners: [zjk]
 related: [docs/v0.0.3/plan.md, docs/v0.0.3/adr/0002-spring-cloud-data-plane.md, DEV-MEMORY.md]
 ---
@@ -27,7 +27,7 @@ v0.0.3 主题：**单机与集群**——一套语义、两种形态。
 | 开关 | 无 | `SMALL_RAG_DISTRIBUTED_ENABLED=true` + `compose.distributed.yaml` |
 | 进程 | 单容器 supervisord：app + Qdrant + llama-server | app × N + 外部 Qdrant / Redis / Consul / Embedding |
 | MCP 传输 | `STREAMABLE` | `STATELESS`（v0.0.3 起） |
-| 重建 / 导入互斥 | 进程内锁 + Qdrant 状态集合 | Redis 租约锁 + fencing token |
+| 重建 / 导入互斥 | 进程内锁 + Qdrant 状态集合 | Redisson RFencedLock + fencing token |
 | 原文归档 | 本地卷 | 共享 RWX 卷（NFS / CephFS） |
 | 目录扫描 | 每实例执行 | 仅 leader 执行 |
 | 查询保护 | 超时 | Resilience4j 熔断 + 超时 |
@@ -58,17 +58,17 @@ v0.0.3 主题：**单机与集群**——一套语义、两种形态。
 ### v0.0.3 后继变更：Spring Cloud 数据面
 
 - ✅ **WP7 网关与配置中心**：Spring Cloud Gateway（WebFlux）替换 HAProxy；Config Server native 后端；检索熔断改用 Spring Cloud CircuitBreaker。
-- 验收：Gateway 通过 Consul + LoadBalancer 路由 `/mcp`；应用可从 Config Server 拉取配置；`mvn test` 覆盖三个模块。
+- ✅ **WP8 分布式锁**：自研 Redis 锁迁移到 Redisson `RFencedLock`；fencing token 语义不变。
+- 验收：Gateway 通过 Consul + LoadBalancer 路由 `/mcp`；应用可从 Config Server 拉取配置；`mvn test` 覆盖三个模块；`mvn verify -Pcontainer-it` 通过。
 
 ## 4. 已完成（v0.0.2）
 
 - ✅ 双运行模式：`SMALL_RAG_RUNTIME=all-in-one|app-only`
-- ✅ 分布式锁：`LocalDistributedLock` / `RedisDistributedLock`（`SET NX PX` + Lua）
+- ✅ 分布式锁：`LocalDistributedLock` / 自研 `RedisDistributedLock`（v0.0.3 后继 WP8 已迁移到 Redisson）
 - ✅ 活动锁远程校验与丢失即停写
 - ✅ 目录扫描 leader 选举（`SourcesLeaderElection`）
 - ✅ Resilience4j 检索熔断；`/actuator/health` 诊断
 - ✅ Consul discovery / config（默认关闭）
-- ✅ HAProxy gateway + `compose.distributed.yaml`
 - ✅ 离线 RAG 评测（recall@k / MRR / nDCG）
 
 ## 5. 非目标（v0.0.3）

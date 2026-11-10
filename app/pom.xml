@@ -45,10 +45,11 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
-        <!-- 分布式模式：Redis 租约锁（standalone 模式不会连接 Redis） -->
+        <!-- 分布式模式：Redisson 分布式锁（standalone 模式不会连接 Redis） -->
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-redis</artifactId>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson</artifactId>
+            <version>4.7.0</version>
         </dependency>
 
         <!-- 检索路径熔断：Spring Cloud CircuitBreaker（Resilience4j 实现） -->
