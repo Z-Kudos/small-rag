@@ -1,6 +1,6 @@
 ---
 title: 单机架构与设计要点
-status: implementing
+status: done
 version: 0.0.4
 updated: 2026-11-10
 owners: [zjk]

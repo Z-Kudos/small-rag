@@ -1,6 +1,6 @@
 ---
 title: ROADMAP
-status: implementing
+status: done
 version: 0.0.4
 updated: 2026-11-10
 owners: [zjk]

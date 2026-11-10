@@ -1,6 +1,6 @@
 ---
 title: 单机版已知限制与风险
-status: implementing
+status: done
 version: 0.0.4
 updated: 2026-11-10
 owners: [zjk]
