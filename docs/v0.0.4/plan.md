@@ -1,6 +1,6 @@
 ---
 title: v0.0.4 单机轻量化规划
-status: implementing
+status: done
 version: 0.0.4
 updated: 2026-11-10
 owners: [zjk]

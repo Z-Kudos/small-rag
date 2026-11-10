@@ -1,6 +1,6 @@
 ---
 title: DEV-MEMORY
-status: implementing
+status: done
 version: 0.0.4
 updated: 2026-11-10
 owners: [zjk]
@@ -14,11 +14,11 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 
 ## 1. 当前阶段
 
-- 版本：`0.0.4`（开发中）；`develop`。
+- 版本：`0.0.4`（已发布，`main` tag `v0.0.4`）。
 - 上一版：`v0.0.3`（已发布；分布式版本已封存为 `~/Projects/cloud-rag`）。
 - 主题：**单机轻量化**。
 - 规划：[`docs/v0.0.4/plan.md`](docs/v0.0.4/plan.md)。
-- 状态：WP1–WP3 已完成；准备发布 v0.0.4。
+- 状态：WP1–WP3 已完成；`main` + tag `v0.0.4` 已发布。
 - 文档：`README.md`（简体中文）/ `README.en.md`（English）；设计/ADR 在 `docs/v0.0.4/`；`docs/v0.0.3/` 冻结。
 - **不切换版本**：下一次版本变更需人工确认。
 
@@ -92,5 +92,5 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 
 ## 6. 待办
 
-- v0.0.4：代码/文档完成，准备发布（release/0.0.4 → main + tag）。
+- v0.0.4：已发布；下一版本待确认。
 - 需要多副本时使用 `~/Projects/cloud-rag`。
