@@ -13,11 +13,10 @@ FROM ${MAVEN_IMAGE} AS build
 WORKDIR /workspace
 
 COPY pom.xml ./
-COPY app/pom.xml ./app/pom.xml
 # 容器内构建统一走阿里云镜像（Spring RC 构件仍从 repo.spring.io 回退）
 COPY docker/maven-settings.xml ./maven-settings.xml
-COPY app/src ./app/src
-RUN mvn -B -q -s /workspace/maven-settings.xml -f app/pom.xml -DskipTests clean package
+COPY src ./src
+RUN mvn -B -q -s /workspace/maven-settings.xml -DskipTests clean package
 
 # ---------- 编译 llama.cpp ----------
 # 编译基底 = 运行基底（qdrant 镜像 = debian:13-slim），产物无 glibc 兼容问题；
@@ -67,12 +66,11 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY --from=build --chown=app:app /workspace/app/target/small-rag-*.jar /app/app.jar
+COPY --from=build --chown=app:app /workspace/target/small-rag-*.jar /app/app.jar
 COPY --chown=app:app docker/start-qdrant.sh /app/start-qdrant.sh
 COPY --chown=app:app docker/start-llama.sh /app/start-llama.sh
 COPY --chown=app:app docker/start-app.sh /app/start-app.sh
 COPY --chown=app:app docker/supervisord.conf /app/supervisord-all-in-one.conf
-COPY --chown=app:app docker/supervisord-app-only.conf /app/supervisord-app-only.conf
 COPY --chown=app:app docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod 0755 /app/start-qdrant.sh /app/start-llama.sh /app/start-app.sh /app/entrypoint.sh
 

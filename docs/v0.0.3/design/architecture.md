@@ -1,6 +1,6 @@
 ---
 title: 架构与设计要点
-status: implementing
+status: done
 version: 0.0.3
 updated: 2026-11-10
 owners: [zjk]
@@ -9,6 +9,8 @@ related: [README.md, docs/v0.0.3/plan.md, docs/v0.0.3/adr/0003-redisson-distribu
 ---
 
 # 架构与设计要点
+
+> v0.0.3 已发布；分布式版本已封存为 `cloud-rag`。本文冻结，不再更新。
 
 > 面向开发者。使用说明见 [`README.md`](../../../README.md)。
 

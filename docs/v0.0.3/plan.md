@@ -1,6 +1,6 @@
 ---
 title: v0.0.3 单机与集群规划
-status: implementing
+status: done
 version: 0.0.3
 updated: 2026-11-10
 owners: [zjk]
@@ -9,6 +9,8 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 ---
 
 # v0.0.3 规划：单机与集群
+
+> v0.0.3 已发布；分布式版本已封存为 `cloud-rag`。本文冻结，不再更新。
 
 > 主题：**一套语义、两种形态**——standalone 保持零新增外部依赖，distributed 做到可横向扩展、可安全接管。
 

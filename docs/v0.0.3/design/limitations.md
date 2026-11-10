@@ -1,6 +1,6 @@
 ---
 title: 已知限制与风险
-status: implementing
+status: done
 version: 0.0.3
 updated: 2026-11-10
 owners: [zjk]
@@ -9,6 +9,8 @@ related: [README.md, docs/v0.0.3/plan.md, docs/v0.0.3/adr/0003-redisson-distribu
 ---
 
 # 已知限制与风险
+
+> v0.0.3 已发布；分布式版本已封存为 `cloud-rag`。本文冻结，不再更新。
 
 > 使用与部署注意事项见 [`README.md`](../../../README.md)。v0.0.3 正在修复的集群问题见 [`docs/v0.0.3/plan.md`](../plan.md)。
 
