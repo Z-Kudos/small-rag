@@ -11,13 +11,13 @@ import org.springframework.stereotype.Component;
 import java.util.function.Supplier;
 
 /**
- * 检索路径熔断器。
+ * 检索路径熔断器（单机版，直接使用 Resilience4j）。
  *
  * <p>只包住 {@code rag_search} / {@code rag_query} 的检索调用（Embedding + Qdrant）。
  * 连续失败或慢调用达到阈值后打开熔断，后续请求快速失败，避免线程被慢调用占满；
  * 入库与重建不经过这里，仍按原有的重试/续接策略处理。
  *
- * <p>关闭时退化为直接调用，保持 standalone 的简单行为。
+ * <p>关闭时退化为直接调用，保持单机部署的简单行为。
  *
  * @author zjk
  */

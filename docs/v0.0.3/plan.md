@@ -2,13 +2,15 @@
 title: v0.0.3 单机与集群规划
 status: done
 version: 0.0.3
-updated: 2026-11-09
+updated: 2026-11-10
 owners: [zjk]
 template: docs/templates/plan.md
-related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.md, docs/v0.0.3/design/limitations.md, docs/v0.0.3/adr/0001-spring-cloud-scope.md]
+related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.md, docs/v0.0.3/design/limitations.md, docs/v0.0.3/adr/0001-spring-cloud-scope.md, docs/v0.0.3/adr/0002-spring-cloud-data-plane.md, docs/v0.0.3/adr/0003-redisson-distributed-lock.md]
 ---
 
 # v0.0.3 规划：单机与集群
+
+> v0.0.3 已发布；分布式版本已封存为 `cloud-rag`。本文冻结，不再更新。
 
 > 主题：**一套语义、两种形态**——standalone 保持零新增外部依赖，distributed 做到可横向扩展、可安全接管。
 
@@ -30,7 +32,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 - 不强制使用 Redis / Consul。
 - 不引入 Kafka / Spring Cloud Stream / Bus。
 - 不改变 MCP 工具签名与 `rag_query` 纯文本语义。
-- Spring Cloud Gateway 仍为可选，不阻塞本版本。
+- Spring Cloud Gateway / Config Server 已纳入 v0.0.3 后继变更，见 WP7。
 
 ## 2. 原则
 
@@ -38,7 +40,9 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 2. **单机零回归**：集群能力在 `smallrag.distributed.enabled=false` 时退化到进程内实现。
 3. **状态以外部存储为准**：Qdrant 存快照，Redis 存租约与 fencing；内存只做本实例加速。
 
-## 3. 现状与差距（已核对代码）
+## 3. 现状与差距（v0.0.3 开工基线，已核对代码）
+
+> 以下 G1–G8 是开工时的现状；WP1–WP7 已完成对应改造，保留此表用于回溯问题来源。
 
 | # | 能力 | 单机 | 集群 | 差距 / 影响 |
 | --- | --- | --- | --- | --- |
@@ -71,7 +75,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 
 - distributed 模式设 `spring.ai.mcp.server.protocol=STATELESS`（已确认 Spring AI 2.0.2 + WebMVC 支持，端点仍是 `/mcp`）。
 - standalone 保持 `STREAMABLE`。
-- HAProxy 保留 `roundrobin`；若坚持 STREAMABLE 集群，文档给出 `balance source` 与限制说明。
+- 网关保留轮询；WP7 已改为 Spring Cloud Gateway + Consul + LoadBalancer。
 - 工具走注解扫描，`McpServerConfig` 无需改；需验证 stateless 下 13 个工具全部可见。
 
 **验收**
@@ -165,6 +169,40 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 - 真实语料评测 opt-in：`-Dsmallrag.eval.real=true`（需外部 Embedding）。
 - 文档：standalone → distributed 迁移、容量、故障处理、STATELESS 限制。
 
+### WP7 Spring Cloud 数据面（v0.0.3 后继变更）— 已完成
+
+**状态**：2026-11-09 完成。仓库拆为 `app` / `gateway` / `config-server` 三个 Maven 模块；Gateway 使用 WebFlux + Consul + LoadBalancer 替换 HAProxy；Config Server 使用 native 文件系统后端；检索熔断改用 Spring Cloud CircuitBreaker（Resilience4j 实现）。
+
+**方案**
+
+- `gateway`：`spring-cloud-starter-gateway-server-webflux`，路由 `Path=/mcp` → `lb://small-rag`，长响应超时 1h；Caffeine 缓存 LoadBalancer。
+- `config-server`：`spring-cloud-config-server` + native，`config-repo/` 挂载到 `/config`；应用用 `CONFIG_SERVER_ENABLED` + `SPRING_CONFIG_IMPORT=optional:configserver:...` 拉取。
+- `app`：用 `spring-cloud-starter-circuitbreaker-resilience4j` 替代直接依赖 `resilience4j-circuitbreaker`；`rag.query-breaker.*` 映射到 `CircuitBreakerFactory`。
+- `compose.distributed.yaml` 移除 HAProxy，增加 `config-server` 与 `gateway`；外部依赖增加 Config Server。
+
+**验收**
+
+- `mvn test` 覆盖三个模块；Gateway 路由用 SimpleDiscoveryClient 做端到端代理测试。
+- Config Server native 仓库可返回 `small-rag/default`；应用启动日志出现 `Located environment: name=small-rag`。
+- `mvn verify -Pcontainer-it` 继续通过。
+
+### WP8 Redisson 分布式锁（v0.0.3 后继变更）— 已完成
+
+**状态**：2026-11-10 完成。distributed 锁从自研 `RedisDistributedLock`（`SET NX PX` + Lua + `INCR epoch`）迁移到 Redisson `RFencedLock`；standalone 仍为进程内锁；移除 `spring-boot-starter-data-redis`。
+
+**方案**
+
+- 新增 `RedissonDistributedLock`：`tryLockAndGetToken(0, -1, MILLISECONDS)`；watchdog 自动续租；`isHeld` 校验 `getToken() == handle.token && isLocked()`。
+- `LockHandle.token` 改为 fencing token（十进制字符串）；`FencedLease` 不再调用 `nextEpoch` / `currentEpoch`。
+- `IndexActivityGuard` / `SourcesLeaderElection` 在 `@PreDestroy` 主动释放锁；崩溃靠 Redisson watchdog 停止续租 + TTL 接管。
+- 移除 `spring-boot-starter-data-redis`；新增 `redisson` 核心依赖；Redis health 由 `RedissonHealthIndicator`（`redisson`）提供。
+
+**验收**
+
+- `mvn test` 全绿：`RedissonDistributedLockTest` 覆盖互斥、token 单调递增、旧持有者 `forceUnlock` 不影响新持有者。
+- `mvn verify -Pcontainer-it` 通过：`RedisLockContainerIT` 覆盖真实 Redis 下的互斥、锁丢失接管、旧 lease 被拒绝。
+- `IndexActivityGuardRedisIT` / `SourcesLeaderElectionRedisIT` 手动 Redis 验收通过。
+
 ## 5. 里程碑与排期
 
 | 里程碑 | 内容 | 出口标准 | 预估 |
@@ -172,6 +210,8 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | M1 集群可用 | WP1 + WP2 | 两副本无会话错误；kill 后安全接管，旧副本写不进 | 3–4 人日 |
 | M2 集群可运维 | WP3 + WP5 | 任意副本查 / 续 / 取消；health 可定位 owner / epoch | 2–3 人日 |
 | M3 数据正确性 | WP4 + WP6 | 幂等回归 + 容器化 E2E + 文档 | 3–4 人日 |
+| WP7 Spring Cloud 数据面 | 后继变更 | Gateway / Config Server / CircuitBreaker 接入 | 2 人日 |
+| WP8 Redisson 分布式锁 | 后继变更 | 锁实现从自研迁移到 Redisson，fence 语义保持不变 | 1 人日 |
 
 ## 6. 验证矩阵
 
@@ -179,7 +219,7 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | --- | --- | --- |
 | 启动 | jar + all-in-one 镜像 | 2 副本 + 外部依赖 |
 | MCP | STREAMABLE 全链路 | STATELESS 经 gateway 连续 50 次调用 |
-| 重建互斥 | 进程内锁 | Redis 锁 + epoch（IT 覆盖） |
+| 重建互斥 | 进程内锁 | Redisson RFencedLock + fencing token（IT 覆盖） |
 | 故障 | — | kill -9 持有者、Redis 重启、Qdrant 短暂不可用 |
 | 归档 | 本地卷 | 共享卷 + health 校验 |
 | 容器 E2E | — | `mvn verify -Pcontainer-it`（Qdrant + Redis） |
@@ -192,7 +232,8 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | D2 | 集群传输 | distributed 默认 `STATELESS`；standalone 保持 `STREAMABLE` |
 | D3 | 幂等改造 | 本期做：chunk id 确定性化，接受一次全量重切 |
 | D4 | 容器化测试 | 纳入 CI：Testcontainers E2E 在 CI 跑 |
-| D5 | Spring Cloud 范围 | 只保留 Consul discovery / config（可选），排除 LoadBalancer；不引入 Gateway / Config Server / Bus / Vault / K8s / Feign / CircuitBreaker 包装（见 ADR-0001） |
+| D5 | Spring Cloud 范围 | 引入 Gateway（WebFlux）、Config Server（native）、CircuitBreaker（Resilience4j 实现）；保留 Consul discovery；移除 HAProxy（见 ADR-0002，ADR-0001 已 superseded） |
+| D6 | 分布式锁实现 | 使用 Redisson `RFencedLock`（watchdog 续租）；保留 standalone 进程内锁；移除 `spring-boot-starter-data-redis`（见 ADR-0003） |
 
 ## 8. 实施顺序与分支
 
@@ -203,6 +244,8 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | `feature/cluster-safety` | WP1 + WP2 | ✅ 已完成：`feat: stateless MCP in distributed mode and fenced reindex task lease` |
 | `feature/cluster-ops` | WP3 + WP5 | ✅ 已完成：`feat: expose reindex tasks across replicas and report cluster health` |
 | `feature/idempotent-ingest` | WP4 + WP6 | ✅ 已完成：`refactor: make chunk point ids deterministic`、`test: add Testcontainers container coverage`、`ci: run unit and container tests` |
+| `feature/spring-cloud-data-plane` | WP7 | ✅ 已完成：引入 Spring Cloud Gateway、Config Server、CircuitBreaker |
+| `feature/redisson-lock` | WP8 | ✅ 已完成：Redisson RFencedLock 替换自研 Redis 锁 |
 
 顺序：`cluster-safety` → `cluster-ops` → `idempotent-ingest`。前两个分支不改变 chunk id，可独立发布验证。
 
@@ -217,26 +260,32 @@ related: [AGENTS.md, ROADMAP.md, DEV-MEMORY.md, docs/v0.0.3/design/architecture.
 | `smallrag.distributed.task-status-cache-ms` | `2000` | 跨副本状态读穿缓存 |
 | `smallrag.archive.shared` | `false` | distributed 部署设 `true`，health / 启动告警据此判断共享卷 |
 | `SMALL_RAG_ARCHIVE_SHARED` | `false` | 上述配置的环境变量入口 |
+| `CONFIG_SERVER_ENABLED` | `false` | 启用 Spring Cloud Config 客户端 |
+| `SPRING_CONFIG_IMPORT` | 空 | `optional:configserver:http://config-server:8888` |
+| `GATEWAY_RESPONSE_TIMEOUT` | `1h` | Gateway 长响应超时 |
+| `GATEWAY_CONNECT_TIMEOUT_MS` | `5000` | Gateway 连接后端超时 |
 
 **破坏性变更**：WP4 的 chunk id 方案变更 + `ChunkingSignature` 升版本，升级后首次启动会自动全量重切；release note 必须写明。
 
 ## 10. CI 设计
 
-仓库当前无 CI 配置。新增 `.github/workflows/ci.yml`（GitHub Actions）：
+`.github/workflows/ci.yml`（GitHub Actions）已落地：
 
-- `unit`：JDK 25（temurin），`mvn -B clean package`，不依赖外部服务。
+- `unit`：JDK 25（temurin），`mvn -B clean verify`，不依赖外部服务。
 - `container-it`：`mvn -B verify -Pcontainer-it`。GitHub 托管的 `ubuntu-latest` 自带 Docker daemon，Testcontainers 可直接使用，**不需要 DinD**。
-- `image`：仅在 `main` / tag 或手动触发时构建镜像（llama.cpp 源码编译较慢，不阻塞日常 PR）。
+- `image`：后续可选；当前 CI 只跑单元与容器 E2E，镜像构建由本地 / 发布流程负责。
 
 > 假设：CI 使用 GitHub Actions（`github` 远程）。Gitee 侧继续作为镜像远程，不额外接 Gitee Go。
 
 ## 11. 完成定义（DoD）
 
-- [ ] `mvn clean package` 通过，单测全绿且默认不依赖外部服务
-- [ ] `mvn verify -Pcontainer-it` 通过（Qdrant + Redis + 假 Embedding）
-- [ ] standalone：jar 冒烟 + all-in-one 镜像冒烟与 v0.0.2 行为一致
-- [ ] distributed：2 副本经 gateway 连续 50 次 MCP 调用成功
-- [ ] 故障：`kill -9` 持有者后安全接管，旧副本无法继续写入；Redis 不可用时写索引 fail-closed
-- [ ] `rag_task_status` / `rag_task_resume` / `rag_task_cancel` 在任意副本可用
-- [ ] 同一文档重复 upsert 片段数恒定；`rag_rebuild` 后无孤儿父块
-- [ ] README / ROADMAP / DEV-MEMORY 同步，迁移与限制写清楚
+- [x] `mvn clean package` 通过，单测全绿且默认不依赖外部服务（app 176 + gateway 2 + config-server 1）
+- [x] `mvn verify -Pcontainer-it` 通过（Qdrant + Redis + 确定性哈希 Embedding）
+- [x] standalone：jar 冒烟 + all-in-one 镜像冒烟（v0.0.3 发布前已验证）
+- [ ] distributed：2 副本经 Spring Cloud Gateway 连续 50 次 MCP 调用成功（需真实部署环境演练）
+- [ ] 故障：`kill -9` 持有者后安全接管，旧副本无法继续写入；Redis 不可用时写索引 fail-closed（需真实部署环境演练）
+- [x] `rag_task_status` / `rag_task_resume` / `rag_task_cancel` 跨副本逻辑有单元测试覆盖
+- [x] 同一文档重复 upsert 片段数恒定；`rag_rebuild` 后无孤儿父块（容器 E2E 覆盖）
+- [x] README / ROADMAP / DEV-MEMORY 同步，迁移与限制写清楚
+
+> 未勾选项属于真实多副本故障演练，无法在本地 CI 中可靠复现；部署验收时按第 6 节矩阵执行。

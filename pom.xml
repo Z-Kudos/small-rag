@@ -13,9 +13,9 @@
 
     <groupId>com.smallrag</groupId>
     <artifactId>small-rag</artifactId>
-    <version>0.0.3</version>
+    <version>0.0.4</version>
     <name>small-rag</name>
-    <description>Small pure-text RAG knowledge base exposed as an MCP server</description>
+    <description>Single-node pure-text RAG knowledge base exposed as an MCP server</description>
 
     <developers>
         <developer>
@@ -29,19 +29,12 @@
         <!-- JDK 23+ 默认不再自动发现注解处理器，显式开启以运行 Lombok -->
         <maven.compiler.proc>full</maven.compiler.proc>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <spring-cloud.version>2026.0.0-RC1</spring-cloud.version>
         <spring-ai.version>2.0.2</spring-ai.version>
+        <resilience4j.version>2.4.0</resilience4j.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
-            <dependency>
-                <groupId>org.springframework.cloud</groupId>
-                <artifactId>spring-cloud-dependencies</artifactId>
-                <version>${spring-cloud.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
             <dependency>
                 <groupId>org.springframework.ai</groupId>
                 <artifactId>spring-ai-bom</artifactId>
@@ -59,7 +52,7 @@
             <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
         </dependency>
 
-        <!-- Chat + embedding models (OpenAI compatible endpoint) -->
+        <!-- Embedding model (OpenAI compatible endpoint) -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-openai</artifactId>
@@ -76,36 +69,14 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
-        <!-- 分布式模式：Redis 租约锁（standalone 模式不会连接 Redis） -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-redis</artifactId>
-        </dependency>
-
-        <!-- 检索路径熔断（仅 rag_search / rag_query，不影响入库与重建） -->
+        <!-- 检索路径熔断：只依赖 Resilience4j，不引入 Spring Cloud -->
         <dependency>
             <groupId>io.github.resilience4j</groupId>
             <artifactId>resilience4j-circuitbreaker</artifactId>
+            <version>${resilience4j.version}</version>
         </dependency>
 
-        <!-- 分布式模式：Consul 服务发现与外部化配置（standalone 默认关闭） -->
-        <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-consul-discovery</artifactId>
-            <exclusions>
-                <!-- 无服务间调用，不需要客户端负载均衡；避免死依赖 -->
-                <exclusion>
-                    <groupId>org.springframework.cloud</groupId>
-                    <artifactId>spring-cloud-starter-loadbalancer</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-consul-config</artifactId>
-        </dependency>
-
-        <!-- 健康检查：暴露实例、锁与熔断状态（/actuator/health） -->
+        <!-- 健康检查：保留 /actuator/health，供容器健康检查使用 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
@@ -147,7 +118,7 @@
     </build>
 
     <profiles>
-        <!-- 容器化端到端测试：需要 Docker / Podman，CI 单独 job 运行 -->
+        <!-- 容器化端到端测试：需要 Docker / Podman -->
         <profile>
             <id>container-it</id>
             <build>
@@ -196,7 +167,6 @@
         </repository>
     </repositories>
 
-    <!-- 插件同样走阿里云，避免 maven-compiler / spring-boot 等插件回源 -->
     <pluginRepositories>
         <pluginRepository>
             <id>aliyun-public</id>

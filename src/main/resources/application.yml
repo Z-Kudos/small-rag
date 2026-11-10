@@ -1,7 +1,7 @@
 server:
   port: 18080
 
-# 只暴露健康检查；多副本排障时可看到实例 id、活动锁与熔断状态
+# 只暴露健康检查
 management:
   endpoints:
     web:
@@ -11,52 +11,10 @@ management:
     health:
       show-details: always
       show-components: always
-  health:
-    # standalone 模式不连接 Redis；只有 distributed 开启时才纳入健康检查
-    redis:
-      enabled: ${SMALL_RAG_DISTRIBUTED_ENABLED:false}
 
 spring:
   application:
     name: small-rag
-  # standalone 模式不会连接 Redis；distributed 模式才使用
-  data:
-    redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD:}
-  cloud:
-    consul:
-      # 默认关闭：standalone 不依赖 Consul；distributed 部署显式打开
-      enabled: ${CONSUL_ENABLED:false}
-      host: ${CONSUL_HOST:localhost}
-      port: ${CONSUL_PORT:8500}
-      discovery:
-        enabled: ${CONSUL_ENABLED:false}
-        register: ${CONSUL_REGISTER:true}
-        # 多副本必须唯一：容器 hostname 唯一；同一主机两个 JVM 用端口区分
-        instance-id: ${CONSUL_INSTANCE_ID:${spring.application.name}-${HOSTNAME:unknown}-${server.port}}
-        prefer-ip-address: true
-        health-check-path: /actuator/health
-        health-check-interval: 15s
-      config:
-        enabled: ${CONSUL_ENABLED:false}
-        # Consul 配置通过 SPRING_CONFIG_IMPORT=optional:consul: 显式启用，
-        # 默认不做 import 检查，避免 standalone 启动报错
-        import-check:
-          enabled: false
-        # Consul 暂时不可达时允许启动，避免配置中心故障放大为服务不可用
-        fail-fast: ${CONSUL_CONFIG_FAIL_FAST:false}
-        # 配置仅在启动时读取（属性未加 @RefreshScope），关闭长轮询避免无意义请求
-        watch:
-          enabled: ${CONSUL_CONFIG_WATCH_ENABLED:false}
-    discovery:
-      client:
-        # standalone 没有服务发现时，不把 UNKNOWN 的 discovery 组件塞进健康检查
-        health-indicator:
-          enabled: ${CONSUL_ENABLED:false}
-        composite-indicator:
-          enabled: ${CONSUL_ENABLED:false}
   ai:
     # 仅使用向量（Embedding）模型，不装配 Chat / 生成模型
     model:
@@ -71,36 +29,18 @@ spring:
     mcp:
       server:
         name: small-rag
-        version: 0.0.3
-        # standalone 保持 STREAMABLE（有状态会话）；distributed 多副本必须 STATELESS，
-        # 否则会话只存在于单副本内存，轮询到其他副本会 404。compose.distributed.yaml 已设置。
-        protocol: ${SMALL_RAG_MCP_PROTOCOL:STREAMABLE}
+        version: 0.0.4
+        protocol: STREAMABLE
         instructions: |
           基于纯文本知识库的 RAG 检索服务（不调用生成模型）。
           使用 rag_ingest 新增文档、rag_update 更新、rag_delete 删除、rag_list 查看归档。
           使用 rag_search 查看命中分块，使用 rag_query 获取带来源与相似度的增强上下文。
           rag_reindex 可手动重建单篇（同步）或全部归档文档（异步）；rag_rebuild 需 confirm=true 才会全量异步重建。
-          异步重建返回 taskId：用 rag_task_status 查询进度（status/total/processed/percent/stalled），任意副本可查（本地缺失时回读状态集合）；用 rag_task_cancel 协作式取消。
-          任务快照持久化在 Qdrant 的独立状态集合中；任务锁在 standalone 为进程内、distributed 为 Redis 租约（带 fencing epoch）。
+          异步重建返回 taskId：用 rag_task_status 查询进度（status/total/processed/percent/stalled），用 rag_task_cancel 协作式取消。
+          任务快照持久化在 Qdrant 的独立状态集合中；单实例下由进程内活动锁串行化。
           进程重启后未完成任务为 interrupted，默认自动续接，也可用 rag_task_resume 手动续接或 rag_task_cancel 放弃。
           配置 rag.sources 后会自动导入多个 Markdown 源目录：rag_sync_sources 异步触发增量同步（force=true 全量重切），rag_sync_status 查询运行状态与最近一次统计。
           知识库为空时 rag_query 会返回“未检索到相关内容”。
-
-smallrag:
-  distributed:
-    # 默认 false：保持单容器 standalone；distributed profile 或环境变量打开
-    enabled: ${SMALL_RAG_DISTRIBUTED_ENABLED:false}
-    # 跨副本任务状态读穿缓存；本地内存缺失时回读 Qdrant 的最短间隔
-    task-status-cache-ms: ${SMALL_RAG_TASK_STATUS_CACHE_MS:2000}
-    lock:
-      # 实例失联后，其他副本需等待该租约过期才能接管
-      lease: ${SMALL_RAG_LOCK_LEASE:30s}
-      # 必须明显小于 lease；每次续租失败即停止本地写入
-      renew-interval: ${SMALL_RAG_LOCK_RENEW_INTERVAL:10s}
-      key-prefix: ${SMALL_RAG_LOCK_PREFIX:smallrag:lock:}
-  archive:
-    # distributed 多副本必须共享归档目录（RWX）；只用于启动告警与健康检查
-    shared: ${SMALL_RAG_ARCHIVE_SHARED:false}
 
 rag:
   # 原始文档归档目录：自动重切的原文来源；目录不可写时降级为只入库

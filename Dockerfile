@@ -71,7 +71,6 @@ COPY --chown=app:app docker/start-qdrant.sh /app/start-qdrant.sh
 COPY --chown=app:app docker/start-llama.sh /app/start-llama.sh
 COPY --chown=app:app docker/start-app.sh /app/start-app.sh
 COPY --chown=app:app docker/supervisord.conf /app/supervisord-all-in-one.conf
-COPY --chown=app:app docker/supervisord-app-only.conf /app/supervisord-app-only.conf
 COPY --chown=app:app docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod 0755 /app/start-qdrant.sh /app/start-llama.sh /app/start-app.sh /app/entrypoint.sh
 

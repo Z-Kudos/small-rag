@@ -83,7 +83,7 @@ class RagMcpToolsTest {
         when(reindexTaskService.cancel("task-4")).thenReturn(new ReindexTaskService.ReindexTaskView(
                 "task-4", "reindex", "reindexing", 4, 2, 2, 0, 50,
                 "doc-1", "2026-11-06T12:00:00Z", false, true,
-                "2026-11-06T11:59:00Z", null, false, null, false, null, "host-1", 1L, null));
+                "2026-11-06T11:59:00Z", null, false, null, false, null));
 
         assertThat(tools.ragTaskCancel("task-4"))
                 .contains("\"taskId\":\"task-4\"")
@@ -160,6 +160,6 @@ class RagMcpToolsTest {
     private static ReindexTaskService.ReindexTaskView taskView(String taskId, String status, int percent) {
         return new ReindexTaskService.ReindexTaskView(taskId, "rebuild", status, 4, 2, 2, 0,
                 percent, "doc-1", "2026-11-06T12:00:00Z", false, false,
-                "2026-11-06T11:59:00Z", null, false, null, false, null, "host-1", 1L, null);
+                "2026-11-06T11:59:00Z", null, false, null, false, null);
     }
 }

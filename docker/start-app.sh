@@ -18,9 +18,7 @@ wait_for() {
     done
 }
 
-if [ "${SMALL_RAG_RUNTIME:-all-in-one}" = "all-in-one" ]; then
-    wait_for "http://127.0.0.1:6333/readyz" "Qdrant" "${QDRANT_WAIT_RETRIES:-120}"
-fi
+wait_for "http://127.0.0.1:6333/readyz" "Qdrant" "${QDRANT_WAIT_RETRIES:-120}"
 
 # 默认等待 Embedding 服务就绪（模型下载与加载由 start-llama.sh 负责）；
 # 使用外部 Embedding 服务时设为 false。

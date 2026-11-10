@@ -2,13 +2,15 @@
 title: 已知限制与风险
 status: done
 version: 0.0.3
-updated: 2026-11-09
+updated: 2026-11-10
 owners: [zjk]
 template: docs/templates/design.md
-related: [README.md, docs/v0.0.3/plan.md]
+related: [README.md, docs/v0.0.3/plan.md, docs/v0.0.3/adr/0003-redisson-distributed-lock.md]
 ---
 
 # 已知限制与风险
+
+> v0.0.3 已发布；分布式版本已封存为 `cloud-rag`。本文冻结，不再更新。
 
 > 使用与部署注意事项见 [`README.md`](../../../README.md)。v0.0.3 正在修复的集群问题见 [`docs/v0.0.3/plan.md`](../plan.md)。
 
@@ -34,7 +36,7 @@ related: [README.md, docs/v0.0.3/plan.md]
 ### 3.2 归档与状态
 
 - **归档索引**：`rag_list` / 启动重切使用 `.archive/index.json` 摘要索引，不再加载全部原文；索引丢失、版本不符或文档 id 集合不一致时会全量重建一次。索引内容陈旧但 id 集合一致时可能保留旧签名，异常后建议手动重建索引 / 重切。
-- **重启续接边界**：任务锁的权威实现在 `DistributedLock`（standalone 进程内租约、distributed Redis 租约 `reindex-task` + 单调 epoch）；Qdrant 状态集合里的锁 point 只是诊断镜像，Qdrant 没有 CAS，不参与互斥。重启后只有抢到租约的副本才接管任务；租约被其他副本持有时不改写快照。旧持有者恢复后即使本地租约尚未过期，也会因 epoch 落后被拒绝写入。distributed 下 Redis 不可用时拒绝写索引（fail-closed）。
+- **重启续接边界**：任务锁的权威实现在 `DistributedLock`（standalone 进程内租约、distributed Redisson `reindex-task` RFencedLock + 单调 fencing token）；Qdrant 状态集合里的锁 point 只是诊断镜像，Qdrant 没有 CAS，不参与互斥。重启后只有抢到租约的副本才接管任务；租约被其他副本持有时不改写快照。旧持有者恢复后即使本地租约尚未过期，也会因 epoch 落后被拒绝写入。distributed 下 Redis 不可用时拒绝写索引（fail-closed）。
 - **启动顺序**：`ChunkingReindexRunner` 在 `ApplicationReadyEvent` 之前同步执行；若检测到有重启时中断、待续接的重建任务，则跳过自动重切并交给续接任务处理，避免重复重建。
 - **导入状态**：最近一次扫描统计只在内存中，重启后 `rag_sync_status` 的 `lastRun` 为空；日志仍保留历史。
 
@@ -46,9 +48,12 @@ related: [README.md, docs/v0.0.3/plan.md]
 
 ### 3.4 集群
 
-- **MCP 会话**：standalone 使用 `STREAMABLE`（会话保存在单实例内存）；distributed 必须设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS`，会话不再依赖单副本，HAProxy 保持 `roundrobin`。漏配时启动只告警，跨副本调用仍可能 404。`STATELESS` 不支持 server-initiated notifications（当前未使用）。
+- **MCP 会话**：standalone 使用 `STREAMABLE`（会话保存在单实例内存）；distributed 必须设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS`，会话不再依赖单副本；Spring Cloud Gateway 通过 Consul + LoadBalancer 轮询副本。漏配时启动只告警，跨副本调用仍可能 404。`STATELESS` 不支持 server-initiated notifications（当前未使用）。
 - **跨副本任务操作**：任意副本都能 `rag_task_status`（本地缺失时回读 Qdrant，默认 2s 缓存）；`rag_task_resume` / `rag_task_cancel` 通过抢 `reindex-task` 租约接管，原持有者仍在续租时无法中断其线程，只返回持有者实例与 taskId。Qdrant 状态集合不可用时只能看到本实例内存中的任务。
 - **Redis 故障**：索引活动锁与 leader 选举失败，重建 / 目录导入停止并返回可读错误；检索不受影响。恢复后自动重新竞选。
+- **Redisson watchdog**：进程存活期间会自动续租；实例优雅退出会主动释放锁，崩溃靠 watchdog 停止续租 + TTL 接管。`IndexActivityGuardRedisIT` 通过停止续租/关闭客户端模拟接管，`RedisLockContainerIT` 覆盖 token 单调递增、锁丢失接管与旧持有者强制释放不影响新持有者。
+- **Gateway / Config Server**：Gateway 依赖 Consul 发现 `small-rag` 实例，Consul 不可用时新副本不会被路由；Config Server 的 native 仓库需与所有环境保持一致，配置变更需重启应用或触发刷新。Config Server 不可用时 `optional:` 允许应用继续用本地配置启动。
+- **熔断实现**：Spring Cloud CircuitBreaker 只提供抽象，状态与失败率诊断仍读取 Resilience4j registry；更换实现时 health 细节会退化。
 - **归档卷**：distributed 模式必须共享且可写；多主机需 RWX 存储（NFS / CephFS），否则无法自动重切 / 续接。
 
 ### 3.5 切分
@@ -58,10 +63,10 @@ related: [README.md, docs/v0.0.3/plan.md]
 
 ## 4. 影响与缓解
 
-- **影响**：索引写入窗口可能导致短暂重复片段；原持有者仍在运行时无法跨副本强制中断；Qdrant 状态集合不可用时跨副本任务视图退化；升级到确定性 chunk id 会触发一次全量重切。
-- **缓解**：升级前备份归档与 Qdrant 快照；集群部署使用共享 RWX 卷、设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS` 与 `SMALL_RAG_ARCHIVE_SHARED=true`；异常后执行 `rag_rebuild`。
+- **影响**：索引写入窗口可能导致短暂重复片段；原持有者仍在运行时无法跨副本强制中断；Qdrant 状态集合不可用时跨副本任务视图退化；升级到确定性 chunk id 会触发一次全量重切；distributed 多两个进程（Gateway / Config Server）；切换 Redisson 后锁实现的诊断字段与旧 Redis Lua 实现不兼容。
+- **缓解**：升级前备份归档与 Qdrant 快照；集群部署使用共享 RWX 卷、设置 `SMALL_RAG_MCP_PROTOCOL=STATELESS` 与 `SMALL_RAG_ARCHIVE_SHARED=true`；Config Server 使用 `optional:` 前缀；滚动升级时先停旧副本再启新副本，让 watchdog 停止续租；异常后执行 `rag_rebuild`。
 
 ## 5. 演进
 
-- v0.0.3 计划 / 已落地：WP1 `STATELESS`（已完成）、WP2 Redis 租约 + fencing epoch（已完成）、WP3 跨副本任务状态（已完成）、WP4 确定性 chunk id 与孤儿清理（已完成）、WP5 观测与一致性诊断（已完成）、WP6 Testcontainers + CI（已完成）。
-- 修复完成后在下一版本的 `docs/v<next>/design/limitations.md` 更新；本文随 v0.0.3 冻结。
+- v0.0.3 计划 / 已落地：WP1 `STATELESS`（已完成）、WP2 Redis 租约 + fencing epoch（已完成）、WP3 跨副本任务状态（已完成）、WP4 确定性 chunk id 与孤儿清理（已完成）、WP5 观测与一致性诊断（已完成）、WP6 Testcontainers + CI（已完成）、WP7 Spring Cloud Gateway / Config Server / CircuitBreaker（已完成，ADR-0002）、WP8 Redisson RFencedLock（已完成，ADR-0003）。
+- v0.0.3 发布后本文只做事实性修正；Spring Cloud 数据面后继变更已记录在本文与 ADR-0002，下一版本另建 `docs/v<next>/`。

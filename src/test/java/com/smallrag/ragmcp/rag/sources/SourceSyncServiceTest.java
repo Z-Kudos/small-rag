@@ -1,8 +1,6 @@
 package com.smallrag.ragmcp.rag.sources;
 
-import com.smallrag.ragmcp.config.DistributedProperties;
 import com.smallrag.ragmcp.config.RagProperties;
-import com.smallrag.ragmcp.distributed.LocalDistributedLock;
 import com.smallrag.ragmcp.rag.IndexActivityGuard;
 import com.smallrag.ragmcp.rag.RagService;
 import com.smallrag.ragmcp.rag.archive.DocumentArchive;
@@ -47,7 +45,6 @@ class SourceSyncServiceTest {
     private RagProperties properties;
     private RagService ragService;
     private IndexActivityGuard guard;
-    private SourcesLeaderElection leaderElection;
     private SourceSyncService service;
     private Path notes;
     private Path wiki;
@@ -68,17 +65,14 @@ class SourceSyncServiceTest {
                 .thenAnswer(invocation -> new RagService.IngestResult(
                         invocation.getArgument(0), 1, 0));
         guard = new IndexActivityGuard();
-        leaderElection = new SourcesLeaderElection(new LocalDistributedLock(), new DistributedProperties());
-        leaderElection.tick();
         service = new SourceSyncService(ragService,
                 new DocumentArchive(objectMapper, properties), properties,
-                new SourceStateStore(objectMapper, properties), guard, leaderElection);
+                new SourceStateStore(objectMapper, properties), guard);
     }
 
     @AfterEach
     void tearDown() {
         service.shutdown();
-        leaderElection.shutdown();
     }
 
     @Test
