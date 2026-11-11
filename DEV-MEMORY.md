@@ -14,13 +14,14 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 
 ## 1. 当前阶段
 
-- 版本：`0.0.4`（已发布，`main` tag `v0.0.4`）。
+- 版本：`0.0.4`（**2026-11-11 重打 tag `v0.0.4`**，包含多形态部署 WP4 与四形态切换；v0.0.4 未切换版本号，`ChunkingSignature` 保持 `v0.0.4`）。
 - 上一版：`v0.0.3`（已发布；分布式版本已封存为 `~/Projects/cloud-rag`）。
-- 主题：**单机轻量化**。
+- 主题：**单机轻量化**（移除分布式组件）+ **多形态部署**（WP4）。
 - 规划：[`docs/v0.0.4/plan.md`](docs/v0.0.4/plan.md)。
-- 状态：WP1–WP3 已完成；`main` + tag `v0.0.4` 已发布。
+- 状态：WP1–WP4 已完成（WP4 的容器构建/四形态容器冒烟除外，见待办）；`main` + tag `v0.0.4` 已发布。
 - 文档：`README.md`（简体中文）/ `README.en.md`（English）；设计/ADR 在 `docs/v0.0.4/`；`docs/v0.0.3/` 冻结。
 - **不切换版本**：下一次版本变更需人工确认。
+- **tag v0.0.4 改写说明**：旧 tag `v0.0.4` 指向 `e5c165c`（2026-11-10 发布），2026-11-11 删除并重打至包含 WP4 的 release main；旧发布内容仍保留在主线历史中（`git log` 可查），但已 clone 仓库的 tag 指针不会自动更新。
 
 ## 2. 构建与验证
 
@@ -92,7 +93,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 
 ## 6. 待办
 
-- v0.0.4：已发布；下一版本待确认。
+- v0.0.4：已发布（2026-11-11 重打 tag，含 WP4 多形态部署）；下一版本待确认。
 - 需要多副本时使用 `~/Projects/cloud-rag`。
 - **不做镜像体积优化**：`jlink` 定制运行时、删 `/qdrant/static`、排除 QUIC native 等一律不实施。
 - 技术栈轻量化方向（依赖面收敛 / 嵌入式向量库 / 去 Spring Boot / 合并抽象层）已讨论：嵌入式向量库以 **SQLite 可选后端**形式进入 WP4（纯 Java 余弦，无 JNI）；其余（去 Spring AI / 去 Spring Boot）仍暂不实施。

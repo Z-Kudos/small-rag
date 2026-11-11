@@ -141,4 +141,5 @@ related: [ROADMAP.md, DEV-MEMORY.md, docs/v0.0.4/design/architecture.md, docs/v0
 - [x] POM 无 Spring Cloud / Redis / Redisson
 - [x] README / AGENTS / ROADMAP / DEV-MEMORY 同步
 - [x] `docs/v0.0.4` 建立，`docs/v0.0.3` 保持冻结
-- [ ] 真实部署环境冒烟（单容器 + 模型下载）由发布流程执行
+- [x] WP4 多形态部署（WP4，含 SQLite 可选向量库与四形态容器开关；见 WP4 验收）
+- [ ] 真实部署环境冒烟（单容器 + 模型下载 + 四形态）由发布流程执行
