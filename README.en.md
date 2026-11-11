@@ -112,8 +112,6 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 
 Use `.env` to override `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE` for regional mirrors; `LLAMA_CPP_TAG` defaults to `v0.9.0`. Bind-mounted directories must be writable by container UID `10001`.
 
-The image is about **630 MB** (157 MB application fat jar + 200 MB Temurin JRE + 112 MB Qdrant + 21 MB llama-server + base system). The first start additionally downloads a GGUF model of about **640 MB**; the model, Qdrant data, and archive all live on the `/data` volume. When planning disk space, budget for the image plus the model plus your knowledge-base data.
-
 ## Mount host Markdown directories
 
 `SMALL_RAG_SOURCE_DIRS` uses **container paths**, so host directories must be mounted first. The recommended prefix is `/data/sources/...`:

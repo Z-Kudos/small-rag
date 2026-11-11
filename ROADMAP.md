@@ -58,18 +58,3 @@ v0.0.4 主题：**单机轻量化**——保留完整 RAG，移除分布式基�
 
 - 需要多副本时使用封存项目 `~/Projects/cloud-rag`。
 - 本仓库后续版本只围绕单机 RAG 质量、切分与目录导入演进。
-
-### 6.1 体积基线（v0.0.4 实测，仅作记录）
-
-| 对象 | 体积 |
-| --- | --- |
-| 容器镜像 `small-rag:0.0.4` | 630 MB |
-| `target/small-rag-0.0.4.jar` | 157 MB |
-| `/opt/java/openjdk`（Temurin 25 JRE） | 200 MB |
-| `/qdrant`（二进制 + static） | 112 MB |
-| 首次启动下载的 GGUF 模型 | 约 640 MB（落在 `/data` 卷，不计入镜像） |
-
-fat jar 内占比最高的依赖：`openai-java-core` 65.3 MB、netty 16.6 MB、grpc 11.5 MB、kotlin 5.6 MB。
-
-> 体积不作为演进目标：`jlink` 定制运行时、删除 Qdrant 静态资源、排除 QUIC native 等一律不做。
-
