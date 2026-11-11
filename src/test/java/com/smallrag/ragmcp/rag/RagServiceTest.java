@@ -1,14 +1,9 @@
 package com.smallrag.ragmcp.rag;
 
 import com.smallrag.ragmcp.config.QdrantProperties;
-import io.qdrant.client.PointIdFactory;
-import io.qdrant.client.QdrantClient;
-import io.qdrant.client.grpc.Common.PointId;
-import io.qdrant.client.grpc.JsonWithInt.Value;
-import com.google.common.util.concurrent.Futures;
-import io.qdrant.client.grpc.Points;
-import io.qdrant.client.grpc.Points.RetrievedPoint;
-import io.qdrant.client.grpc.Points.VectorsOutput;
+import com.smallrag.ragmcp.rag.vectorstore.CleanupResult;
+import com.smallrag.ragmcp.rag.vectorstore.FakeDocumentPointsPort;
+import com.smallrag.ragmcp.rag.vectorstore.ParentPoint;
 import com.smallrag.ragmcp.rag.archive.ArchivedDocument;
 import com.smallrag.ragmcp.rag.archive.ArchivedDocumentSummary;
 import com.smallrag.ragmcp.rag.archive.DocumentArchive;
@@ -73,7 +68,7 @@ class RagServiceTest {
         VectorStore vectorStore = mock(VectorStore.class);
         RagProperties properties = new RagProperties();
 
-        RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> true, chunkingService(properties), mock(DocumentArchive.class), mock(QdrantClient.class), mock(EmbeddingModel.class));
+        RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> true, chunkingService(properties), mock(DocumentArchive.class), new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
 
         assertThat(service.query("项目支持哪些向量数据库？", 3))
                 .isEqualTo(properties.getEmptyContextAnswer());
@@ -86,7 +81,7 @@ class RagServiceTest {
         RagProperties properties = new RagProperties();
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
 
-        RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false, chunkingService(properties), mock(DocumentArchive.class), mock(QdrantClient.class), mock(EmbeddingModel.class));
+        RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false, chunkingService(properties), mock(DocumentArchive.class), new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
 
         assertThat(service.query("任意问题", 3)).isEqualTo(properties.getEmptyContextAnswer());
     }
@@ -103,7 +98,7 @@ class RagServiceTest {
                 .build();
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(document));
 
-        RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false, chunkingService(properties), mock(DocumentArchive.class), mock(QdrantClient.class), mock(EmbeddingModel.class));
+        RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false, chunkingService(properties), mock(DocumentArchive.class), new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
 
         assertThat(service.query("向量库是什么？", 3))
                 .contains("[1]")
@@ -118,7 +113,7 @@ class RagServiceTest {
         VectorStore vectorStore = mock(VectorStore.class);
         RagProperties properties = new RagProperties();
         properties.getChunking().setStrategy(ChunkingStrategy.FIXED);
-        RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false, chunkingService(properties), mock(DocumentArchive.class), mock(QdrantClient.class), mock(EmbeddingModel.class));
+        RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false, chunkingService(properties), mock(DocumentArchive.class), new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
@@ -143,7 +138,7 @@ class RagServiceTest {
     void blankIngestTextIsRejected() {
         RagProperties properties = new RagProperties();
         RagService service = new RagService(mock(VectorStore.class), properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), mock(DocumentArchive.class), mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), mock(DocumentArchive.class), new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
 
         assertThatThrownBy(() -> service.ingest("  ", null))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -153,7 +148,7 @@ class RagServiceTest {
     @Test
     void parentChildSearchFiltersChildrenAndExpandsParentText() {
         VectorStore vectorStore = mock(VectorStore.class);
-        QdrantClient qdrantClient = mock(QdrantClient.class);
+        FakeDocumentPointsPort qdrantClient = new FakeDocumentPointsPort();
         RagProperties properties = new RagProperties();
         properties.getChunking().setStrategy(ChunkingStrategy.PARENT_CHILD);
 
@@ -168,7 +163,7 @@ class RagServiceTest {
                 .score(0.88)
                 .build();
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(child));
-        mockParentFetch(qdrantClient, parentPoint("doc-1#p0", "父块正文包含完整上下文", null));
+        qdrantClient.parents = Map.ofEntries(parent("doc-1#p0", "父块正文包含完整上下文", null));
 
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
                 chunkingService(properties), mock(DocumentArchive.class), qdrantClient, mock(EmbeddingModel.class));
@@ -187,7 +182,7 @@ class RagServiceTest {
     @Test
     void parentChildSearchDeduplicatesHitsFromSameParent() {
         VectorStore vectorStore = mock(VectorStore.class);
-        QdrantClient qdrantClient = mock(QdrantClient.class);
+        FakeDocumentPointsPort qdrantClient = new FakeDocumentPointsPort();
         RagProperties properties = new RagProperties();
         properties.getChunking().setStrategy(ChunkingStrategy.PARENT_CHILD);
 
@@ -196,9 +191,9 @@ class RagServiceTest {
         Document third = childHit("doc-1#p1", "子块三", 0.7);
         when(vectorStore.similaritySearch(any(SearchRequest.class)))
                 .thenReturn(List.of(first, second, third));
-        mockParentFetch(qdrantClient,
-                parentPoint("doc-1#p0", "第一个父块的正文", null),
-                parentPoint("doc-1#p1", "第二个父块的正文", null));
+        qdrantClient.parents = Map.ofEntries(
+                parent("doc-1#p0", "第一个父块的正文", null),
+                parent("doc-1#p1", "第二个父块的正文", null));
 
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
                 chunkingService(properties), mock(DocumentArchive.class), qdrantClient, mock(EmbeddingModel.class));
@@ -213,7 +208,7 @@ class RagServiceTest {
     @Test
     void contextTruncatesAroundMatchedChildInsteadOfHead() {
         VectorStore vectorStore = mock(VectorStore.class);
-        QdrantClient qdrantClient = mock(QdrantClient.class);
+        FakeDocumentPointsPort qdrantClient = new FakeDocumentPointsPort();
         RagProperties properties = new RagProperties();
         properties.getChunking().setStrategy(ChunkingStrategy.PARENT_CHILD);
         properties.setMaxChunkChars(50);
@@ -221,7 +216,7 @@ class RagServiceTest {
         String parentText = "前导内容。".repeat(20) + "命中的关键内容。" + "后续内容。".repeat(20);
         when(vectorStore.similaritySearch(any(SearchRequest.class)))
                 .thenReturn(List.of(childHit("doc-1#p0", "命中的关键内容。", 0.9)));
-        mockParentFetch(qdrantClient, parentPoint("doc-1#p0", parentText, null));
+        qdrantClient.parents = Map.ofEntries(parent("doc-1#p0", parentText, null));
 
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
                 chunkingService(properties), mock(DocumentArchive.class), qdrantClient, mock(EmbeddingModel.class));
@@ -238,7 +233,7 @@ class RagServiceTest {
         RagProperties properties = new RagProperties();
 
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), mock(DocumentArchive.class), mock(QdrantClient.class),
+                chunkingService(properties), mock(DocumentArchive.class), new FakeDocumentPointsPort(),
                 mock(EmbeddingModel.class));
 
         RagService.IngestResult result =
@@ -274,7 +269,7 @@ class RagServiceTest {
     @Test
     void mmrSelectsDiverseParentsOverNearDuplicates() {
         VectorStore vectorStore = mock(VectorStore.class);
-        QdrantClient qdrantClient = mock(QdrantClient.class);
+        FakeDocumentPointsPort qdrantClient = new FakeDocumentPointsPort();
         RagProperties properties = new RagProperties();
         properties.getChunking().setStrategy(ChunkingStrategy.PARENT_CHILD);
         properties.setMmrLambda(0.5);
@@ -283,10 +278,10 @@ class RagServiceTest {
                 childHit("doc-1#p0", "子块甲", 0.95),
                 childHit("doc-1#p1", "子块乙", 0.94),
                 childHit("doc-1#p2", "子块丙", 0.90)));
-        mockParentFetch(qdrantClient,
-                parentPoint("doc-1#p0", "父块甲的正文", List.of(1f, 0f)),
-                parentPoint("doc-1#p1", "父块乙的正文", List.of(0.8f, 0.6f)),
-                parentPoint("doc-1#p2", "父块丙的正文", List.of(0f, 1f)));
+        qdrantClient.parents = Map.ofEntries(
+                parent("doc-1#p0", "父块甲的正文", List.of(1f, 0f)),
+                parent("doc-1#p1", "父块乙的正文", List.of(0.8f, 0.6f)),
+                parent("doc-1#p2", "父块丙的正文", List.of(0f, 1f)));
 
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
                 chunkingService(properties), mock(DocumentArchive.class), qdrantClient, mock(EmbeddingModel.class));
@@ -326,7 +321,7 @@ class RagServiceTest {
         });
 
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), mock(DocumentArchive.class), mock(QdrantClient.class), embeddingModel);
+                chunkingService(properties), mock(DocumentArchive.class), new FakeDocumentPointsPort(), embeddingModel);
 
         List<Document> results = service.search("问题", 2);
 
@@ -336,14 +331,13 @@ class RagServiceTest {
     @Test
     void parentFetchFailureFallsBackToChildHits() {
         VectorStore vectorStore = mock(VectorStore.class);
-        QdrantClient qdrantClient = mock(QdrantClient.class);
+        FakeDocumentPointsPort qdrantClient = new FakeDocumentPointsPort();
         RagProperties properties = new RagProperties();
         properties.getChunking().setStrategy(ChunkingStrategy.PARENT_CHILD);
 
         when(vectorStore.similaritySearch(any(SearchRequest.class)))
                 .thenReturn(List.of(childHit("doc-1#p0", "命中的子块", 0.9)));
-        when(qdrantClient.retrieveAsync(anyString(), anyList(), eq(true), eq(true), isNull()))
-                .thenReturn(Futures.immediateFailedFuture(new IllegalStateException("qdrant down")));
+        // 默认 parents 为空 map，即取回失败后的回退路径
 
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
                 chunkingService(properties), mock(DocumentArchive.class), qdrantClient, mock(EmbeddingModel.class));
@@ -372,34 +366,17 @@ class RagServiceTest {
                 .build();
     }
 
-    private static RetrievedPoint point(UUID id, String chunkType, String parentId) {
-        RetrievedPoint.Builder point = RetrievedPoint.newBuilder()
-                .setId(PointIdFactory.id(id))
-                .putPayload("chunk_type", Value.newBuilder().setStringValue(chunkType).build());
-        if (parentId != null) {
-            point.putPayload("parent_id", Value.newBuilder().setStringValue(parentId).build());
-        }
-        return point.build();
+    private static Map.Entry<String, ParentPoint> parent(String parentId, String text, List<Float> vector) {
+        float[] v = vector == null ? null : toFloatArray(vector);
+        return Map.entry(parentId, new ParentPoint(parentId, parentId, text, v));
     }
 
-    private static RetrievedPoint parentPoint(String parentId, String text, List<Float> vector) {
-        Points.RetrievedPoint.Builder builder = Points.RetrievedPoint.newBuilder()
-                .setId(PointIdFactory.id(RagService.parentPointUuid(parentId)));
-        if (text != null) {
-            builder.putPayload(RagService.CONTENT_FIELD,
-                    Value.newBuilder().setStringValue(text).build());
+    private static float[] toFloatArray(List<Float> vector) {
+        float[] result = new float[vector.size()];
+        for (int i = 0; i < vector.size(); i++) {
+            result[i] = vector.get(i);
         }
-        if (vector != null) {
-            builder.setVectors(VectorsOutput.newBuilder()
-                    .setVector(io.qdrant.client.grpc.Points.VectorOutput.newBuilder()
-                            .addAllData(vector)));
-        }
-        return builder.build();
-    }
-
-    private static void mockParentFetch(QdrantClient qdrantClient, RetrievedPoint... points) {
-        when(qdrantClient.retrieveAsync(anyString(), anyList(), eq(true), eq(true), isNull()))
-                .thenReturn(Futures.immediateFuture(List.of(points)));
+        return result;
     }
 
     @Test
@@ -408,7 +385,7 @@ class RagServiceTest {
         RagProperties properties = new RagProperties();
         DocumentArchive archive = mock(DocumentArchive.class);
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), archive, new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
 
         RagService.IngestResult result = service.ingest("hello world", Map.of("source", "handbook"));
 
@@ -427,7 +404,7 @@ class RagServiceTest {
         RagProperties properties = new RagProperties();
         DocumentArchive archive = mock(DocumentArchive.class);
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), archive, new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
 
         assertThatThrownBy(() -> service.ingest("hello", null))
                 .isInstanceOf(IllegalStateException.class)
@@ -440,7 +417,7 @@ class RagServiceTest {
         VectorStore vectorStore = mock(VectorStore.class);
         RagProperties properties = new RagProperties();
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), mock(DocumentArchive.class), mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), mock(DocumentArchive.class), new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
         String documentId = UUID.randomUUID().toString();
 
         service.reindex(documentId, "a".repeat(2000), Map.of());
@@ -453,34 +430,21 @@ class RagServiceTest {
     @Test
     void reindexWritesNewChunksBeforeDeletingOldOnesWhenIdsAreKnown() throws Exception {
         VectorStore vectorStore = mock(VectorStore.class);
-        QdrantClient qdrantClient = mock(QdrantClient.class);
+        com.smallrag.ragmcp.rag.vectorstore.DocumentPointsPort pointsPort =
+                mock(com.smallrag.ragmcp.rag.vectorstore.DocumentPointsPort.class);
+        String oldPointId = UUID.randomUUID().toString();
+        when(pointsPort.findPointIds(anyString())).thenReturn(Optional.of(Set.of(oldPointId)));
         RagProperties properties = new RagProperties();
-        QdrantProperties qdrantProperties = new QdrantProperties();
-        UUID oldPointId = UUID.randomUUID();
-        when(qdrantClient.scrollAsync(any(Points.ScrollPoints.class)))
-                .thenReturn(Futures.immediateFuture(Points.ScrollResponse.newBuilder()
-                        .addResult(RetrievedPoint.newBuilder()
-                                .setId(PointIdFactory.id(oldPointId))
-                                .build())
-                        .build()));
-        when(qdrantClient.deleteAsync(anyString(), anyList()))
-                .thenReturn(Futures.immediateFuture(Points.UpdateResult.getDefaultInstance()));
-        RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), qdrantProperties, () -> false,
-                chunkingService(properties), mock(DocumentArchive.class), qdrantClient,
+        RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
+                chunkingService(properties), mock(DocumentArchive.class), pointsPort,
                 mock(EmbeddingModel.class));
         String documentId = UUID.randomUUID().toString();
 
         service.reindex(documentId, "a".repeat(2000), Map.of());
 
-        var ordered = inOrder(vectorStore, qdrantClient);
+        var ordered = inOrder(vectorStore, pointsPort);
         ordered.verify(vectorStore).add(anyList());
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        ArgumentCaptor<List<PointId>> deleted = ArgumentCaptor.forClass((Class) List.class);
-        ordered.verify(qdrantClient).deleteAsync(
-                eq(qdrantProperties.getCollectionName()), deleted.capture());
-        assertThat(deleted.getValue())
-                .extracting(PointId::getUuid)
-                .containsExactly(oldPointId.toString());
+        ordered.verify(pointsPort).deletePoints(Set.of(oldPointId));
         verify(vectorStore, never()).delete(any(Filter.Expression.class));
     }
 
@@ -490,7 +454,7 @@ class RagServiceTest {
         RagProperties properties = new RagProperties();
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties),
                 new QdrantProperties(), () -> false, chunkingService(properties),
-                mock(DocumentArchive.class), mock(QdrantClient.class), mock(EmbeddingModel.class));
+                mock(DocumentArchive.class), new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
         String documentId = UUID.randomUUID().toString();
 
         service.reindex(documentId, "a".repeat(2000), Map.of());
@@ -506,39 +470,20 @@ class RagServiceTest {
     }
 
     @Test
-    void cleanupOrphansDeletesParentsWithoutChildrenAndLegacyPoints() throws Exception {
-        QdrantClient qdrantClient = mock(QdrantClient.class);
+    void cleanupOrphansDelegatesToPointsPort() throws Exception {
+        FakeDocumentPointsPort pointsPort = new FakeDocumentPointsPort();
+        pointsPort.cleanupResult = new CleanupResult(2, 1);
         RagProperties properties = new RagProperties();
-        QdrantProperties qdrantProperties = new QdrantProperties();
-        when(qdrantClient.deleteAsync(anyString(),
-                any(io.qdrant.client.grpc.Common.Filter.class)))
-                .thenReturn(Futures.immediateFuture(Points.UpdateResult.getDefaultInstance()));
-        when(qdrantClient.deleteAsync(anyString(), anyList()))
-                .thenReturn(Futures.immediateFuture(Points.UpdateResult.getDefaultInstance()));
-        UUID liveParent = UUID.randomUUID();
-        UUID orphanParent = UUID.randomUUID();
-        when(qdrantClient.scrollAsync(any(Points.ScrollPoints.class)))
-                .thenReturn(Futures.immediateFuture(Points.ScrollResponse.newBuilder()
-                        .addResult(point(liveParent, "parent", "doc-1#p0"))
-                        .addResult(point(orphanParent, "parent", "doc-1#p1"))
-                        .addResult(point(UUID.randomUUID(), "child", "doc-1#p0"))
-                        .addResult(point(UUID.randomUUID(), "chunk", null))
-                        .build()));
         RagService service = new RagService(mock(VectorStore.class), properties,
-                new QueryCircuitBreaker(properties), qdrantProperties, () -> false,
-                chunkingService(properties), mock(DocumentArchive.class), qdrantClient,
+                new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
+                chunkingService(properties), mock(DocumentArchive.class), pointsPort,
                 mock(EmbeddingModel.class));
 
-        RagService.CleanupResult result = service.cleanupOrphans();
+        CleanupResult result = service.cleanupOrphans();
 
         assertThat(result.parentPoints()).isEqualTo(2);
         assertThat(result.orphanParents()).isEqualTo(1);
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        ArgumentCaptor<List<PointId>> deleted = ArgumentCaptor.forClass((Class) List.class);
-        verify(qdrantClient).deleteAsync(eq(qdrantProperties.getCollectionName()), deleted.capture());
-        assertThat(deleted.getValue())
-                .extracting(PointId::getUuid)
-                .containsExactly(orphanParent.toString());
+        assertThat(pointsPort.cleanupCalls).isEqualTo(1);
     }
 
     @Test
@@ -551,7 +496,7 @@ class RagServiceTest {
         when(archive.find(documentId)).thenReturn(Optional.of(new ArchivedDocument(
                 documentId, "旧文本", Map.of("source", "handbook"), "old-signature", "t1")));
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), archive, new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
 
         RagService.IngestResult result = service.update(documentId, "新的完整文本", null);
 
@@ -570,7 +515,7 @@ class RagServiceTest {
         when(archive.isEnabled()).thenReturn(true);
         String documentId = UUID.randomUUID().toString();
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), archive, new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
 
         RagService.IngestResult result = service.upsert(
                 documentId, "目录导入的完整文本", Map.of("source", "notes/a.md"));
@@ -593,7 +538,7 @@ class RagServiceTest {
         when(archive.find(documentId)).thenReturn(Optional.of(new ArchivedDocument(
                 documentId, "旧文本", Map.of("source", "handbook"), "old-signature", "t1")));
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), archive, new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
 
         service.upsert(documentId, "新的完整文本", null);
 
@@ -606,7 +551,7 @@ class RagServiceTest {
         RagProperties properties = new RagProperties();
         DocumentArchive archive = mock(DocumentArchive.class);
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), archive, new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
         String documentId = UUID.randomUUID().toString();
 
         service.delete(documentId);
@@ -629,7 +574,7 @@ class RagServiceTest {
         stubArchive(archive, first, second);
 
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), archive, new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
 
         RagService.RebuildResult result = service.reindexAll();
 
@@ -655,7 +600,7 @@ class RagServiceTest {
         stubArchive(archive, first, second);
 
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), archive, new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
         List<ReindexProgress> events = new ArrayList<>();
 
         RagService.RebuildResult result = service.reindexArchived(true, events::add);
@@ -686,7 +631,7 @@ class RagServiceTest {
         stubArchive(archive, first, second);
 
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), archive, new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
         List<ReindexProgress> events = new ArrayList<>();
         boolean[] cancelled = {false};
         ReindexListener listener = new ReindexListener() {
@@ -726,7 +671,7 @@ class RagServiceTest {
         stubArchive(archive, first, second);
 
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), archive, new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
         boolean[] revoked = {false};
         ReindexListener listener = new ReindexListener() {
             @Override
@@ -764,7 +709,7 @@ class RagServiceTest {
         stubArchive(archive, first, second);
 
         RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), archive, new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
         List<String> finished = new ArrayList<>();
         List<ReindexProgress> events = new ArrayList<>();
         ReindexListener listener = new ReindexListener() {
@@ -798,7 +743,7 @@ class RagServiceTest {
         when(archive.listSummaries()).thenReturn(List.of());
 
         RagService service = new RagService(mock(VectorStore.class), properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), archive, new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
 
         assertThatThrownBy(service::rebuild)
                 .isInstanceOf(IllegalStateException.class)
@@ -822,7 +767,7 @@ class RagServiceTest {
                         thirdId, "ccc", Map.of(), "sig", "t3"))));
 
         RagService service = new RagService(mock(VectorStore.class), properties, new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService(properties), archive, mock(QdrantClient.class), mock(EmbeddingModel.class));
+                chunkingService(properties), archive, new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
 
         RagService.DocumentPage page = service.listDocuments(2, 1);
 

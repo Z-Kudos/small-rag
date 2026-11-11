@@ -7,7 +7,7 @@ import com.smallrag.ragmcp.rag.RagService;
 import com.smallrag.ragmcp.rag.archive.DocumentArchive;
 import com.smallrag.ragmcp.rag.chunking.ChunkingService;
 import com.smallrag.ragmcp.rag.chunking.ChunkingStrategy;
-import io.qdrant.client.QdrantClient;
+import com.smallrag.ragmcp.rag.vectorstore.FakeDocumentPointsPort;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.ai.document.Document;
@@ -29,7 +29,6 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
-import static org.mockito.Mockito.mock;
 
 /**
  * 离线 RAG 管线评测：真实切分 + 真实检索流程 + 确定性哈希向量模型。
@@ -114,7 +113,7 @@ class RagPipelineEvaluationTest {
         DocumentArchive archive = new DocumentArchive(objectMapper, properties);
         RagService service = new RagService(vectorStore, properties,
                 new QueryCircuitBreaker(properties), new QdrantProperties(), () -> false,
-                chunkingService, archive, mock(QdrantClient.class), embeddingModel);
+                chunkingService, archive, new FakeDocumentPointsPort(), embeddingModel);
 
         Map<String, String> docIds = new LinkedHashMap<>();
         for (Map.Entry<String, String> doc : corpus().entrySet()) {

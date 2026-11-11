@@ -4,6 +4,7 @@ import com.smallrag.ragmcp.config.QdrantProperties;
 import com.smallrag.ragmcp.config.RagProperties;
 import com.smallrag.ragmcp.rag.archive.DocumentArchive;
 import com.smallrag.ragmcp.rag.chunking.ChunkingService;
+import com.smallrag.ragmcp.rag.vectorstore.CleanupResult;
 import io.qdrant.client.PointIdFactory;
 import io.qdrant.client.QdrantClient;
 import io.qdrant.client.QdrantGrpcClient;
@@ -100,7 +101,9 @@ class RagQdrantContainerIT {
         DocumentArchive archive = new DocumentArchive(new ObjectMapper(), properties);
         ragService = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties),
                 qdrantProperties, () -> false,
-                new ChunkingService(properties, embeddingModel), archive, client, embeddingModel);
+                new ChunkingService(properties, embeddingModel), archive,
+                new com.smallrag.ragmcp.rag.vectorstore.QdrantDocumentPointsPort(client, qdrantProperties),
+                embeddingModel);
     }
 
     @Test
@@ -147,7 +150,7 @@ class RagQdrantContainerIT {
                 .get(30, TimeUnit.SECONDS);
         assertThat(countPoints()).isEqualTo(before + 2);
 
-        RagService.CleanupResult result = ragService.cleanupOrphans();
+        CleanupResult result = ragService.cleanupOrphans();
 
         assertThat(result.orphanParents()).isEqualTo(1);
         assertThat(countPoints()).isEqualTo(before);

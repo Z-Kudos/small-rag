@@ -47,7 +47,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * @author zjk
  */
 @Slf4j
-final class QdrantReindexStateBackend implements ReindexStateBackend {
+public final class QdrantReindexStateBackend implements ReindexStateBackend {
 
     private static final String COLLECTION_SUFFIX = "_reindex_state";
     private static final String FIELD_KIND = "kind";
@@ -62,7 +62,7 @@ final class QdrantReindexStateBackend implements ReindexStateBackend {
     private final long timeoutMs;
     private final AtomicBoolean collectionReady = new AtomicBoolean();
 
-    QdrantReindexStateBackend(ObjectMapper objectMapper, QdrantProperties properties,
+    public QdrantReindexStateBackend(ObjectMapper objectMapper, QdrantProperties properties,
             QdrantClient client) {
         this.objectMapper = objectMapper;
         this.client = client;

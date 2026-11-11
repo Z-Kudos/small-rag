@@ -78,6 +78,12 @@ public class RagProperties {
     private String archiveDir = "./data/documents";
 
     /**
+     * 向量库后端配置（rag.vector-store.*）：默认 Qdrant；
+     * 切换为 sqlite 时使用内嵌单文件引擎。
+     */
+    private VectorStore vectorStore = new VectorStore();
+
+    /**
      * 切分策略及其参数。
      */
     private Chunking chunking = new Chunking();
@@ -510,5 +516,44 @@ public class RagProperties {
                     .distinct()
                     .toList();
         }
+    }
+
+    /**
+     * 向量库后端（rag.vector-store.*）。
+     */
+    @Data
+    public static class VectorStore {
+
+        /**
+         * 后端类型：{@code qdrant}（默认）或 {@code sqlite}。
+         */
+        private String type = "qdrant";
+
+        /** SQLite 后端。 */
+        private Sqlite sqlite = new Sqlite();
+
+        /**
+         * @return 是否为 SQLite 后端
+         */
+        public boolean isSqlite() {
+            return "sqlite".equalsIgnoreCase(type);
+        }
+    }
+
+    /**
+     * SQLite 后端（rag.vector-store.sqlite.*）。
+     */
+    @Data
+    public static class Sqlite {
+
+        /**
+         * SQLite 数据库文件路径；容器内建议 {@code /data/smallrag.sqlite}。
+         */
+        private String path = "/data/smallrag.sqlite";
+
+        /**
+         * Embedding 维度；必须与写入时的向量一致（fail-fast 校验）。
+         */
+        private int dimension = 1536;
     }
 }

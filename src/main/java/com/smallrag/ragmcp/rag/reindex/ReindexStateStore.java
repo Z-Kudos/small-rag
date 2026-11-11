@@ -1,11 +1,7 @@
 package com.smallrag.ragmcp.rag.reindex;
 
-import com.smallrag.ragmcp.config.QdrantProperties;
-import io.qdrant.client.QdrantClient;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Optional;
@@ -14,9 +10,8 @@ import java.util.Set;
 /**
  * 重建任务状态的持久化门面。
  *
- * <p>状态存放在 Qdrant 的独立集合 {@code <rag.qdrant.collection-name>_reindex_state} 中，
- * 跟随 Qdrant 的持久化，不依赖应用容器的文件系统；容器重建、换机器或本地开发都不会丢失
- * 进度快照。具体实现见 {@link QdrantReindexStateBackend}。
+ * <p>状态存放在向量库后端（Qdrant 或 SQLite），跟随后端的持久化策略；
+ * 具体实现见 {@link QdrantReindexStateBackend} / {@link SqliteReindexStateBackend}。
  *
  * <p>单实例下只持久化任务快照与检查点，不保存锁镜像；互斥由
  * {@link com.smallrag.ragmcp.rag.IndexActivityGuard} 在进程内完成。
@@ -31,16 +26,10 @@ public class ReindexStateStore {
 
     private final ReindexStateBackend backend;
 
-    @Autowired
-    public ReindexStateStore(ObjectMapper objectMapper, QdrantProperties qdrantProperties,
-            QdrantClient qdrantClient) {
-        this(new QdrantReindexStateBackend(objectMapper, qdrantProperties, qdrantClient));
-    }
-
     /**
-     * 测试入口：注入任意后端。
+     * 注入由向量库后端配置注册的 {@link ReindexStateBackend} bean。
      */
-    ReindexStateStore(ReindexStateBackend backend) {
+    public ReindexStateStore(ReindexStateBackend backend) {
         this.backend = backend;
         log.info("重建任务状态存储: {}", backend.location());
     }

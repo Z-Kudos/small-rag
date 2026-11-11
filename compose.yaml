@@ -26,6 +26,16 @@ services:
       EMBEDDING_READ_TIMEOUT_MS: ${EMBEDDING_READ_TIMEOUT_MS:-120000}
       # GGUF 模型下载地址（首次启动由 start-llama.sh 下载到 EMBEDDING_MODEL_PATH）
       EMBEDDING_MODEL_URL: ${EMBEDDING_MODEL_URL:-https://modelscope.cn/models/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/master/Qwen3-Embedding-0.6B-Q8_0.gguf}
+      QDRANT_HOST: ${QDRANT_HOST:-127.0.0.1}
+      QDRANT_PORT: ${QDRANT_PORT:-6334}
+      QDRANT_USE_TLS: ${QDRANT_USE_TLS:-false}
+      # 向量库后端：qdrant（默认）| sqlite（内嵌单文件）；四种部署形态见 README「部署形态」
+      VECTOR_STORE_TYPE: ${VECTOR_STORE_TYPE:-qdrant}
+      # 容器内是否拉起本地 Qdrant（远程 Qdrant / SQLite 时设为 false）
+      QDRANT_ENABLED: ${QDRANT_ENABLED:-true}
+      # 容器内是否拉起本地 llama.cpp（远程 Embedding 时设为 false）
+      LLAMA_ENABLED: ${LLAMA_ENABLED:-true}
+      SQLITE_PATH: ${SQLITE_PATH:-/data/smallrag.sqlite}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-small_rag_text}
       # 留空表示不启用鉴权
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
@@ -62,7 +72,7 @@ services:
       REINDEX_JOIN_TIMEOUT_SECONDS: ${REINDEX_JOIN_TIMEOUT_SECONDS:-10}
       # 硬超时撤销写权限后的宽限期（秒），到期强制释放任务锁
       REINDEX_RECOVERY_GRACE_SECONDS: ${REINDEX_RECOVERY_GRACE_SECONDS:-120}
-      # 任务快照与任务锁存放在 Qdrant 的 <collection>_reindex_state 集合
+      # 任务快照与检查点存放在向量库后端：Qdrant 模式为 <collection>_reindex_state 集合，sqlite 模式为 reindex_state 表
       REINDEX_RESUME_ON_STARTUP: ${REINDEX_RESUME_ON_STARTUP:-true}
       SEMANTIC_SIMILARITY_THRESHOLD: ${SEMANTIC_SIMILARITY_THRESHOLD:-0.75}
       PARENT_CHUNK_SIZE: ${PARENT_CHUNK_SIZE:-2000}

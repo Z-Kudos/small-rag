@@ -81,6 +81,25 @@ related: [ROADMAP.md, DEV-MEMORY.md, docs/v0.0.4/design/architecture.md, docs/v0
 - 更新 README 中英文、AGENTS、ROADMAP、DEV-MEMORY。
 - 单测与 Qdrant Testcontainers E2E 通过。
 
+### WP4 多形态部署 — 已完成（容器验证除外）
+
+**目标**：一个镜像支持四种部署形态——① 远程 Qdrant + 远程 Embedding（最轻）；② 本地 Qdrant + 本地 llama（默认）；③ SQLite + 远程 Embedding；④ SQLite + 本地 llama。
+
+**变更点**
+
+- 抽取内部端口 `DocumentPointsPort`（枚举/删除/取回父块/孤儿清理/空库探针/初始化校验），`RagService` 改为依赖 `VectorStore + DocumentPointsPort`；Qdrant 专属实现原样搬入 `QdrantDocumentPointsPort`（行为不变）。
+- 新增 SQLite 后端：`SqliteVectorStore`（纯 Java 余弦，无 JNI；Xerial sqlite-jdbc + WAL）、`SqliteDocumentPointsPort`、`SqliteReindexStateBackend`（同一 db 文件存任务状态，替换哑向量集合）。
+- 装配与容器：`VECTOR_STORE_TYPE=qdrant(默认)|sqlite`、`QDRANT_ENABLED`、`LLAMA_ENABLED`；本地进程按开关启停；`start-app.sh` 等待逻辑按开关短路；同一镜像，不构建变体。
+- 切换后端时自动全量重建（`backend_meta` 标记 + 归档 + `ChunkingReindexRunner`）。
+
+**验收**
+
+- `mvn test`（无外部依赖）全绿（当前 **158** 个）；`RagServiceTest` 适配端口后行为不变。
+- `SqliteVectorStoreTest`（10 个）：入库/删除/检索/过滤/维度 fail-fast/任务状态 round-trip。
+- `SmallRagApplicationSqliteTest`：sqlite 后端 Spring 上下文冒烟通过。
+- JVM 级冒烟通过：`java -jar` 以 `VECTOR_STORE_TYPE=sqlite` + `EMBEDDING_BASE_URL`（本机 ollama Qwen3-Embedding-0.6B）完成 ingest → search → `rag_query`，重启复用归档（切分签名按 `IndexNamespaces` 隔离）。
+- 四形态容器构建与 E2E 推迟（本机内存不足）；恢复验证清单见 `DEV-MEMORY.md` 待办。
+
 ## 4. 里程碑与排期
 
 | 里程碑 | 内容 | 出口标准 |
@@ -88,16 +107,19 @@ related: [ROADMAP.md, DEV-MEMORY.md, docs/v0.0.4/design/architecture.md, docs/v0
 | M1 依赖收敛 | WP1 | POM 无 Spring Cloud/Redis/Redisson，单模块构建通过 |
 | M2 单机行为 | WP2 | 进程内互斥、任务恢复、目录导入全部通过测试 |
 | M3 发布准备 | WP3 | 142 单测 + 3 容器 E2E 通过，文档完成 |
+| M4 多形态部署 | WP4 | SQLite 后端可用；四形态 env 组合可选；容器验证推迟，待办登记 |
 
 ## 5. 验证矩阵
 
 | 场景 | 命令 / 方式 | 结果 |
 | --- | --- | --- |
 | 构建 | `mvn clean package` | 通过 |
-| 单测 | `mvn test` | 142 全绿 |
-| Qdrant E2E | `mvn verify -Pcontainer-it` | 3 全绿 |
+| 单测 | `mvn test` | 158 全绿 |
+| Qdrant E2E | `mvn verify -Pcontainer-it` | 3 全绿（v0.0.4 基线；本轮未重跑，见待办） |
 | 启动 | `java -jar target/small-rag-0.0.4.jar` | `/actuator/health` UP |
 | MCP | `initialize` / `tools/list` | 13 个工具可见 |
+| SQLite 单机冒烟 | `VECTOR_STORE_TYPE=sqlite` + JVM 启动，远程 Embedding（本机 ollama） | ingest → search → rag_query 通过 |
+| 四形态容器验证 | `docker compose` + 各 env 组合 | 推迟（内存不足），见待办 |
 
 ## 6. 决策记录
 
@@ -109,6 +131,7 @@ related: [ROADMAP.md, DEV-MEMORY.md, docs/v0.0.4/design/architecture.md, docs/v0
 | D4 | 锁 | 进程内 `IndexActivityGuard`，不使用 Redis/Redisson |
 | D5 | 文档 | 新建 `docs/v0.0.4`，冻结 `docs/v0.0.3` |
 | D6 | “轻量化”口径 | 只指移除分布式组件；不压镜像体积，不替换技术栈 |
+| D7 | 多形态部署 | 同一镜像 + 进程级开关；默认保持全量（qdrant + 本地 llama）；SQLite 为可选向量库，纯 Java 余弦、无 JNI；sqlite 后端任务状态落同一 db 文件 |
 
 ## 7. 完成定义（DoD）
 

@@ -1,6 +1,6 @@
 # AGENTS.md — small-rag
 
-单模块 Spring Boot 服务 `small-rag`：通过 MCP（Streamable HTTP）暴露**纯文本 RAG** 能力；向量库固定 **Qdrant**。v0.0.4 起只支持单机单容器部署。
+单模块 Spring Boot 服务 `small-rag`：通过 MCP（Streamable HTTP）暴露**纯文本 RAG** 能力；向量库可配置——默认 **Qdrant**，可切换为内置 **SQLite** 引擎（`VECTOR_STORE_TYPE`）。v0.0.4 起只支持单机单容器部署。
 
 ## 版本基线（严格锁定）
 
@@ -27,7 +27,8 @@
 
 ## 容器化
 
-- **只保留 all-in-one**：镜像包含应用、Qdrant、llama.cpp，`supervisord` 作为 PID 1；`docker/entrypoint.sh` 直接启动 `supervisord-all-in-one.conf`。
+- **只保留一个 all-in-one 镜像**：镜像包含应用、Qdrant、llama.cpp，`supervisord` 作为 PID 1；`docker/entrypoint.sh` 直接启动 `supervisord-all-in-one.conf`。
+- **四种部署形态**（同一镜像，靠进程级开关切换）：① `qdrant` + `QDRANT_ENABLED=false` + `LLAMA_ENABLED=false`（远程 Qdrant + 远程 Embedding，最轻）；② `qdrant` + `QDRANT_ENABLED=true` + `LLAMA_ENABLED=true`（本地全量，默认）；③ `sqlite` + `QDRANT_ENABLED=false` + `LLAMA_ENABLED=false`；④ `sqlite` + `QDRANT_ENABLED=false` + `LLAMA_ENABLED=true`。`VECTOR_STORE_TYPE=sqlite|qdrant`（默认 `qdrant`）；`QDRANT_ENABLED=true|false`；`LLAMA_ENABLED=true|false`。
 - 只对外暴露 **18080**；Qdrant（6333/6334）与 Embedding 服务（11434）绑定 `127.0.0.1`。
 - 多阶段构建：`maven:3.9-eclipse-temurin-25` 构建 → 以 `qdrant/qdrant` 为基底从源码编译 llama-server（`LLAMA_CPP_TAG`，默认 `v0.9.0`）→ 拷入 Temurin JRE；基础镜像可用 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE` 替换。
 - 默认向量模型 Qwen3-Embedding-0.6B Q8_0（1024 维），`start-llama.sh` 首次启动从 ModelScope 下载 GGUF（断点续传），以 `--embeddings --pooling last` 启动（**必须 last pooling**）。
@@ -44,10 +45,10 @@
 - `rag/sources`：`SourceSyncService` 扫描 `rag.sources.directories`（逗号分隔，支持 `label=/path`）；文档 id 由稳定 label + 相对路径确定性生成；先比 `mtime + size`，再比 SHA-256；触发：启动、定时、watcher、MCP `rag_sync_sources(force)`；`max-file-bytes` / `max-files-per-scan` 限流；`delete-missing` 只删除当前仍配置且本轮成功扫描的根目录下消失文件，`delete-orphan-roots` 清理已移除 label（默认关闭）；手动 `rag_delete` 留下墓碑。**单实例直接扫描，无 leader 选举**。
 - `rag/chunking`：`ChunkingService` 分发 `fixed`/`recursive`/`semantic`/`parent-child`（默认）；`MarkdownChunker` 是 semantic 与 parent-child 共用的内部结构引擎；`SemanticTextChunker` 做超长文本句子级回落；长度单位是全宽字符当量（`TextWeights`：CJK=1、拉丁=0.25）；`ChunkingSignature` 只含影响切分结果的配置。
 - `rag/archive`：`DocumentArchive` 按 `doc_id` 归档原文；`.archive/index.json` 摘要索引供 `rag_list`、启动重切、全文重建使用；索引缺失/版本不符/id 集合不一致时重建；归档不可写时降级关闭自动重切。
-- `config`：`QdrantConfig`、`McpServerConfig`、`EmbeddingConfig`（OpenAI SDK/OkHttp 超时）、`RagProperties`、`QdrantProperties`。
+- `config`：`QdrantConfig`（qdrant 后端）、`SqliteVectorStoreConfig`（sqlite 后端）、`CommonRagConfig`、`McpServerConfig`、`EmbeddingConfig`（OpenAI SDK/OkHttp 超时）、`RagProperties`、`QdrantProperties`。
 - **只使用向量模型**：`spring.ai.model.chat=none`；不新增 `ChatClient`/`ChatModel`。
 - **Embedding 配置**：`EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`（回退 `OPENAI_*`）；base-url 必须含 `/v1`；不支持 JVM 内 ONNX；HTTP 超时用 `EMBEDDING_CONNECT_TIMEOUT_MS` / `EMBEDDING_READ_TIMEOUT_MS`。
-- **Qdrant 约束**：gRPC 端口 `6334`；`Document` id 必须是 UUID；`doSimilaritySearch` 先 Embedding 再查库，空库用 `KnowledgeBaseProbe` 短路；集合初始化 fail-soft，维度不一致 fail-fast；gRPC deadline 用 `rag.qdrant.request-timeout-ms`；状态集合独立，不并入主集合。
+- **Qdrant 约束**（仅 `VECTOR_STORE_TYPE=qdrant`）：gRPC 端口 `6334`；`Document` id 必须是 UUID；`doSimilaritySearch` 先 Embedding 再查库，空库用 `KnowledgeBaseProbe` 短路；集合初始化 fail-soft，维度不一致 fail-fast；gRPC deadline 用 `rag.qdrant.request-timeout-ms`；状态集合独立，不并入主集合。切换为 `sqlite` 时：数据与任务状态落到 `SQLITE_PATH`（默认 `/data/smallrag.sqlite`，WAL 模式）；纯 Java 余弦检索，规模建议 <5 万片段，更大请用 Qdrant；**同一 sqlite 文件禁止被多个容器实例共享**。
 - **MCP**：`McpSyncServerCustomizer` 是单例且已被 WebMVC 自动配置占用，不要自定义；instructions 走 `spring.ai.mcp.server.*`。
 - `application.yml` 必须：`protocol=STREAMABLE`、`name=small-rag`、`version=0.0.4`，MCP 端点 `/mcp`，payload 正文字段名共用 `RagService.CONTENT_FIELD`（"content"）。
 

@@ -48,6 +48,8 @@ related: [README.md, docs/v0.0.4/plan.md, docs/v0.0.4/adr/0001-single-node-scope
 
 - **单容器**：应用、Qdrant、llama.cpp 同容器；容器停止即全部停止，没有高可用。
 - **资源**：Embedding 模型约 640 MB，加载后需要额外内存；建议 2–4 GB RAM、2 vCPU、5 GB 磁盘。
+- **SQLite 模式**（`VECTOR_STORE_TYPE=sqlite`）：片段与任务状态落一个 `SQLITE_PATH` 文件（WAL）；纯 Java 余弦检索建议 <5 万片段，超过请改用 Qdrant；**同一 sqlite 文件禁止被多个容器实例共享**（跨容器写会损坏/冲突）；单点故障，损坏时只能从归档重建。
+- **Qdrant 模式**：集合初始化 fail-soft，维度不一致 fail-fast；空库用 `KnowledgeBaseProbe` 短路。
 - **备份**：需要同时备份 `/data/documents`（归档）与 `/data/qdrant/storage`（向量）；只备份其一无法完整恢复。
 - **升级**：升级会替换容器；升级前需要备份数据卷。
 
@@ -65,3 +67,4 @@ related: [README.md, docs/v0.0.4/plan.md, docs/v0.0.4/adr/0001-single-node-scope
 
 - 多副本、Gateway、Config Server、Redisson 等能力保留在 `~/Projects/cloud-rag`，本仓库不再引入。
 - 镜像体积与依赖替换不作为演进方向：当前镜像规模按“应用 + Qdrant + llama.cpp + Temurin JRE”接受，需要更小体积请自行调整 `Dockerfile`。
+- 多形态部署（同一镜像 + 进程级开关）已列入 WP4：SQLite 作为可选向量库；Qdrant 仍为默认；不引进新的运行依赖（纯 JNI-free 实现）。
