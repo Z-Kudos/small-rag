@@ -29,7 +29,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 - 容器 E2E：`mvn verify -Pcontainer-it`，Qdrant Testcontainers **3** 个测试全绿。
 - 本机 Docker Hub 受限时可用 `-Dsmallrag.qdrant.image=docker.1ms.run/qdrant/qdrant:latest` 覆盖镜像。
 
-### 2.1 体积基线（v0.0.4 实测）
+### 2.1 体积基线（v0.0.4 实测，仅作记录）
 
 | 对象 | 体积 | 说明 |
 | --- | --- | --- |
@@ -107,4 +107,5 @@ fat jar 主要依赖（未压缩）：`openai-java-core` 65.3 MB、netty 16.6 MB
 
 - v0.0.4：已发布；下一版本待确认。
 - 需要多副本时使用 `~/Projects/cloud-rag`。
-- 体积优化候选（未实施，详见 [`ROADMAP.md`](ROADMAP.md) 6.2）：`jlink` 定制 JRE（约 -136 MB）、排除非 Linux-x86_64 平台 QUIC native（约 -8.9 MB）、删除 Qdrant Dashboard 静态资源（约 -17 MB）、收敛 Spring AI OpenAI starter（约 -30 MB，需专项评估）。
+- **不做镜像体积优化**：`jlink` 定制运行时、删 `/qdrant/static`、排除 QUIC native 等一律不实施（体积基线仅作记录，见 2.1）。
+- 技术栈轻量化方向（依赖面收敛 / 嵌入式向量库 / 去 Spring Boot / 合并抽象层）已讨论，**暂不实施**；下一版本只做单机 RAG 质量、切分、导入的演进。
