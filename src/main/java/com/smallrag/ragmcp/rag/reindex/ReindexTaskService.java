@@ -2,6 +2,7 @@ package com.smallrag.ragmcp.rag.reindex;
 
 import com.smallrag.ragmcp.rag.IndexActivityGuard;
 
+import com.smallrag.ragmcp.rag.vectorstore.CleanupResult;
 import com.smallrag.ragmcp.rag.RagService;
 
 import com.smallrag.ragmcp.config.QdrantProperties;
@@ -396,7 +397,7 @@ public class ReindexTaskService {
      */
     private void cleanupOrphans(Task task) {
         try {
-            RagService.CleanupResult cleanup = ragService.cleanupOrphans();
+            CleanupResult cleanup = ragService.cleanupOrphans();
             if (cleanup == null) {
                 return;
             }

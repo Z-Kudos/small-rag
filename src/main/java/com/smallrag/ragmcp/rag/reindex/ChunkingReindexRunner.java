@@ -1,5 +1,6 @@
 package com.smallrag.ragmcp.rag.reindex;
 
+import com.smallrag.ragmcp.rag.vectorstore.IndexNamespaces;
 import com.smallrag.ragmcp.rag.IndexActivityGuard;
 import com.smallrag.ragmcp.rag.RagService;
 
@@ -58,7 +59,7 @@ public class ChunkingReindexRunner implements ApplicationRunner {
             return;
         }
 
-        String signature = ChunkingSignature.of(properties, qdrantProperties.getCollectionName());
+        String signature = ChunkingSignature.of(properties, IndexNamespaces.of(properties, qdrantProperties));
         List<ArchivedDocumentSummary> documents = documentArchive.listSummaries();
         List<ArchivedDocumentSummary> pending = documents.stream()
                 .filter(document -> !signature.equals(document.chunkSignature()))

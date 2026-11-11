@@ -2,7 +2,7 @@
 title: ROADMAP
 status: done
 version: 0.0.4
-updated: 2026-11-10
+updated: 2026-11-11
 owners: [zjk]
 related: [docs/v0.0.4/plan.md, docs/v0.0.4/adr/0001-single-node-scope.md, DEV-MEMORY.md]
 ---
@@ -57,4 +57,4 @@ v0.0.4 主题：**单机轻量化**——保留完整 RAG，移除分布式基�
 ## 6. 后续
 
 - 需要多副本时使用封存项目 `~/Projects/cloud-rag`。
-- 本仓库后续版本只围绕单机 RAG 质量、切分、导入与资源占用演进。
+- 本仓库后续版本只围绕单机 RAG 质量、切分、目录导入与多形态部署（SQLite 可选、同一镜像）演进。

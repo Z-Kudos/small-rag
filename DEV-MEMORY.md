@@ -2,7 +2,7 @@
 title: DEV-MEMORY
 status: done
 version: 0.0.4
-updated: 2026-11-10
+updated: 2026-11-11
 owners: [zjk]
 related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 ---
@@ -14,24 +14,25 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 
 ## 1. 当前阶段
 
-- 版本：`0.0.4`（已发布，`main` tag `v0.0.4`）。
+- 版本：`0.0.4`（**2026-11-11 重打 tag `v0.0.4`**，包含多形态部署 WP4 与四形态切换；v0.0.4 未切换版本号，`ChunkingSignature` 保持 `v0.0.4`）。
 - 上一版：`v0.0.3`（已发布；分布式版本已封存为 `~/Projects/cloud-rag`）。
-- 主题：**单机轻量化**。
+- 主题：**单机轻量化**（移除分布式组件）+ **多形态部署**（WP4）。
 - 规划：[`docs/v0.0.4/plan.md`](docs/v0.0.4/plan.md)。
-- 状态：WP1–WP3 已完成；`main` + tag `v0.0.4` 已发布。
+- 状态：WP1–WP4 已完成（WP4 的容器构建/四形态容器冒烟除外，见待办）；`main` + tag `v0.0.4` 已发布。
 - 文档：`README.md`（简体中文）/ `README.en.md`（English）；设计/ADR 在 `docs/v0.0.4/`；`docs/v0.0.3/` 冻结。
 - **不切换版本**：下一次版本变更需人工确认。
+- **tag v0.0.4 改写说明**：旧 tag `v0.0.4` 指向 `e5c165c`（2026-11-10 发布），2026-11-11 删除并重打至包含 WP4 的 release main；旧发布内容仍保留在主线历史中（`git log` 可查），但已 clone 仓库的 tag 指针不会自动更新。
 
 ## 2. 构建与验证
 
 - JDK 25；`mvn clean package` 单模块产出 `target/small-rag-0.0.4.jar`。
-- 单测：`mvn test`，**142** 个测试全绿，不依赖外部服务。
+- 单测：`mvn test`，**158** 个测试全绿，不依赖外部服务。
 - 容器 E2E：`mvn verify -Pcontainer-it`，Qdrant Testcontainers **3** 个测试全绿。
 - 本机 Docker Hub 受限时可用 `-Dsmallrag.qdrant.image=docker.1ms.run/qdrant/qdrant:latest` 覆盖镜像。
 
 ## 3. 运行形态
 
-- **唯一形态：all-in-one 单容器**。应用 + Qdrant + llama-server 由 supervisord 管理，只暴露 18080；Qdrant 6333/6334、Embedding 11434 绑定 127.0.0.1。
+- **唯一镜像 + 四部署形态**：应用 + Qdrant + llama-server 同镜像、supervisord 管理、只暴露 18080；默认 qdrant+llama（全量），关闭本地进程即切形态（见 [`README.md#部署形态`](README.md#部署形态)）。
 - 不再支持 `SMALL_RAG_RUNTIME=app-only`、Gateway、Config Server、Consul、Redis。
 - 镜像构建：Maven 构建 → Qdrant 基底编译 llama-server（`LLAMA_CPP_TAG=v0.9.0`）→ 拷入 Temurin JRE。
 
@@ -58,7 +59,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 - `rag_rebuild` 与 `rag_reindex`（不传 id）为异步任务；单篇 `rag_reindex(documentId)` 同步。
 - `IndexActivityGuard`：进程内 `AtomicReference<String>` owner 标记，`tryAcquire` CAS、`release` 按 label 内容比较；串行化重建与目录导入。
 - `ReindexTaskService`：每任务独立 daemon 线程 + 单任务互斥 + 保留最近 20 个快照。
-- 状态持久化：`ReindexStateStore` + `QdrantReindexStateBackend` 写入 `<collection>_reindex_state`（1 维哑向量 + JSON payload），只保存快照与 `cleared` / `completedDocumentIds` 检查点。
+- 状态持久化：`ReindexStateStore` + 后端（Qdrant：`QdrantReindexStateBackend` 写 `<collection>_reindex_state`，1 维哑向量 + JSON payload；sqlite：`SqliteReindexStateBackend` 写同一 db 的 `reindex_state` 表）只保存快照与 `cleared` / `completedDocumentIds` 检查点。
 - 重启：未完成任务标 `interrupted` 并自动持有活动锁；`REINDEX_RESUME_ON_STARTUP=true` 自动续接，否则等 `rag_task_resume` / `rag_task_cancel`。
 - 看门狗：停滞只标 `stalled`；硬超时撤销写权限 + 取消在途 Embedding + 中断线程；线程退出则释放活动锁，否则宽限期后强制释放。
 
@@ -92,5 +93,10 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 
 ## 6. 待办
 
-- v0.0.4：已发布；下一版本待确认。
+- v0.0.4：已发布（2026-11-11 重打 tag，含 WP4 多形态部署）；下一版本待确认。
 - 需要多副本时使用 `~/Projects/cloud-rag`。
+- **不做镜像体积优化**：`jlink` 定制运行时、删 `/qdrant/static`、排除 QUIC native 等一律不实施。
+- 技术栈轻量化方向（依赖面收敛 / 嵌入式向量库 / 去 Spring Boot / 合并抽象层）已讨论：嵌入式向量库以 **SQLite 可选后端**形式进入 WP4（纯 Java 余弦，无 JNI）；其余（去 Spring AI / 去 Spring Boot）仍暂不实施。
+- 多形态部署（WP4，代码已完成）：同一镜像四形态——① 远程 Qdrant + 远程 Embedding；② 本地 Qdrant + 本地 llama（默认）；③ SQLite + 远程 Embedding；④ SQLite + 本地 llama。开关：`VECTOR_STORE_TYPE`（默认 qdrant）、`QDRANT_ENABLED`、`LLAMA_ENABLED`；sqlite 规模护栏 <5 万片段；任务状态落 `SQLITE_PATH` 的 `reindex_state` 表；切后端按 `IndexNamespaces` 隔离切分签名，归档触发一次全量重建。158 单测绿；本机 JVM 冒烟（sqlite + 本地 ollama Qwen3-Embedding-0.6B）ingest → search → rag_query 通过，重启不重灌。
+- **spring.ai.vectorstore.type 必须与 rag.vector-store.type 同步**（已在 application.yml 用同一 env 绑定），否则 Spring AI Qdrant 自动装配会另建 QdrantVectorStore 与 SQLite 后端竞争，且按参数名解析覆盖 SQLite Bean。
+- **待办**：容器构建（本机内存不足，避免 docker build / llama.cpp 编译）+ 四形态冒烟 + `mvn verify -Pcontainer-it` 回归；恢复后第一件事是容器验证。

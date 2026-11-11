@@ -2,6 +2,10 @@ package com.smallrag.ragmcp.config;
 
 import com.smallrag.ragmcp.rag.KnowledgeBaseProbe;
 import com.smallrag.ragmcp.rag.RagService;
+import com.smallrag.ragmcp.rag.reindex.QdrantReindexStateBackend;
+import com.smallrag.ragmcp.rag.reindex.ReindexStateBackend;
+import com.smallrag.ragmcp.rag.vectorstore.DocumentPointsPort;
+import com.smallrag.ragmcp.rag.vectorstore.QdrantDocumentPointsPort;
 import io.qdrant.client.QdrantClient;
 import io.qdrant.client.QdrantGrpcClient;
 import io.qdrant.client.grpc.Collections.CollectionInfo;
@@ -15,7 +19,7 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.qdrant.QdrantVectorStore;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -36,7 +40,7 @@ import java.util.concurrent.TimeUnit;
  * @author zjk
  */
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties({RagProperties.class, QdrantProperties.class})
+@ConditionalOnProperty(name = "rag.vector-store.type", havingValue = "qdrant", matchIfMissing = true)
 @Slf4j
 public class QdrantConfig {
 
@@ -83,6 +87,23 @@ public class QdrantConfig {
                 return false;
             }
         };
+    }
+
+    /**
+     * 文档 point 底层操作端口：枚举/删除/取回父块/孤儿片段清理。
+     */
+    @Bean
+    public DocumentPointsPort documentPointsPort(QdrantClient qdrantClient, QdrantProperties properties) {
+        return new QdrantDocumentPointsPort(qdrantClient, properties);
+    }
+
+    /**
+     * 重建任务状态后端：任务状态跟随 Qdrant 持久化。
+     */
+    @Bean
+    public ReindexStateBackend reindexStateBackend(tools.jackson.databind.ObjectMapper objectMapper,
+            QdrantProperties properties, QdrantClient client) {
+        return new QdrantReindexStateBackend(objectMapper, properties, client);
     }
 
     @Bean

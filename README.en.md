@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | **English**
 
-A **pure-text RAG retrieval** MCP service built on Spring AI: it only performs vector ingestion and retrieval, never calls a chat/generation model. Document management, `rag_search`, and `rag_query` are exposed over MCP (Streamable HTTP); the vector store is always **Qdrant**. Input is Markdown / Obsidian-compatible Markdown in Chinese or English; `rag_query` returns augmented context and the caller's agent generates the answer.
+A **pure-text RAG retrieval** MCP service built on Spring AI: it only performs vector ingestion and retrieval, never calls a chat/generation model. Document management, `rag_search`, and `rag_query` are exposed over MCP (Streamable HTTP); the vector store is **Qdrant by default, switchable to an embedded SQLite store**. Input is Markdown / Obsidian-compatible Markdown in Chinese or English; `rag_query` returns augmented context and the caller's agent generates the answer.
 
 **v0.0.4 is the single-node lightweight edition**: one module, one container, one port, with no Redis / Consul / Gateway / Config Server. The previous distributed edition is preserved as `cloud-rag`.
 
@@ -18,6 +18,7 @@ A **pure-text RAG retrieval** MCP service built on Spring AI: it only performs v
 - [Documentation](#documentation)
 - [Quick start (local)](#quick-start-local)
 - [Container deployment (single container)](#container-deployment-single-container)
+- [Deployment shapes](#deployment-shapes)
 - [Mount host Markdown directories](#mount-host-markdown-directories)
 - [Configuration](#configuration)
 - [MCP tools](#mcp-tools)
@@ -112,6 +113,48 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 
 Use `.env` to override `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE` for regional mirrors; `LLAMA_CPP_TAG` defaults to `v0.9.0`. Bind-mounted directories must be writable by container UID `10001`.
 
+## Deployment shapes
+
+The same image supports four deployment shapes, controlled by three environment variables: `VECTOR_STORE_TYPE` (`qdrant` by default, or `sqlite` for an embedded single-file store — recommended under ~50k chunks), `QDRANT_ENABLED` (whether to start the local Qdrant process), and `LLAMA_ENABLED` (whether to start the local llama.cpp process). The chunk-signature namespace is isolated per backend, so switching to SQLite triggers a one-time full reindex from the archive — expected behavior.
+
+| # | Vector store | Embedding | Best for |
+| --- | --- | --- | --- |
+| 1 | Remote Qdrant | Remote | Lightest: no local vector or model processes |
+| 2 | Local Qdrant | Local llama (default) | Fully self-contained, current default |
+| 3 | SQLite | Remote | All data in one `SQLITE_PATH` file<br/>(under ~50k chunks) |
+| 4 | SQLite | Local llama | Resource-friendly self-contained setup (small deployments) |
+
+Per-shape environment examples (`docker run -e` or via `.env`):
+
+```bash
+# Shape 1: remote Qdrant + remote Embedding (lightest)
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
+  -e VECTOR_STORE_TYPE=qdrant -e QDRANT_ENABLED=false -e LLAMA_ENABLED=false \
+  -e QDRANT_HOST=qdrant.example.com -e QDRANT_PORT=6334 \
+  -e EMBEDDING_BASE_URL=https://your-embedding/v1 \
+  -e EMBEDDING_API_KEY=sk-... -e EMBEDDING_MODEL=qwen3-embedding-0.6b \
+  -e EMBEDDING_DIMENSION=1024 -e SMALL_RAG_ENSURE_EMBEDDING_MODEL=false \
+  small-rag:0.0.4
+
+# Shape 2: local Qdrant + local llama (default, equivalent to no -e flags)
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.4
+
+# Shape 3: SQLite + remote Embedding
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
+  -e VECTOR_STORE_TYPE=sqlite -e QDRANT_ENABLED=false -e LLAMA_ENABLED=false \
+  -e EMBEDDING_BASE_URL=https://your-embedding/v1 \
+  -e EMBEDDING_API_KEY=sk-... -e EMBEDDING_MODEL=qwen3-embedding-0.6b \
+  -e EMBEDDING_DIMENSION=1024 -e SMALL_RAG_ENSURE_EMBEDDING_MODEL=false \
+  small-rag:0.0.4
+
+# Shape 4: SQLite + local llama
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
+  -e VECTOR_STORE_TYPE=sqlite -e QDRANT_ENABLED=false \
+  small-rag:0.0.4
+```
+
+SQLite notes: chunks, reindex task state (the `reindex_state` table), and the dimension marker all live in `SQLITE_PATH` (default `/data/smallrag.sqlite`, WAL mode); **never share this file across multiple container instances**; when changing embedding models, update `EMBEDDING_DIMENSION` to match — a mismatch blocks startup, and switching models requires deleting the file and re-ingesting.
+
 ## Mount host Markdown directories
 
 `SMALL_RAG_SOURCE_DIRS` uses **container paths**, so host directories must be mounted first. The recommended prefix is `/data/sources/...`:
@@ -171,6 +214,10 @@ SMALL_RAG_SOURCE_HOST=/host/knowledge make up-sources
 | `QDRANT_COLLECTION` | `small_rag_text` | Collection name, created automatically |
 | `QDRANT_USE_TLS` | `false` | Enable TLS |
 | `QDRANT_REQUEST_TIMEOUT_MS` | `30000` | Qdrant RPC deadline |
+| `VECTOR_STORE_TYPE` | `qdrant` | Vector store backend: `qdrant` / `sqlite` |
+| `SQLITE_PATH` | `/data/smallrag.sqlite` | SQLite data file (chunks, task state in `reindex_state`, dimension marker in one file, WAL) |
+| `QDRANT_ENABLED` | `true` | Start local Qdrant in container; `false` skips the local readyz wait (remote Qdrant / SQLite) |
+| `LLAMA_ENABLED` | `true` | Start local llama.cpp in container; `false` skips the embedding health wait (remote Embedding) |
 | `RAG_QUERY_BREAKER_ENABLED` | `true` | Retrieval circuit breaker |
 | `RAG_QUERY_BREAKER_FAILURE_RATE` | `50` | Failure rate (%) that opens the circuit |
 | `RAG_QUERY_BREAKER_OPEN_WAIT` | `30s` | Wait before half-open |
@@ -230,7 +277,7 @@ Changing strategy or sizes changes `ChunkingSignature`, so archived documents ar
 mvn test
 ```
 
-Unit tests do not require Qdrant or model credentials; there are currently 142 tests.
+Unit tests do not require Qdrant or model credentials; there are currently 158 tests.
 
 - Container E2E (requires Docker / Podman): `mvn verify -Pcontainer-it`. Testcontainers starts a real Qdrant and covers ingestion, retrieval, idempotent upserts, and orphan cleanup.
 - Default image is `qdrant/qdrant:latest`; override with `-Dsmallrag.qdrant.image=...`.

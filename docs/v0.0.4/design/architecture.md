@@ -2,7 +2,7 @@
 title: 单机架构与设计要点
 status: done
 version: 0.0.4
-updated: 2026-11-10
+updated: 2026-11-11
 owners: [zjk]
 template: docs/templates/design.md
 related: [README.md, docs/v0.0.4/plan.md, docs/v0.0.4/adr/0001-single-node-scope.md]
@@ -19,8 +19,8 @@ related: [README.md, docs/v0.0.4/plan.md, docs/v0.0.4/adr/0001-single-node-scope
 
 - JDK 25、Spring Boot `4.2.0-RC1`、Spring AI `2.0.2`。
 - 只使用 Embedding 模型，不创建 ChatModel / ChatClient。
-- 向量库固定 Qdrant；不依赖 Redis、Consul、Config Server、Gateway。
-- 单容器 `all-in-one`：应用 + Qdrant + llama.cpp 由 supervisord 管理。
+- 向量库可配置：Qdrant 默认，SQLite 可选（纯 Java 余弦，无 JNI）；不依赖 Redis、Consul、Config Server、Gateway。
+- 单容器 `all-in-one`：应用 + Qdrant + llama.cpp 由 supervisord 管理，进程级开关可按需停用本地 Qdrant（`QDRANT_ENABLED=false`）与本地 llama（`LLAMA_ENABLED=false`）。
 
 ## 3. 设计要点
 
@@ -33,7 +33,8 @@ related: [README.md, docs/v0.0.4/plan.md, docs/v0.0.4/adr/0001-single-node-scope
 - **确定性 chunk id**：`chunk:<docId>:<signature>:<index>`；同配置重复 upsert 覆盖同一批 point。
 - **检索熔断**：直接使用 Resilience4j，只包 `rag_search` / `rag_query`。
 - **单实例互斥**：`IndexActivityGuard` 用 `AtomicReference<String>` 串行化重建任务与目录导入；无租约、无续租。
-- **异步重建**：每任务独立 daemon 线程；进度/检查点存 Qdrant 独立集合 `<collection>_reindex_state`；看门狗处理停滞、硬超时与宽限期。
+- **异步重建**：每任务独立 daemon 线程；进度/检查点存独立存储（Qdrant）或同一 SQLite 文件（sqlite 模式）；看门狗处理停滞、硬超时与宽限期。
+- **向量库可配置**：`VECTOR_STORE_TYPE` 选 `qdrant`（默认）或 `sqlite`；SQLite 模式下任务状态落到 `SQLITE_PATH` 的 `reindex_state` 表，替代哑向量集合；切换后端时 `backend_meta` 不匹配 → 归档全量重建。`DocumentPointsPort` 屏蔽两种后端的 Qdrant/SQL 专属操作。
 - **目录导入**：确定性文档 id + mtime/size/SHA-256 增量；启动、定时、watcher、MCP 触发。
 - **归档**：原文与摘要索引存本地卷，启动时按切分签名自动重切。
 
@@ -72,4 +73,4 @@ ragmcp/
 ## 7. 回滚与演进
 
 - **回滚**：回退镜像与配置；归档保留原文，可用 `rag_rebuild` 按当前配置重建。
-- **演进**：多副本能力已移至 `cloud-rag`，本仓库不再引入分布式组件。
+- **演进**：多副本能力已移至 `cloud-rag`，本仓库不再引入分布式组件；镜像体积与依赖替换同样不在演进范围。

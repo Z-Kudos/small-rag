@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.en.md)
 
-基于 Spring AI 的**纯文本 RAG 检索** MCP 服务：只做向量入库与检索，不调用 Chat / 生成模型。通过 MCP（Streamable HTTP）暴露文档管理、`rag_search`、`rag_query`；向量库固定 **Qdrant**。输入为标准 Markdown / Obsidian 兼容 Markdown 的中英文纯文本，`rag_query` 返回增强上下文，回答由调用方 Agent 生成。
+基于 Spring AI 的**纯文本 RAG 检索** MCP 服务：只做向量入库与检索，不调用 Chat / 生成模型。通过 MCP（Streamable HTTP）暴露文档管理、`rag_search`、`rag_query`；向量库**默认 Qdrant，可切换为内嵌 SQLite**。输入为标准 Markdown / Obsidian 兼容 Markdown 的中英文纯文本，`rag_query` 返回增强上下文，回答由调用方 Agent 生成。
 
 **v0.0.4 是单机轻量版**：单模块、单容器、单端口，不依赖 Redis / Consul / Gateway / Config Server。原分布式版本已封存为 `cloud-rag`。
 
@@ -18,6 +18,7 @@
 - [文档](#文档)
 - [快速开始（本地）](#快速开始本地)
 - [容器部署（单容器）](#容器部署单容器)
+- [部署形态](#部署形态)
 - [挂载宿主机 Markdown 目录](#挂载宿主机-markdown-目录)
 - [配置](#配置)
 - [MCP 工具](#mcp-工具)
@@ -112,6 +113,48 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 
 国内镜像可通过 `.env` 覆盖 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE`，llama.cpp 源码版本用 `LLAMA_CPP_TAG`（默认 `v0.9.0`）。bind mount 时需保证容器内 UID `10001` 可写。
 
+## 部署形态
+
+同一个镜像支持四种部署形态，由三个环境变量控制：`VECTOR_STORE_TYPE`（`qdrant` 默认 / `sqlite` 内嵌单文件，规模建议 <5 万片段）、`QDRANT_ENABLED`（是否拉起本地 Qdrant）、`LLAMA_ENABLED`（是否拉起本地 llama.cpp）。切分签名按后端隔离：切到 SQLite 后端后，归档原文会触发一次全量重切，属预期行为。
+
+| # | 向量库 | Embedding | 适用 |
+| --- | --- | --- | --- |
+| 1 | 远程 Qdrant | 远程 | 最轻量，零本地向量/模型进程 |
+| 2 | 本地 Qdrant | 本地 llama（默认） | 全量自足，默认行为 |
+| 3 | SQLite | 远程 | 数据只落一个 `SQLITE_PATH` 文件<br/>（建议 <5 万片段） |
+| 4 | SQLite | 本地 llama | 资源友好的自足形态（推荐小规模部署） |
+
+按形态设置的环境变量示例（`docker run -e` 或改 `.env`）：
+
+```bash
+# 形态 1：远程 Qdrant + 远程 Embedding（最轻量）
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
+  -e VECTOR_STORE_TYPE=qdrant -e QDRANT_ENABLED=false -e LLAMA_ENABLED=false \
+  -e QDRANT_HOST=qdrant.example.com -e QDRANT_PORT=6334 \
+  -e EMBEDDING_BASE_URL=https://your-embedding/v1 \
+  -e EMBEDDING_API_KEY=sk-... -e EMBEDDING_MODEL=qwen3-embedding-0.6b \
+  -e EMBEDDING_DIMENSION=1024 -e SMALL_RAG_ENSURE_EMBEDDING_MODEL=false \
+  small-rag:0.0.4
+
+# 形态 2：本地 Qdrant + 本地 llama（默认，等同于不加任何 -e）
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.4
+
+# 形态 3：SQLite + 远程 Embedding
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
+  -e VECTOR_STORE_TYPE=sqlite -e QDRANT_ENABLED=false -e LLAMA_ENABLED=false \
+  -e EMBEDDING_BASE_URL=https://your-embedding/v1 \
+  -e EMBEDDING_API_KEY=sk-... -e EMBEDDING_MODEL=qwen3-embedding-0.6b \
+  -e EMBEDDING_DIMENSION=1024 -e SMALL_RAG_ENSURE_EMBEDDING_MODEL=false \
+  small-rag:0.0.4
+
+# 形态 4：SQLite + 本地 llama
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
+  -e VECTOR_STORE_TYPE=sqlite -e QDRANT_ENABLED=false \
+  small-rag:0.0.4
+```
+
+SQLite 注意事项：片段、任务状态（`reindex_state` 表）、维度元数据都落在 `SQLITE_PATH`（默认 `/data/smallrag.sqlite`，WAL 模式）；**不要让多个容器实例共享同一文件**；换 Embedding 模型时需同步改 `EMBEDDING_DIMENSION`，维度不一致会阻断启动，重建需删除该文件后重新导入。
+
 ## 挂载宿主机 Markdown 目录
 
 目录导入的 `SMALL_RAG_SOURCE_DIRS` 使用**容器内路径**，宿主机目录必须先挂载进容器。推荐挂到 `/data/sources/...`：
@@ -171,6 +214,10 @@ SMALL_RAG_SOURCE_HOST=/host/knowledge make up-sources
 | `QDRANT_COLLECTION` | `small_rag_text` | 集合名，启动时自动创建 |
 | `QDRANT_USE_TLS` | `false` | 是否启用 TLS |
 | `QDRANT_REQUEST_TIMEOUT_MS` | `30000` | 常规 Qdrant RPC deadline |
+| `VECTOR_STORE_TYPE` | `qdrant` | 向量库后端：`qdrant` / `sqlite` |
+| `SQLITE_PATH` | `/data/smallrag.sqlite` | SQLite 模式的数据文件（chunk、任务状态 `reindex_state`、维度元数据同一文件，WAL） |
+| `QDRANT_ENABLED` | `true` | 容器内是否拉起本地 Qdrant；`false` 时跳过本地 readyz 等待（远程 Qdrant / SQLite 模式） |
+| `LLAMA_ENABLED` | `true` | 容器内是否拉起本地 llama.cpp；`false` 时跳过 embedding health 等待（远程 Embedding 模式） |
 | `RAG_QUERY_BREAKER_ENABLED` | `true` | 检索熔断开关 |
 | `RAG_QUERY_BREAKER_FAILURE_RATE` | `50` | 打开熔断的失败率（%） |
 | `RAG_QUERY_BREAKER_OPEN_WAIT` | `30s` | 熔断打开后进入半开的等待时间 |
@@ -230,7 +277,7 @@ npx @modelcontextprotocol/inspector
 mvn test
 ```
 
-单测不依赖 Qdrant / 模型密钥；当前 142 个测试。
+单测不依赖 Qdrant / 模型密钥；当前 158 个测试。
 
 - 容器 E2E（需要 Docker / Podman）：`mvn verify -Pcontainer-it`。Testcontainers 启动真实 Qdrant，覆盖入库、检索、幂等 upsert 与孤儿清理。
 - 默认镜像 `qdrant/qdrant:latest`，可用 `-Dsmallrag.qdrant.image=...` 覆盖。

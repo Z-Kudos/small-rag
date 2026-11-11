@@ -10,7 +10,7 @@ import java.util.List;
  *
  * @author zjk
  */
-interface ReindexStateBackend {
+public interface ReindexStateBackend {
 
     /**
      * 读取全部任务状态。
