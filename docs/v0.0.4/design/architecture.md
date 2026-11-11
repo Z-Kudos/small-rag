@@ -2,7 +2,7 @@
 title: 单机架构与设计要点
 status: done
 version: 0.0.4
-updated: 2026-11-10
+updated: 2026-11-11
 owners: [zjk]
 template: docs/templates/design.md
 related: [README.md, docs/v0.0.4/plan.md, docs/v0.0.4/adr/0001-single-node-scope.md]
@@ -72,4 +72,4 @@ ragmcp/
 ## 7. 回滚与演进
 
 - **回滚**：回退镜像与配置；归档保留原文，可用 `rag_rebuild` 按当前配置重建。
-- **演进**：多副本能力已移至 `cloud-rag`，本仓库不再引入分布式组件。
+- **演进**：多副本能力已移至 `cloud-rag`，本仓库不再引入分布式组件；镜像体积与依赖替换同样不在演进范围。

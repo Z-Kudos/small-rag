@@ -2,7 +2,7 @@
 title: 单机版已知限制与风险
 status: done
 version: 0.0.4
-updated: 2026-11-10
+updated: 2026-11-11
 owners: [zjk]
 template: docs/templates/design.md
 related: [README.md, docs/v0.0.4/plan.md, docs/v0.0.4/adr/0001-single-node-scope.md]
@@ -64,3 +64,4 @@ related: [README.md, docs/v0.0.4/plan.md, docs/v0.0.4/adr/0001-single-node-scope
 ## 5. 演进
 
 - 多副本、Gateway、Config Server、Redisson 等能力保留在 `~/Projects/cloud-rag`，本仓库不再引入。
+- 镜像体积与依赖替换不作为演进方向：当前镜像规模按“应用 + Qdrant + llama.cpp + Temurin JRE”接受，需要更小体积请自行调整 `Dockerfile`。

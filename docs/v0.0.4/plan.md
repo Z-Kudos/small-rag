@@ -2,7 +2,7 @@
 title: v0.0.4 单机轻量化规划
 status: done
 version: 0.0.4
-updated: 2026-11-10
+updated: 2026-11-11
 owners: [zjk]
 template: docs/templates/plan.md
 related: [ROADMAP.md, DEV-MEMORY.md, docs/v0.0.4/design/architecture.md, docs/v0.0.4/design/limitations.md, docs/v0.0.4/adr/0001-single-node-scope.md]
@@ -11,6 +11,8 @@ related: [ROADMAP.md, DEV-MEMORY.md, docs/v0.0.4/design/architecture.md, docs/v0
 # v0.0.4 规划：单机轻量化
 
 > 把 small-rag 收敛为只支持单机单容器的轻量版本；原分布式版本已封存为 `cloud-rag`。
+>
+> 本版本的“轻量化”指**移除分布式组件**，不是压缩镜像体积，也不是替换技术栈。
 
 ## 1. 背景与目标
 
@@ -33,6 +35,7 @@ related: [ROADMAP.md, DEV-MEMORY.md, docs/v0.0.4/design/architecture.md, docs/v0
 - 不支持多副本、HA、跨副本任务查询/续接。
 - 不保留 `app-only`、`compose.distributed.yaml`、Gateway/Config Server 镜像。
 - 不做配置中心、服务发现、Redis 锁。
+- 不做镜像体积优化（`jlink` 定制运行时、删除 Qdrant 静态资源、排除 QUIC native 等），也不替换技术栈（嵌入式向量库、去 Spring Boot 等）。
 
 ## 2. 现状与差距
 
@@ -105,6 +108,7 @@ related: [ROADMAP.md, DEV-MEMORY.md, docs/v0.0.4/design/architecture.md, docs/v0
 | D3 | Spring Cloud | 完全移除；熔断直接使用 Resilience4j |
 | D4 | 锁 | 进程内 `IndexActivityGuard`，不使用 Redis/Redisson |
 | D5 | 文档 | 新建 `docs/v0.0.4`，冻结 `docs/v0.0.3` |
+| D6 | “轻量化”口径 | 只指移除分布式组件；不压镜像体积，不替换技术栈 |
 
 ## 7. 完成定义（DoD）
 
