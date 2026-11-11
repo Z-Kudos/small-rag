@@ -2,7 +2,7 @@
 title: DEV-MEMORY
 status: done
 version: 0.0.4
-updated: 2026-11-10
+updated: 2026-11-11
 owners: [zjk]
 related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 ---
@@ -28,6 +28,19 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 - 单测：`mvn test`，**142** 个测试全绿，不依赖外部服务。
 - 容器 E2E：`mvn verify -Pcontainer-it`，Qdrant Testcontainers **3** 个测试全绿。
 - 本机 Docker Hub 受限时可用 `-Dsmallrag.qdrant.image=docker.1ms.run/qdrant/qdrant:latest` 覆盖镜像。
+
+### 2.1 体积基线（v0.0.4 实测）
+
+| 对象 | 体积 | 说明 |
+| --- | --- | --- |
+| `small-rag:0.0.4` 镜像 | 630 MB | 本机 `small-rag:0.0.4-test` |
+| `app.jar`（`target/small-rag-0.0.4.jar`） | 157 MB | fat jar，161 个依赖 jar |
+| `/opt/java/openjdk` | 200 MB | Temurin 25 JRE 层 |
+| `/qdrant` | 112 MB | qdrant 二进制 90 MB + static 17 MB |
+| `/usr` | 129 MB | 基础镜像 + curl / supervisor / python3 |
+| `/opt/llama` | 21 MB | llama-server 及其动态库 |
+
+fat jar 主要依赖（未压缩）：`openai-java-core` 65.3 MB、netty 16.6 MB（其中 `netty-codec-native-quic` 5 平台 11.7 MB）、grpc 11.5 MB、spring-framework 9.4 MB、kotlin 5.6 MB、jackson 5.1 MB（2.x 与 3.x 并存）、protobuf 4.5 MB、tomcat 4.0 MB、spring-boot 3.5 MB、reactor 3.1 MB、jtokkit 3.1 MB、guava 2.9 MB、spring-ai 1.7 MB、micrometer 1.1 MB、okhttp 1.1 MB。
 
 ## 3. 运行形态
 
@@ -94,3 +107,4 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 
 - v0.0.4：已发布；下一版本待确认。
 - 需要多副本时使用 `~/Projects/cloud-rag`。
+- 体积优化候选（未实施，详见 [`ROADMAP.md`](ROADMAP.md) 6.2）：`jlink` 定制 JRE（约 -136 MB）、排除非 Linux-x86_64 平台 QUIC native（约 -8.9 MB）、删除 Qdrant Dashboard 静态资源（约 -17 MB）、收敛 Spring AI OpenAI starter（约 -30 MB，需专项评估）。

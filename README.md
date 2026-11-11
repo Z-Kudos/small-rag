@@ -112,6 +112,8 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:
 
 国内镜像可通过 `.env` 覆盖 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE`，llama.cpp 源码版本用 `LLAMA_CPP_TAG`（默认 `v0.9.0`）。bind mount 时需保证容器内 UID `10001` 可写。
 
+镜像体积约 **630 MB**（应用 fat jar 157 MB + Temurin JRE 200 MB + Qdrant 112 MB + llama-server 21 MB + 基础系统）；首次启动另需下载约 **640 MB** 的 GGUF 模型，模型、Qdrant 数据与归档都落在 `/data` 卷。规划磁盘时请按“镜像 + 模型 + 知识库数据”合计预留。
+
 ## 挂载宿主机 Markdown 目录
 
 目录导入的 `SMALL_RAG_SOURCE_DIRS` 使用**容器内路径**，宿主机目录必须先挂载进容器。推荐挂到 `/data/sources/...`：
