@@ -1,10 +1,10 @@
 ---
 title: DEV-MEMORY
 status: done
-version: 0.0.4
-updated: 2026-11-11
+version: 0.0.5
+updated: 2026-11-12
 owners: [zjk]
-related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
+related: [AGENTS.md, ROADMAP.md, docs/v0.0.5/plan.md]
 ---
 
 # DEV-MEMORY — 当前开发状态
@@ -14,19 +14,19 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 
 ## 1. 当前阶段
 
-- 版本：`0.0.4`（**2026-11-11 重打 tag `v0.0.4`**，包含多形态部署 WP4 与四形态切换；v0.0.4 未切换版本号，`ChunkingSignature` 保持 `v0.0.4`）。
-- 上一版：`v0.0.3`（已发布；分布式版本已封存为 `~/Projects/cloud-rag`）。
-- 主题：**单机轻量化**（移除分布式组件）+ **多形态部署**（WP4）。
-- 规划：[`docs/v0.0.4/plan.md`](docs/v0.0.4/plan.md)。
-- 状态：WP1–WP4 已完成（WP4 的容器构建/四形态容器冒烟除外，见待办）；`main` + tag `v0.0.4` 已发布。
-- 文档：`README.md`（简体中文）/ `README.en.md`（English）；设计/ADR 在 `docs/v0.0.4/`；`docs/v0.0.3/` 冻结。
+- 版本：`0.0.5`（已发布，`main` tag `v0.0.5`；`ChunkingSignature = v0.0.5`，升级触发一次全量重切）。
+- 上一版：`v0.0.4`（已发布 2026-11-11，含 WP4 多形态部署：SQLite 可选向量库 + 四形态开关）；`v0.0.3`（已封存，`cloud-rag`）。
+- 主题：**切片图谱与编辑管理**——让 AGENT 通过 MCP 操作和编辑 chunk。
+- 规划：[`docs/v0.0.5/plan.md`](docs/v0.0.5/plan.md)；ADR：[`docs/v0.0.5/adr/0001-agent-editable-knowledge-base.md`](docs/v0.0.5/adr/0001-agent-editable-knowledge-base.md)。
+- 状态：**v0.0.5 已发布**（WP0–WP5 完成；Qdrant Testcontainers E2E 与容器构建/四形态冒烟待恢复）；`main` + tag `v0.0.5`；本机 JVM 冒烟通过（sqlite + ollama Qwen3-Embedding-0.6B）。
+- 文档：`README.md`（简体中文）/ `README.en.md`（English）；设计/ADR 在 `docs/v0.0.5/`（已冻结）；`docs/v0.0.4/`、`docs/v0.0.3/` 冻结。
 - **不切换版本**：下一次版本变更需人工确认。
 - **tag v0.0.4 改写说明**：旧 tag `v0.0.4` 指向 `e5c165c`（2026-11-10 发布），2026-11-11 删除并重打至包含 WP4 的 release main；旧发布内容仍保留在主线历史中（`git log` 可查），但已 clone 仓库的 tag 指针不会自动更新。
 
 ## 2. 构建与验证
 
-- JDK 25；`mvn clean package` 单模块产出 `target/small-rag-0.0.4.jar`。
-- 单测：`mvn test`，**158** 个测试全绿，不依赖外部服务。
+- JDK 25；`mvn clean package` 单模块产出 `target/small-rag-0.0.5.jar`。
+- 单测：`mvn test`，**190** 个测试全绿，不依赖外部服务。
 - 容器 E2E：`mvn verify -Pcontainer-it`，Qdrant Testcontainers **3** 个测试全绿。
 - 本机 Docker Hub 受限时可用 `-Dsmallrag.qdrant.image=docker.1ms.run/qdrant/qdrant:latest` 覆盖镜像。
 
@@ -93,7 +93,8 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.4/plan.md]
 
 ## 6. 待办
 
-- v0.0.4：已发布（2026-11-11 重打 tag，含 WP4 多形态部署）；下一版本待确认。
+- v0.0.5：已发布（2026-11-12）；WP0–WP5 完成，190 单测 + 本机 JVM 冒烟；容器 E2E / 四形态冒烟推迟（内存）。
+- v0.0.5 升 `ChunkingSignature=v0.0.5`：所有用户升级触发一次全量重切（归档自动兜底）；README 迁移说明待补。
 - 需要多副本时使用 `~/Projects/cloud-rag`。
 - **不做镜像体积优化**：`jlink` 定制运行时、删 `/qdrant/static`、排除 QUIC native 等一律不实施。
 - 技术栈轻量化方向（依赖面收敛 / 嵌入式向量库 / 去 Spring Boot / 合并抽象层）已讨论：嵌入式向量库以 **SQLite 可选后端**形式进入 WP4（纯 Java 余弦，无 JNI）；其余（去 Spring AI / 去 Spring Boot）仍暂不实施。

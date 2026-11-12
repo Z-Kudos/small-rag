@@ -3,7 +3,9 @@ package com.smallrag.ragmcp.config;
 import com.smallrag.ragmcp.rag.KnowledgeBaseProbe;
 import com.smallrag.ragmcp.rag.reindex.ReindexStateBackend;
 import com.smallrag.ragmcp.rag.reindex.SqliteReindexStateBackend;
+import com.smallrag.ragmcp.rag.vectorstore.ChunkCatalog;
 import com.smallrag.ragmcp.rag.vectorstore.DocumentPointsPort;
+import com.smallrag.ragmcp.rag.vectorstore.SqliteChunkCatalog;
 import com.smallrag.ragmcp.rag.vectorstore.SqliteDocumentPointsPort;
 import com.smallrag.ragmcp.rag.vectorstore.SqliteVectorStore;
 import lombok.extern.slf4j.Slf4j;
@@ -43,6 +45,14 @@ public class SqliteVectorStoreConfig {
     @Bean
     public DocumentPointsPort sqliteDocumentPointsPort(RagProperties properties) {
         return new SqliteDocumentPointsPort(properties.getVectorStore().getSqlite().getPath());
+    }
+
+    /**
+     * chunk 目录：供图查询与 Agent 面编辑工具枚举 chunk。
+     */
+    @Bean
+    public ChunkCatalog sqliteChunkCatalog(RagProperties properties) {
+        return new SqliteChunkCatalog(properties.getVectorStore().getSqlite().getPath());
     }
 
     /**

@@ -4,7 +4,10 @@
 
 A **pure-text RAG retrieval** MCP service built on Spring AI: it only performs vector ingestion and retrieval, never calls a chat/generation model. Document management, `rag_search`, and `rag_query` are exposed over MCP (Streamable HTTP); the vector store is **Qdrant by default, switchable to an embedded SQLite store**. Input is Markdown / Obsidian-compatible Markdown in Chinese or English; `rag_query` returns augmented context and the caller's agent generates the answer.
 
-**v0.0.4 is the single-node lightweight edition**: one module, one container, one port, with no Redis / Consul / Gateway / Config Server. The previous distributed edition is preserved as `cloud-rag`.
+**v0.0.5 is the single-node lightweight, agent-editable edition**: on top of v0.0.4 (one module, one container, no Redis/Consul/Gateway), agents can browse, edit, and delete knowledge-base chunks over MCP.
+
+> **Upgrading from v0.0.4**: the chunking signature bumps to `v0.0.5`; on first start archives under the current signature trigger a one-time full reindex (originals archived safely; longer for bigger corpora).
+
 
 ![Java](https://img.shields.io/badge/Java-25-orange)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.2.0--RC1-brightgreen)
@@ -56,15 +59,15 @@ A **pure-text RAG retrieval** MCP service built on Spring AI: it only performs v
 
 ## Documentation
 
-The documents below belong to **v0.0.4**; `docs/v0.0.3` is preserved for the archived distributed edition.
+The documents below belong to **v0.0.5**; `docs/v0.0.4` is frozen as of its tag release; `docs/v0.0.3` is preserved for the archived distributed edition.
 
 | Document | Contents |
 | --- | --- |
 | [ROADMAP.md](ROADMAP.md) | Version goals and acceptance criteria |
-| [docs/v0.0.4/plan.md](docs/v0.0.4/plan.md) | v0.0.4 single-node lightweight plan |
-| [docs/v0.0.4/design/architecture.md](docs/v0.0.4/design/architecture.md) | Architecture, packages, key data flows |
-| [docs/v0.0.4/design/limitations.md](docs/v0.0.4/design/limitations.md) | Known limitations and risks |
-| [docs/v0.0.4/adr/0001-single-node-scope.md](docs/v0.0.4/adr/0001-single-node-scope.md) | Single-node scope decision |
+| [docs/v0.0.5/plan.md](docs/v0.0.5/plan.md) | v0.0.5 chunk-graph & edit management plan |
+| [docs/v0.0.5/design/architecture.md](docs/v0.0.5/design/architecture.md) | Architecture, packages, key data flows |
+| [docs/v0.0.5/design/limitations.md](docs/v0.0.5/design/limitations.md) | Known limitations and risks |
+| [docs/v0.0.5/adr/0001-agent-editable-knowledge-base.md](docs/v0.0.5/adr/0001-agent-editable-knowledge-base.md) | Agent-editable knowledge base decision |
 | [DEV-MEMORY.md](DEV-MEMORY.md) | Current development state and pitfalls |
 | [AGENTS.md](AGENTS.md) | Version baseline, build commands, code and documentation rules |
 
@@ -79,7 +82,7 @@ docker run -d --name qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant:latest
 
 # 3. Build and run
 mvn clean package -DskipTests
-java -jar target/small-rag-0.0.4.jar
+java -jar target/small-rag-0.0.5.jar
 ```
 
 MCP endpoint: `http://localhost:18080/mcp`.
@@ -107,8 +110,8 @@ On first start `start-llama.sh` downloads the default model from ModelScope (abo
 Build / run directly:
 
 ```bash
-docker build -t small-rag:0.0.4 .
-docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.4
+docker build -t small-rag:0.0.5 .
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.5
 ```
 
 Use `.env` to override `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE` for regional mirrors; `LLAMA_CPP_TAG` defaults to `v0.9.0`. Bind-mounted directories must be writable by container UID `10001`.
@@ -134,10 +137,10 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
   -e EMBEDDING_BASE_URL=https://your-embedding/v1 \
   -e EMBEDDING_API_KEY=sk-... -e EMBEDDING_MODEL=qwen3-embedding-0.6b \
   -e EMBEDDING_DIMENSION=1024 -e SMALL_RAG_ENSURE_EMBEDDING_MODEL=false \
-  small-rag:0.0.4
+  small-rag:0.0.5
 
 # Shape 2: local Qdrant + local llama (default, equivalent to no -e flags)
-docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.4
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.5
 
 # Shape 3: SQLite + remote Embedding
 docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
@@ -145,12 +148,12 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
   -e EMBEDDING_BASE_URL=https://your-embedding/v1 \
   -e EMBEDDING_API_KEY=sk-... -e EMBEDDING_MODEL=qwen3-embedding-0.6b \
   -e EMBEDDING_DIMENSION=1024 -e SMALL_RAG_ENSURE_EMBEDDING_MODEL=false \
-  small-rag:0.0.4
+  small-rag:0.0.5
 
 # Shape 4: SQLite + local llama
 docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
   -e VECTOR_STORE_TYPE=sqlite -e QDRANT_ENABLED=false \
-  small-rag:0.0.4
+  small-rag:0.0.5
 ```
 
 SQLite notes: chunks, reindex task state (the `reindex_state` table), and the dimension marker all live in `SQLITE_PATH` (default `/data/smallrag.sqlite`, WAL mode); **never share this file across multiple container instances**; when changing embedding models, update `EMBEDDING_DIMENSION` to match — a mismatch blocks startup, and switching models requires deleting the file and re-ingesting.
@@ -166,7 +169,7 @@ docker run -d --name small-rag -p 18080:18080 \
   -v /host/wiki:/data/sources/wiki:ro \
   -e SMALL_RAG_SOURCES_ENABLED=true \
   -e SMALL_RAG_SOURCE_DIRS='notes=/data/sources/notes,wiki=/data/sources/wiki' \
-  small-rag:0.0.4
+  small-rag:0.0.5
 ```
 
 Compose users can use the optional `compose.sources.yaml`:
@@ -241,6 +244,12 @@ SMALL_RAG_SOURCE_HOST=/host/knowledge make up-sources
 | `rag_sync_status` | Query directory-import status |
 | `rag_search` | Similarity search returning matching fragments |
 | `rag_query` | Return augmented context with sources and scores |
+| `rag_chunks` | Browse a document's chunk tree (pointId/index/type/heading_path/links) |
+| `rag_graph` | Expand a subgraph from seed doc:/chunk:/section|<...>/heading path (depth ≤2) |
+| `rag_graph_export` | Export the full three-layer graph JSON (documents/sections/chunks) |
+| `rag_get_chunk` | Read one chunk's text and metadata (required before editing) |
+| `rag_edit_chunk` | Replace a chunk's text; requires matching expectedText; archive + re-chunk |
+| `rag_delete_chunk` | Delete a chunk's segment; requires confirm=true; if it empties the doc, the whole document is removed |
 
 ## Client access
 

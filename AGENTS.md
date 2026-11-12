@@ -1,6 +1,6 @@
 # AGENTS.md — small-rag
 
-单模块 Spring Boot 服务 `small-rag`：通过 MCP（Streamable HTTP）暴露**纯文本 RAG** 能力；向量库可配置——默认 **Qdrant**，可切换为内置 **SQLite** 引擎（`VECTOR_STORE_TYPE`）。v0.0.4 起只支持单机单容器部署。
+单模块 Spring Boot 服务 `small-rag`：通过 MCP（Streamable HTTP）暴露**纯文本 RAG** 能力；向量库可配置——默认 **Qdrant**，可切换为内置 **SQLite** 引擎（`VECTOR_STORE_TYPE`）。v0.0.4 起只支持单机单容器部署。当前开发版本：**v0.0.5**（切片图谱与编辑管理）。
 
 ## 版本基线（严格锁定）
 
@@ -12,7 +12,7 @@
 | Resilience4j | 2.4.0 |
 
 - **解析现状（2026-11 验证）**：Boot GA 未发布，实际使用 `4.2.0-RC1`，依赖 `https://repo.spring.io/milestone`（pom 已配置）。**禁止降级到 Boot 3.x 来"修复"解析失败**。
-- 项目版本 `0.0.4`；`ChunkingSignature` 签名版本与项目版本同步（当前 `v0.0.4`）。
+- 项目版本 `0.0.5`；`ChunkingSignature` 签名版本与项目版本同步（当前 `v0.0.5`）。
 - **不引入 Spring Cloud**（Gateway / Config Server / Consul / CircuitBreaker 包装 / LoadBalancer 均无）。
 
 ## 依赖与构建
@@ -39,7 +39,7 @@
 
 ## 架构分层
 
-- `mcp`：`RagMcpTools` 暴露 `rag_ingest`/`rag_update`/`rag_delete`/`rag_list`/`rag_reindex`/`rag_rebuild`/`rag_task_status`/`rag_task_resume`/`rag_task_cancel`/`rag_sync_sources`/`rag_sync_status`/`rag_search`/`rag_query`（13 个）。**不是** `@Component`，由 `McpServerConfig` 显式注册。工具方法必须写 Javadoc。
+- `mcp`：`RagMcpTools` 暴露 `rag_ingest`/`rag_update`/`rag_delete`/`rag_list`/`rag_reindex`/`rag_rebuild`/`rag_task_status`/`rag_task_resume`/`rag_task_cancel`/`rag_sync_sources`/`rag_sync_status`/`rag_search`/`rag_query`/`rag_chunks`/`rag_graph`/`rag_graph_export`/`rag_get_chunk`/`rag_edit_chunk`/`rag_delete_chunk`（19 个）。**不是** `@Component`，由 `McpServerConfig` 显式注册。工具方法必须写 Javadoc。
 - `rag`：`RagService` 负责分块入库、检索、上下文拼装、更新/删除/重建，**不调用 Chat/生成模型**；子块 point id 为 `chunk:<docId>:<切分签名>:<index>` 确定性生成（重复 upsert 覆盖同一批 point）；单篇 `reindex` 能枚举旧 id 时先写新片段再删旧片段；`rag_rebuild` 完成后清理无子块父块与缺 `chunk_type` 的旧片段；`IndexActivityGuard` 用进程内 owner 标记串行化重建与目录导入；`QueryCircuitBreaker` 直接使用 Resilience4j，只包 `rag_search`/`rag_query`；`KnowledgeBaseProbe` 空库短路。
 - `rag/reindex`：`ReindexTaskService` 提供异步重建、进度快照与看门狗（每任务独立线程 + 单任务互斥 + 保留最近 20 个；停滞只标 `stalled`，硬超时撤销写权限、取消在途调用并中断线程，确认退出或宽限期到期后释放活动锁；`rag_task_cancel` 为文档边界协作式取消）。任务快照 + 检查点（`cleared` / 已完成文档 id）写入 Qdrant 独立集合 `<rag.qdrant.collection-name>_reindex_state`（1 维哑向量 + payload JSON，集合按需创建），不保存锁镜像；重启后未完成任务恢复为 `interrupted`，由 `resume-on-startup` 或 `rag_task_resume` 续接（跳过已完成文档、不重复清空）；`CancellationScope` 负责任务级 OkHttp 调用取消；`ChunkingReindexRunner` 启动自动重切（存在待续接任务时跳过）。
 - `rag/sources`：`SourceSyncService` 扫描 `rag.sources.directories`（逗号分隔，支持 `label=/path`）；文档 id 由稳定 label + 相对路径确定性生成；先比 `mtime + size`，再比 SHA-256；触发：启动、定时、watcher、MCP `rag_sync_sources(force)`；`max-file-bytes` / `max-files-per-scan` 限流；`delete-missing` 只删除当前仍配置且本轮成功扫描的根目录下消失文件，`delete-orphan-roots` 清理已移除 label（默认关闭）；手动 `rag_delete` 留下墓碑。**单实例直接扫描，无 leader 选举**。
@@ -50,7 +50,7 @@
 - **Embedding 配置**：`EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION`（回退 `OPENAI_*`）；base-url 必须含 `/v1`；不支持 JVM 内 ONNX；HTTP 超时用 `EMBEDDING_CONNECT_TIMEOUT_MS` / `EMBEDDING_READ_TIMEOUT_MS`。
 - **Qdrant 约束**（仅 `VECTOR_STORE_TYPE=qdrant`）：gRPC 端口 `6334`；`Document` id 必须是 UUID；`doSimilaritySearch` 先 Embedding 再查库，空库用 `KnowledgeBaseProbe` 短路；集合初始化 fail-soft，维度不一致 fail-fast；gRPC deadline 用 `rag.qdrant.request-timeout-ms`；状态集合独立，不并入主集合。切换为 `sqlite` 时：数据与任务状态落到 `SQLITE_PATH`（默认 `/data/smallrag.sqlite`，WAL 模式）；纯 Java 余弦检索，规模建议 <5 万片段，更大请用 Qdrant；**同一 sqlite 文件禁止被多个容器实例共享**。
 - **MCP**：`McpSyncServerCustomizer` 是单例且已被 WebMVC 自动配置占用，不要自定义；instructions 走 `spring.ai.mcp.server.*`。
-- `application.yml` 必须：`protocol=STREAMABLE`、`name=small-rag`、`version=0.0.4`，MCP 端点 `/mcp`，payload 正文字段名共用 `RagService.CONTENT_FIELD`（"content"）。
+- `application.yml` 必须：`protocol=STREAMABLE`、`name=small-rag`、`version=0.0.5`，MCP 端点 `/mcp`，payload 正文字段名共用 `RagService.CONTENT_FIELD`（"content"）。
 
 ## 代码约束
 
@@ -77,21 +77,21 @@
 | `DEV-MEMORY.md` | 开发者 / AI | 当前有效状态、坑、待办 |
 | `AGENTS.md` | AI / 贡献者 | 硬约束、构建命令、代码规范、文档治理 |
 
-**版本绑定**：除 `docs/templates/` 外，`docs/` 下每份文档必须位于 `docs/v<version>/`，front matter 的 `version` 与目录一致。`docs/v0.0.3/` 已冻结（分布式版本说明），当前开发文档在 `docs/v0.0.4/`。
+**版本绑定**：除 `docs/templates/` 外，`docs/` 下每份文档必须位于 `docs/v<version>/`，front matter 的 `version` 与目录一致。`docs/v0.0.3/` 已冻结（分布式版本说明），`docs/v0.0.4/` 已冻结（v0.0.4 已发布），当前开发文档在 `docs/v0.0.5/`。
 
 ### 2. README 双语
 
 - `README.md` = 简体中文；`README.en.md` = English；第一行互相切换。
 - 两份章节、表格、命令、版本号、默认值、端口、链接必须对等。
 - 必须含：介绍、徽章、目录、版本矩阵、文档索引、快速开始、容器部署、配置、MCP 工具、客户端、切分、目录导入、测试、安全、贡献、许可证。
-- 设计细节放 `docs/v0.0.4/design/`，README 只写使用说明。
+- 设计细节放 `docs/v0.0.5/design/`，README 只写使用说明。
 
 ### 3. 目录与模板
 
 ```text
 docs/
 ├── templates/          # 唯一跨版本共享：模板与写作规范
-└── v0.0.4/
+└── v0.0.5/
     ├── plan.md
     ├── design/
     │   ├── architecture.md
@@ -110,8 +110,8 @@ docs/
 ---
 title: 一句话标题
 status: draft | review | approved | implementing | done | superseded
-version: 0.0.4
-updated: 2026-11-10
+version: 0.0.5
+updated: 2026-11-12
 owners: [zjk]
 template: docs/templates/<type>.md
 related: [ROADMAP.md, DEV-MEMORY.md]
@@ -137,7 +137,7 @@ related: [ROADMAP.md, DEV-MEMORY.md]
 ## 验收标准
 
 1. `mvn clean package` 成功；`mvn test` 无外部依赖可跑。
-2. 启动后 `/mcp` 可用，MCP Inspector 能列出全部 13 个工具。
+2. 启动后 `/mcp` 可用，MCP Inspector 能列出全部 19 个工具。
 3. 空知识库下 `rag_query` 返回友好提示。
 4. 端到端（入库→检索）需要 Qdrant + OpenAI 兼容 Embedding；不需要 Chat 模型。
 5. README 步骤可复现，`git log` 至少一条 Conventional Commits。

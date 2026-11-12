@@ -1,8 +1,12 @@
 package com.smallrag.ragmcp.mcp;
 
 import com.smallrag.ragmcp.rag.RagService;
+import com.smallrag.ragmcp.rag.edit.ChunkEditService;
+import com.smallrag.ragmcp.rag.graph.ChunkGraph;
 import com.smallrag.ragmcp.rag.reindex.ReindexTaskService;
 import com.smallrag.ragmcp.rag.sources.SourceSyncService;
+import com.smallrag.ragmcp.rag.vectorstore.ChunkCatalog;
+import com.smallrag.ragmcp.rag.vectorstore.ChunkSummary;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -14,6 +18,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 向 MCP 客户端暴露的纯文本 RAG 工具。
@@ -33,6 +38,8 @@ public class RagMcpTools {
     private final RagService ragService;
     private final ReindexTaskService reindexTaskService;
     private final SourceSyncService sourceSyncService;
+    private final ChunkEditService chunkEditService;
+    private final ChunkCatalog chunkCatalog;
     private final ObjectMapper objectMapper;
 
     /**
@@ -62,8 +69,9 @@ public class RagMcpTools {
     public String ragSearch(
             @McpToolParam(description = "自然语言查询", required = true) String query,
             @McpToolParam(description = "返回片段数量，缺省为 4", required = false) Integer topK,
-            @McpToolParam(description = "Parent-Child 策略下是否展开为去重后的父块，缺省 true；传 false 返回原始子块命中", required = false) Boolean expand) {
-        log.debug("MCP rag_search 调用，query={}, topK={}, expand={}", query, topK, expand);
+            @McpToolParam(description = "Parent-Child 策略下是否展开为去重后的父块，缺省 true；传 false 返回原始子块命中", required = false) Boolean expand,
+            @McpToolParam(description = "true 时附加命中片段的结构（节点/边 JSON）：含文档、章节与命中 chunk；用于 Agent 理解上下文", required = false) Boolean expandGraph) {
+        log.debug("MCP rag_search 调用，query={}, topK={}, expand={}, expandGraph={}", query, topK, expand, expandGraph);
         try {
             List<Document> documents = ragService.search(query, topK, !Boolean.FALSE.equals(expand));
             List<Map<String, Object>> hits = new ArrayList<>(documents.size());
@@ -79,6 +87,9 @@ public class RagMcpTools {
             data.put("query", query);
             data.put("hitCount", hits.size());
             data.put("hits", hits);
+            if (Boolean.TRUE.equals(expandGraph)) {
+                data.put("graph", searchGraph(hits));
+            }
             return objectMapper.writeValueAsString(data);
         } catch (Exception e) {
             log.warn("MCP rag_search 失败: query={}, 原因={}", query, e.toString());
@@ -314,6 +325,274 @@ public class RagMcpTools {
         data.put("chunkCount", result.chunkCount());
         data.put("parentCount", result.parentCount());
         return objectMapper.writeValueAsString(data);
+    }
+
+    /**
+     * 列出某文档的 chunk 树（含正文前 200 字符、父子关系、heading 路径、链接）。
+     *
+     * @param documentId 文档 id（UUID），来自 rag_search 命中的 doc_id
+     * @param limit      最多返回的 chunk 数，默认 200，最大 500
+     * @return 包含 documentId、count、chunks 的 JSON；chunks 中 pointId 可用于 rag_get_chunk/rag_edit_chunk/rag_delete_chunk
+     */
+    @McpTool(name = "rag_chunks", description = "列出某文档的 chunk 树（含点 id、index、类型、heading_path、links），用于 Agent 定位要编辑的 chunk")
+    public String ragChunks(
+            @McpToolParam(description = "文档 id（UUID），来自 rag_search/rag_list 的 doc_id", required = true) String documentId,
+            @McpToolParam(description = "最多返回的 chunk 数，默认 200，最大 500", required = false) Integer limit) {
+        try {
+            List<ChunkSummary> chunks = chunkCatalog.listChunks(documentId);
+            int effective = limit == null ? 200 : Math.max(1, Math.min(500, limit));
+            List<Map<String, Object>> items = new ArrayList<>(Math.min(chunks.size(), effective));
+            List<ChunkSummary> ordered = new ArrayList<>(chunks);
+            ordered.sort(java.util.Comparator
+                    .comparingInt((ChunkSummary c) -> intField(c.metadata(), "chunk_index"))
+                    .thenComparingInt(c -> intField(c.metadata(), "parent_index"))
+                    .thenComparing(ChunkSummary::pointId));
+            for (ChunkSummary chunk : ordered) {
+                if (items.size() >= effective) {
+                    break;
+                }
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("pointId", chunk.pointId());
+                item.put("type", stringField(chunk.metadata(), "chunk_type"));
+                item.put("parentId", stringField(chunk.metadata(), "parent_id"));
+                item.put("parentIndex", chunk.metadata().get("parent_index"));
+                item.put("chunkIndex", chunk.metadata().get("chunk_index"));
+                item.put("headingPath", stringField(chunk.metadata(), "heading_path"));
+                item.put("text", snippet(chunk.text(), 200));
+                item.put("links", chunk.metadata().get("links"));
+                items.add(item);
+            }
+            return objectMapper.writeValueAsString(Map.of(
+                    "documentId", documentId == null ? "" : documentId,
+                    "count", items.size(),
+                    "truncated", chunks.size() > items.size(),
+                    "chunks", items));
+        } catch (Exception e) {
+            log.warn("MCP rag_chunks 失败: documentId={}, 原因={}", documentId, e.toString());
+            return error("列出 chunk 失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 子图查询：以 seed 为中心展开至多 depth 跳（depth 默认 1，最大 2）。
+     *
+     * @param seed  种子：{@code doc:<docId>}、{@code chunk:<pointId>}、{@code section|<docId>|<headingPath>}，
+     *              或裸的文档 UUID / heading_path（包含">"时按章节匹配）
+     * @param depth 扩展步数，默认 1，最大 2
+     * @param limit 节点数上限，默认 500，最大 5000
+     * @return 包含 nodes、edges、warnings 的 JSON；nodes 不含正文，用 rag_get_chunk 看正文
+     */
+    @McpTool(name = "rag_graph", description = "以 seed（doc:<id> / chunk:<pointId> / section|<...> / heading_path）为中心展开子图，返回 nodes/edges JSON")
+    public String ragGraph(
+            @McpToolParam(description = "种子节点：doc:<uuid>、chunk:<pointId>、section|<docId>|<headingPath>，或裸文档 UUID/heading_path", required = true) String seed,
+            @McpToolParam(description = "扩展步数，默认 1，最大 2", required = false) Integer depth,
+            @McpToolParam(description = "节点数上限，默认 500，最大 5000", required = false) Integer limit) {
+        try {
+            ChunkGraph.BuildResult full = ChunkGraph.build(chunkCatalog.listChunks(null));
+            if (full.nodes().isEmpty()) {
+                return "{\"nodes\":[],\"edges\":[],\"warnings\":[],\"note\":\"知识库为空\"}";
+            }
+            int effectiveLimit = limit == null ? 500 : Math.max(1, Math.min(5000, limit));
+            return ChunkGraph.expand(full, seed, depth == null ? 1 : depth, effectiveLimit)
+                    .map(this::graphJson)
+                    .orElseGet(() -> "{\"error\":\"seed 不匹配任何节点: \" + seed + \"\"}");
+        } catch (Exception e) {
+            log.warn("MCP rag_graph 失败: seed={}, 原因={}", seed, e.toString());
+            return error("图查询失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 导出全库图 JSON（nodes/edges）：documents 层、sections 层、chunks 层。
+     *
+     * @param limit 节点数上限，默认 1000，最大 5000；超限截断并标 truncated=true
+     * @return 包含 nodes、edges、warnings、truncated 的 JSON
+     */
+    @McpTool(name = "rag_graph_export", description = "导出全库切片图 JSON（documents/sections/chunks 三层 + contains/section/parent_of/links_to 边），供外部可视化")
+    public String ragGraphExport(
+            @McpToolParam(description = "节点数上限，默认 1000，最大 5000", required = false) Integer limit) {
+        try {
+            ChunkGraph.BuildResult full = ChunkGraph.build(chunkCatalog.listChunks(null));
+            int effectiveLimit = limit == null ? 1000 : Math.max(1, Math.min(5000, limit));
+            boolean truncated = full.nodes().size() > effectiveLimit;
+            List<ChunkGraph.GraphNode> nodes = truncated
+                    ? full.nodes().subList(0, effectiveLimit) : full.nodes();
+            Set<String> nodeIds = new java.util.HashSet<>(nodes.size());
+            for (ChunkGraph.GraphNode node : nodes) {
+                nodeIds.add(node.id());
+            }
+            List<ChunkGraph.GraphEdge> edges = full.edges().stream()
+                    .filter(edge -> nodeIds.contains(edge.from()) && nodeIds.contains(edge.to()))
+                    .toList();
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("nodes", nodes);
+            out.put("edges", edges);
+            out.put("warnings", full.warnings());
+            out.put("truncated", truncated);
+            return objectMapper.writeValueAsString(out);
+        } catch (Exception e) {
+            log.warn("MCP rag_graph_export 失败: 原因={}", e.toString());
+            return error("图导出失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 读取单个 chunk 的完整内容与元数据（含 links、heading_path、parent_id）。
+     *
+     * @param pointId chunk 的点 id（来自 rag_chunks 输出的 pointId，或 rag_search 命中的 id）
+     * @return 包含 pointId、text、docId、chunkType、parentId、links 的 JSON
+     */
+    @McpTool(name = "rag_get_chunk", description = "读取单个 chunk 的正文与元数据；编辑前必读，用于生成 expectedText")
+    public String ragGetChunk(
+            @McpToolParam(description = "chunk 点 id（pointId），来自 rag_chunks / rag_search 的 id", required = true) String pointId) {
+        try {
+            return chunkEditService.getChunk(pointId);
+        } catch (IllegalArgumentException e) {
+            return error(e.getMessage());
+        } catch (Exception e) {
+            log.warn("MCP rag_get_chunk 失败: pointId={}, 原因={}", pointId, e.toString());
+            return error("读取 chunk 失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 编辑某个 chunk 的正文（回写归档原文，按当前切分签名整篇重切）。
+     *
+     * <p>{@code expectedText} 非空时必须与当前 chunk 内容一致，否则拒绝；用于防止基于过期快照覆盖更新的内容。
+     *
+     * @param pointId     目标 chunk 的点 id
+     * @param newText     要替换的新正文（可为空串，代表删除该片段内容）
+     * @param expectedText 非空时必须与当前 chunk 内容完全一致；不一致返回错误并附当前内容
+     * @return 包含 documentId、chunkCount、parentCount、chunkingSignature 的 JSON 回执
+     */
+    @McpTool(name = "rag_edit_chunk", description = "编辑 chunk 正文：expectedText 与当前内容必须一致；回写归档后按当前切分签名整篇重切")
+    public String ragEditChunk(
+            @McpToolParam(description = "目标 chunk 的 pointId（来自 rag_chunks / rag_get_chunk）", required = true) String pointId,
+            @McpToolParam(description = "要替换的新正文（可为空串代表清空该片段）", required = true) String newText,
+            @McpToolParam(description = "非空时必须与当前 chunk 内容完全一致；不一致则拒绝并返回当前内容", required = false) String expectedText) {
+        try {
+            return chunkEditService.editChunk(pointId, newText, expectedText);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return error(e.getMessage());
+        } catch (Exception e) {
+            log.warn("MCP rag_edit_chunk 失败: pointId={}, 原因={}", pointId, e.toString());
+            return error("编辑 chunk 失败: " + rootMessage(e));
+        }
+    }
+
+    /**
+     * 从归档原文删除某个 chunk 对应的文本段（后整篇重切）。
+     *
+     * <p>必须显式 {@code confirm=true}，与 rag_rebuild 一致；不可撤销（归档有原文副本，可重新入库恢复）。
+     *
+     * @param pointId     目标 chunk 的点 id
+     * @param confirm     必须为 true 才执行
+     * @param expectedText 非空时必须与当前 chunk 内容一致
+     * @return 包含 documentId、chunkCount、parentCount 的 JSON 回执
+     */
+    @McpTool(name = "rag_delete_chunk", description = "删除某个 chunk（从归档原文删除该段并重切）；必须 confirm=true；不可撤销")
+    public String ragDeleteChunk(
+            @McpToolParam(description = "目标 chunk 的 pointId", required = true) String pointId,
+            @McpToolParam(description = "必须为 true 才执行删除；否则返回错误说明", required = true) Boolean confirm,
+            @McpToolParam(description = "非空时必须与当前 chunk 内容完全一致；不一致则拒绝并返回当前内容", required = false) String expectedText) {
+        try {
+            return chunkEditService.deleteChunk(pointId, Boolean.TRUE.equals(confirm), expectedText);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return error(e.getMessage());
+        } catch (Exception e) {
+            log.warn("MCP rag_delete_chunk 失败: pointId={}, 原因={}", pointId, e.toString());
+            return error("删除 chunk 失败: " + rootMessage(e));
+        }
+    }
+
+    private String graphJson(ChunkGraph.BuildResult result) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("nodes", result.nodes());
+        data.put("edges", result.edges());
+        data.put("warnings", result.warnings());
+        try {
+            return objectMapper.writeValueAsString(data);
+        } catch (Exception e) {
+            throw new IllegalStateException("序列化图结果失败: " + e.getMessage(), e);
+        }
+    }
+
+    private Map<String, Object> searchGraph(List<Map<String, Object>> hits) {
+        Map<String, Object> graph = new LinkedHashMap<>();
+        List<Map<String, Object>> nodes = new ArrayList<>();
+        List<Map<String, Object>> edges = new ArrayList<>();
+        List<String> seen = new ArrayList<>();
+        for (Map<String, Object> hit : hits) {
+            Map<String, Object> metadata = hitMetadata(hit);
+            if (metadata == null) {
+                continue;
+            }
+            String docId = String.valueOf(metadata.getOrDefault("doc_id", ""));
+            String id = String.valueOf(hit.get("id"));
+            putNode(nodes, seen, Map.of(
+                    "id", id, "type", "chunk",
+                    "doc_id", docId,
+                    "heading_path", metadata.get("heading_path"),
+                    "parent_id", metadata.get("parent_id"),
+                    "label", snippet(String.valueOf(hit.get("text")), 120)));
+            if (!docId.isBlank()) {
+                String docNodeId = "document:" + docId;
+                putNode(nodes, seen, Map.of("id", docNodeId, "type", "document", "doc_id", docId));
+                edges.add(Map.of("from", docNodeId, "to", id, "type", "contains"));
+                String heading = stringField(metadata, "heading_path");
+                if (heading != null) {
+                    String sectionId = "section|" + docId + "|" + heading;
+                    putNode(nodes, seen, Map.of("id", sectionId, "type", "section",
+                            "doc_id", docId, "heading_path", heading));
+                    edges.add(Map.of("from", sectionId, "to", id, "type", "section"));
+                }
+            }
+        }
+        graph.put("nodes", nodes);
+        graph.put("edges", edges);
+        return graph;
+    }
+
+    private static void putNode(List<Map<String, Object>> nodes, List<String> seen, Map<String, Object> node) {
+        String id = String.valueOf(node.get("id"));
+        if (!seen.contains(id)) {
+            seen.add(id);
+            nodes.add(node);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> hitMetadata(Map<String, Object> hit) {
+        Object metadata = hit.get("metadata");
+        return metadata instanceof Map ? (Map<String, Object>) metadata : null;
+    }
+
+    private static int intField(Map<String, Object> metadata, String key) {
+        Object value = metadata.get(key);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String string) {
+            try {
+                return Integer.parseInt(string.trim());
+            } catch (NumberFormatException e) {
+                return Integer.MAX_VALUE;
+            }
+        }
+        return Integer.MAX_VALUE;
+    }
+
+    private static String stringField(Map<String, Object> metadata, String key) {
+        Object value = metadata.get(key);
+        return value instanceof String string && !string.isBlank() ? string : null;
+    }
+
+    private static String snippet(String text, int maxChars) {
+        if (text == null) {
+            return "";
+        }
+        String stripped = text.strip().replaceAll("\s+", " ");
+        return stripped.length() <= maxChars ? stripped : stripped.substring(0, maxChars) + "…";
     }
 
     private String error(String message) {

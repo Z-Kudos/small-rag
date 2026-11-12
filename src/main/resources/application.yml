@@ -32,7 +32,7 @@ spring:
     mcp:
       server:
         name: small-rag
-        version: 0.0.4
+        version: 0.0.5
         protocol: STREAMABLE
         instructions: |
           基于纯文本知识库的 RAG 检索服务（不调用生成模型）。
@@ -44,6 +44,13 @@ spring:
           进程重启后未完成任务为 interrupted，默认自动续接，也可用 rag_task_resume 手动续接或 rag_task_cancel 放弃。
           配置 rag.sources 后会自动导入多个 Markdown 源目录：rag_sync_sources 异步触发增量同步（force=true 全量重切），rag_sync_status 查询运行状态与最近一次统计。
           知识库为空时 rag_query 会返回“未检索到相关内容”。
+          Agent 编辑知识库：先 rag_search 找到错误片段 → rag_chunks(documentId) 浏览结构 → rag_get_chunk(pointId) 读取当前正文
+          → rag_edit_chunk(pointId, newText, expectedText=正文) 替换（expectedText 不一致会拒绝并返回当前内容）；
+          删除某片段用 rag_delete_chunk(pointId, confirm=true)（若删除后文档为空则整篇删除）。
+          参数用 pointId（chunk 的点 id），来自 rag_chunks 输出的 pointId 或 rag_search 命中的 id。
+          想看跨文档结构：rag_graph（seed: doc:<id> / chunk:<pointId> / section|<docId>|<headingPath> / 裸 heading_path），
+          或 rag_graph_export 导出完整图 JSON 供外部可视化。
+          编辑后建议用 rag_search 验证；整篇重切会重算 chunk 的 pointId。
 
 rag:
   # 原始文档归档目录：自动重切的原文来源；目录不可写时降级为只入库
