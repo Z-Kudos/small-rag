@@ -4,7 +4,9 @@ import com.smallrag.ragmcp.rag.KnowledgeBaseProbe;
 import com.smallrag.ragmcp.rag.RagService;
 import com.smallrag.ragmcp.rag.reindex.QdrantReindexStateBackend;
 import com.smallrag.ragmcp.rag.reindex.ReindexStateBackend;
+import com.smallrag.ragmcp.rag.vectorstore.ChunkCatalog;
 import com.smallrag.ragmcp.rag.vectorstore.DocumentPointsPort;
+import com.smallrag.ragmcp.rag.vectorstore.QdrantChunkCatalog;
 import com.smallrag.ragmcp.rag.vectorstore.QdrantDocumentPointsPort;
 import io.qdrant.client.QdrantClient;
 import io.qdrant.client.QdrantGrpcClient;
@@ -95,6 +97,14 @@ public class QdrantConfig {
     @Bean
     public DocumentPointsPort documentPointsPort(QdrantClient qdrantClient, QdrantProperties properties) {
         return new QdrantDocumentPointsPort(qdrantClient, properties);
+    }
+
+    /**
+     * chunk 目录：供图查询与 Agent 面编辑工具枚举 chunk。
+     */
+    @Bean
+    public ChunkCatalog chunkCatalog(QdrantClient qdrantClient, QdrantProperties properties) {
+        return new QdrantChunkCatalog(qdrantClient, properties);
     }
 
     /**

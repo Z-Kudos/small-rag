@@ -2,8 +2,10 @@ package com.smallrag.ragmcp.config;
 
 import com.smallrag.ragmcp.mcp.RagMcpTools;
 import com.smallrag.ragmcp.rag.RagService;
+import com.smallrag.ragmcp.rag.edit.ChunkEditService;
 import com.smallrag.ragmcp.rag.reindex.ReindexTaskService;
 import com.smallrag.ragmcp.rag.sources.SourceSyncService;
+import com.smallrag.ragmcp.rag.vectorstore.ChunkCatalog;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.ObjectMapper;
@@ -25,7 +27,10 @@ public class McpServerConfig {
     public RagMcpTools ragMcpTools(RagService ragService,
             ReindexTaskService reindexTaskService,
             SourceSyncService sourceSyncService,
+            ChunkEditService chunkEditService,
+            ChunkCatalog chunkCatalog,
             ObjectMapper objectMapper) {
-        return new RagMcpTools(ragService, reindexTaskService, sourceSyncService, objectMapper);
+        return new RagMcpTools(ragService, reindexTaskService, sourceSyncService,
+                chunkEditService, chunkCatalog, objectMapper);
     }
 }

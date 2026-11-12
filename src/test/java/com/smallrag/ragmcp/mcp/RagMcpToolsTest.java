@@ -1,8 +1,10 @@
 package com.smallrag.ragmcp.mcp;
 
 import com.smallrag.ragmcp.rag.RagService;
+import com.smallrag.ragmcp.rag.edit.ChunkEditService;
 import com.smallrag.ragmcp.rag.reindex.ReindexTaskService;
 import com.smallrag.ragmcp.rag.sources.SourceSyncService;
+import com.smallrag.ragmcp.rag.vectorstore.ChunkCatalog;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
@@ -24,8 +26,11 @@ class RagMcpToolsTest {
     private final RagService ragService = mock(RagService.class);
     private final ReindexTaskService reindexTaskService = mock(ReindexTaskService.class);
     private final SourceSyncService sourceSyncService = mock(SourceSyncService.class);
+    private final ChunkEditService chunkEditService = mock(ChunkEditService.class);
+    private final ChunkCatalog chunkCatalog = mock(ChunkCatalog.class);
     private final RagMcpTools tools =
-            new RagMcpTools(ragService, reindexTaskService, sourceSyncService, new ObjectMapper());
+            new RagMcpTools(ragService, reindexTaskService, sourceSyncService,
+                    chunkEditService, chunkCatalog, new ObjectMapper());
 
     @Test
     void rebuildRequiresExplicitConfirmation() {

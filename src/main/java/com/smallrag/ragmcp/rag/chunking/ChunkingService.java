@@ -29,6 +29,7 @@ public class ChunkingService {
 
     public static final String FIELD_CHUNK_TYPE = "chunk_type";
     public static final String CHUNK_TYPE_CHUNK = "chunk";
+    public static final String FIELD_LINKS = "links";
     public static final String CHUNK_TYPE_CHILD = "child";
     public static final String FIELD_PARENT_ID = "parent_id";
     public static final String FIELD_PARENT_INDEX = "parent_index";
@@ -48,9 +49,9 @@ public class ChunkingService {
                 strategy, text == null ? 0 : text.length(), documentId);
 
         return switch (strategy) {
-            case FIXED -> new ChunkingResult(fixed(text), List.of(), 0);
-            case RECURSIVE -> new ChunkingResult(recursive(text), List.of(), 0);
-            case SEMANTIC -> new ChunkingResult(semantic(text), List.of(), 0);
+            case FIXED -> new ChunkingResult(withLinks(fixed(text)), List.of(), 0);
+            case RECURSIVE -> new ChunkingResult(withLinks(recursive(text)), List.of(), 0);
+            case SEMANTIC -> new ChunkingResult(withLinks(semantic(text)), List.of(), 0);
             case PARENT_CHILD -> parentChild(text, documentId);
         };
     }
@@ -153,7 +154,27 @@ public class ChunkingService {
             }
         }
         log.debug("Parent-Child 切分完成: parents={}, children={}", parents.size(), chunks.size());
-        return new ChunkingResult(chunks, parentChunks, parents.size());
+        return new ChunkingResult(withLinks(chunks), withLinks(parentChunks), parents.size());
+    }
+
+    /**
+     * 提取 chunk 正文中的 Markdown 链接（inline 与 wikilink），写入
+     * metadata {@value #FIELD_LINKS}（JSON array）；无链接时不加入该键。
+     * 提取只用于图查询，不影响切分签名。
+     */
+    private static List<TextChunk> withLinks(List<TextChunk> chunks) {
+        List<TextChunk> result = new ArrayList<>(chunks.size());
+        for (TextChunk chunk : chunks) {
+            List<String> links = LinkExtractor.extract(chunk.text());
+            if (links.isEmpty()) {
+                result.add(chunk);
+                continue;
+            }
+            Map<String, Object> metadata = new LinkedHashMap<>(chunk.metadata());
+            metadata.put(FIELD_LINKS, links);
+            result.add(new TextChunk(chunk.text(), metadata));
+        }
+        return result;
     }
 
     private List<TextChunk> toPlainChunks(List<String> parts) {
