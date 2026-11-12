@@ -1,6 +1,6 @@
 ---
 title: v0.0.5 架构与设计要点（图谱 + 编辑）
-status: implementing
+status: done
 version: 0.0.5
 updated: 2026-11-12
 owners: [zjk]

@@ -1,6 +1,6 @@
 ---
 title: ROADMAP
-status: implementing
+status: done
 version: 0.0.5
 updated: 2026-11-12
 owners: [zjk]
@@ -9,7 +9,7 @@ related: [docs/v0.0.5/plan.md, docs/v0.0.5/adr/0001-agent-editable-knowledge-bas
 
 # ROADMAP — v0.0.5（切片图谱与编辑管理）
 
-> 当前开发版本 `0.0.5`（`develop`）；上一版 `v0.0.4` 已发布（2026-11-11；含 WP4 多形态部署：SQLite 可选向量库 + 四形态开关）。
+> 当前版本 `0.0.5`（已发布，`main` tag `v0.0.5`）；上一版 `v0.0.4` 已发布（2026-11-11；含 WP4 多形态部署：SQLite 可选向量库 + 四形态开关）。下一版本待确认。
 > 工作包与验收细节见 [`docs/v0.0.5/plan.md`](docs/v0.0.5/plan.md)。
 
 ## 1. 版本目标

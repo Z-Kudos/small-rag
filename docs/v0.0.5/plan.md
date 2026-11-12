@@ -1,6 +1,6 @@
 ---
 title: v0.0.5 切片图谱与编辑管理规划
-status: implementing
+status: done
 version: 0.0.5
 updated: 2026-11-12
 owners: [zjk]

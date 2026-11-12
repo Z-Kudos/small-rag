@@ -1,6 +1,6 @@
 ---
 title: ADR-0001 Agent 可编辑知识库的图谱与编辑语义
-status: implementing
+status: done
 version: 0.0.5
 updated: 2026-11-12
 owners: [zjk]

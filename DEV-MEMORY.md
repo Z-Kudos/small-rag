@@ -1,6 +1,6 @@
 ---
 title: DEV-MEMORY
-status: implementing
+status: done
 version: 0.0.5
 updated: 2026-11-12
 owners: [zjk]
@@ -14,12 +14,12 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.5/plan.md]
 
 ## 1. 当前阶段
 
-- 版本：`0.0.5`（开发中，`feature/v0.0.5-chunk-graph-edit`）；`ChunkingSignature = v0.0.5`（升级触发一次全量重切）。
+- 版本：`0.0.5`（已发布，`main` tag `v0.0.5`；`ChunkingSignature = v0.0.5`，升级触发一次全量重切）。
 - 上一版：`v0.0.4`（已发布 2026-11-11，含 WP4 多形态部署：SQLite 可选向量库 + 四形态开关）；`v0.0.3`（已封存，`cloud-rag`）。
 - 主题：**切片图谱与编辑管理**——让 AGENT 通过 MCP 操作和编辑 chunk。
 - 规划：[`docs/v0.0.5/plan.md`](docs/v0.0.5/plan.md)；ADR：[`docs/v0.0.5/adr/0001-agent-editable-knowledge-base.md`](docs/v0.0.5/adr/0001-agent-editable-knowledge-base.md)。
-- 状态：WP0–WP4 已完成（WP5 文档收尾中）；本机 JVM 冒烟（sqlite + ollama Qwen3-Embedding-0.6B）ingest → rag_chunks/rag_graph → rag_edit_chunk/rag_delete_chunk 通过。
-- 文档：`README.md`（简体中文）/ `README.en.md`（English）；设计/ADR 在 `docs/v0.0.5/`；`docs/v0.0.4/` 冻结。
+- 状态：**v0.0.5 已发布**（WP0–WP5 完成；Qdrant Testcontainers E2E 与容器构建/四形态冒烟待恢复）；`main` + tag `v0.0.5`；本机 JVM 冒烟通过（sqlite + ollama Qwen3-Embedding-0.6B）。
+- 文档：`README.md`（简体中文）/ `README.en.md`（English）；设计/ADR 在 `docs/v0.0.5/`（已冻结）；`docs/v0.0.4/`、`docs/v0.0.3/` 冻结。
 - **不切换版本**：下一次版本变更需人工确认。
 - **tag v0.0.4 改写说明**：旧 tag `v0.0.4` 指向 `e5c165c`（2026-11-10 发布），2026-11-11 删除并重打至包含 WP4 的 release main；旧发布内容仍保留在主线历史中（`git log` 可查），但已 clone 仓库的 tag 指针不会自动更新。
 
@@ -93,7 +93,7 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.5/plan.md]
 
 ## 6. 待办
 
-- v0.0.5：开发中（feature/v0.0.5-chunk-graph-edit）；WP0–WP4 完成；本机 JVM 冒烟全流程通过；v0.0.4 已发布（2026-11-11 重打 tag）。
+- v0.0.5：已发布（2026-11-12）；WP0–WP5 完成，190 单测 + 本机 JVM 冒烟；容器 E2E / 四形态冒烟推迟（内存）。
 - v0.0.5 升 `ChunkingSignature=v0.0.5`：所有用户升级触发一次全量重切（归档自动兜底）；README 迁移说明待补。
 - 需要多副本时使用 `~/Projects/cloud-rag`。
 - **不做镜像体积优化**：`jlink` 定制运行时、删 `/qdrant/static`、排除 QUIC native 等一律不实施。
