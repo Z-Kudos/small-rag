@@ -82,6 +82,7 @@ ENV JAVA_HOME=/opt/java/openjdk \
     EMBEDDING_BASE_URL="http://127.0.0.1:11434/v1" \
     EMBEDDING_API_KEY="local" \
     EMBEDDING_MODEL="qwen3-embedding-0.6b" \
+    EMBEDDING_DIMENSION="1024" \
     EMBEDDING_MODEL_URL="https://modelscope.cn/models/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/master/Qwen3-Embedding-0.6B-Q8_0.gguf" \
     EMBEDDING_MODEL_PATH="/data/models/qwen3-embedding-0.6b-q8_0.gguf" \
     EMBEDDING_CTX_SIZE="8192" \
