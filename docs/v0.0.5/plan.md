@@ -26,7 +26,7 @@ v0.0.4 完成了单机轻量化与多形态部署：AGENT 可以往知识库写�
 
 1. `rag_chunks`：列出文档的 chunk 树（index / 类型 / 父子 / heading_path / 首字）。
 2. `rag_graph`：返回节点 + 边的 JSON 图（`contains` / `section` / `parent_of` / `links_to`），深度 ≤2。
-3. `rag_search`：新增 `expand_graph`，命中响应附带结构化邻居。
+3. `rag_search`：新增 `expandGraph` 布尔参数，响应附带命中片段的结构（文档/章节/命中节点与 contains/section 边）。
 4. `rag_get_chunk` / `rag_edit_chunk` / `rag_delete_chunk`：Agent 面编辑 API，`expectedText`（matchText）冲突校验，`rag_delete_chunk` 要求 `confirm=true`。
 5. `rag_graph_export`：生成图 JSON（`documents` / `sections` / `chunks` 三层 + 四类边），可直接喂给 Obsidian / cytoscape / d3；不做任何前端。
 6. 工具数 13 → 19；`mvn test` 全绿（目标 ≥180）；JVM 冒烟覆盖 ingest → graph → edit → 重检索。
@@ -44,7 +44,7 @@ v0.0.4 完成了单机轻量化与多形态部署：AGENT 可以往知识库写�
 | # | 能力 | 现状 | 目标 | 差距 / 影响 |
 | --- | --- | --- | --- | --- |
 | G1 | chunk 可见性 | 无 MCP 工具；只能看日志 | `rag_chunks` | Agent 必须盲猜 chunk 结构 |
-| G2 | 图查询 | metadata 有 chunk_type/parent_id/heading_path，但无 API | `rag_graph` + `expand_graph` | 无法表达"相关片段" |
+| G2 | 图查询 | metadata 有 chunk_type/parent_id/heading_path，但无 API | `rag_graph` + `expandGraph` | 无法表达"相关片段" |
 | G3 | 编辑 | 只有 `rag_update` 全文替换 | `rag_edit_chunk`（精确到 chunk + 冲突校验） | 大文档全文替换成本高、漂移风险大 |
 | G4 | 删除 | 只有 `rag_delete` 按文档 | `rag_delete_chunk` + `confirm=true` | 无法只删一个错片段 |
 | G5 | 链接边 | 不提取 Markdown 链接 | metadata 字段 `links` | 无法跨文档导航 |
@@ -92,11 +92,11 @@ v0.0.4 完成了单机轻量化与多形态部署：AGENT 可以往知识库写�
 
 - `rag_chunks(documentId, limit)`：按 chunk_index 返回文档 chunk 树。
 - `rag_graph(seed, depth ≤ 2, limit)`：seed ∈ {doc_id, chunkPointUuid, heading_path}；输出 `nodes + edges`；`depth` 默认 1。
-- `rag_search` 新增可选 `expand_graph`：响应附带 `graph`（命中 → 父块 / 同父兄弟 / heading 链）。
+- `rag_search` 新增可选 `expandGraph`：响应附带 `graph`（节点：文档 / 章节 / 命中 chunk；边：contains / section）。
 
 **验收**
 
-- 工具数 16；单测覆盖 chunk/graph/expand_graph 的边界（空知识库、未知 seed、depth=2）。
+- 工具数 19；单测覆盖 chunk/graph/expandGraph 的边界（空知识库、未知 seed、depth=2）。
 - 两个后端（qdrant / sqlite）都能跑（qdrant 用 scroll+内存 adjacency）。
 
 ### WP3 编辑管理（C1）

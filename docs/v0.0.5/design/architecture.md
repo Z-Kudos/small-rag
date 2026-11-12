@@ -36,7 +36,7 @@ related: [README.md, docs/v0.0.5/plan.md, docs/v0.0.5/adr/0001-agent-editable-kn
 ```text
 rag/graph/           ChunkGraph（节点/边/邻接）、LinkResolver（links_to 归一化 + ambiguous 标记）、
                      GraphExport（JSON 约定：nodes/edges/含 documents/sections/chunks 三层）
-mcp/RagMcpTools.java rag_chunks / rag_graph / rag_search expand_graph /
+mcp/RagMcpTools.java rag_chunks / rag_graph / rag_search expandGraph /
                      rag_get_chunk / rag_edit_chunk / rag_delete_chunk / rag_graph_export
 mcp/McpServerConfig.java（注册 6 个新工具）
 ```
