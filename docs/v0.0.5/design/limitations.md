@@ -1,6 +1,6 @@
 ---
 title: v0.0.5 已知限制与风险
-status: implementing
+status: done
 version: 0.0.5
 updated: 2026-11-12
 owners: [zjk]
