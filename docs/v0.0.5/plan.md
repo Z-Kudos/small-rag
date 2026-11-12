@@ -151,8 +151,10 @@ v0.0.4 完成了单机轻量化与多形态部署：AGENT 可以往知识库写�
 | --- | --- | --- |
 | 构建 | `mvn clean package` | 通过 |
 | 单测 | `mvn test` | **190 全绿** |
-| Qdrant E2E | `mvn verify -Pcontainer-it` | 推迟（本机内存紧张） |
+| Qdrant E2E | `mvn verify -Pcontainer-it`（Testcontainers + 真实 Qdrant） | **3 全绿**（2026-11-12，本机内存验证） |
 | MCP | `initialize` / `tools/list` | **19 个工具可见** |
+| 容器冒烟（Qdrant+llama 本地形态） | `podman build`（本地 `docker.1ms.run` 加速源）+ 首启 GGUF 下载 + MCP 全流程 | **通过**（2026-11-12，镜像 `small-rag:0.0.5`；首启拉取 ~610 MB GGUF；health=200；ingest → rag_search 命中 → rag_query 返回带来源上下文 → rag_delete 成功） |
+| 容器冒烟（其余形态） | 远程 Qdrant+远程 Embedding / SQLite+远程 Embedding / SQLite+本地 llama | 推迟（内存） |
 | 图导出冒烟 | JVM 冒烟（sqlite + 本机 ollama Qwen3-Embedding-0.6B，目录导入 2 篇带链接文档） | 通过：ingest → rag_chunks/rag_graph（depth=2，links_to 命中 b.md）→ rag_edit_chunk（回写归档后 rag_search 命中新值）→ rag_delete_chunk（删空后文档整篇删除） |
 
 ## 6. 决策记录
@@ -173,6 +175,7 @@ v0.0.4 完成了单机轻量化与多形态部署：AGENT 可以往知识库写�
 - [x] `mvn clean package` 通过
 - [x] `mvn test` ≥180 全绿（190）
 - [x] MCP `tools/list` 显示 19 个工具
+- [x] 容器冒烟（Qdrant+llama 本地 all-in-one）：镜像构建、GGUF 下载、health=200、ingest/search/query/delete 全通
 - [x] README 双语与 AGENTS 同步（工具 19、目标版本 0.0.5）
 - [x] JVM 冒烟：ingest → chunks → graph → edit → 重检索通过
 - [x] `docs/v0.0.5` 建立并达标；`docs/v0.0.4` 保持冻结

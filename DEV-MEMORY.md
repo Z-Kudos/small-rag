@@ -93,8 +93,9 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.5/plan.md]
 
 ## 6. 待办
 
-- v0.0.5：已发布（2026-11-12）；WP0–WP5 完成，190 单测 + 本机 JVM 冒烟；容器 E2E / 四形态冒烟推迟（内存）。
+- v0.0.5：已发布（2026-11-12）；WP0–WP5 完成，190 单测 + 本机 JVM 冒烟；Qdrant Testcontainers E2E 3 全绿；容器冒烟（Qdrant+llama 本地 all-in-one 默认形态）**通过**（镜像 `small-rag:0.0.5`，首启 GGUF 下载后 health=200，ingest/search/query/delete 全通）；容器冒烟其余三形态推迟（内存）。
 - v0.0.5 升 `ChunkingSignature=v0.0.5`：所有用户升级触发一次全量重切（归档自动兜底）；README 迁移说明待补。
+- 镜像默认 `EMBEDDING_DIMENSION=1024`（与默认 Qwen3-Embedding-0.6B 输出一致）；之前裸 `podman run` 会错配 1536 → 入库报 `expected dim: 1536, got 1024`，已改。podman 最小镜像格式是 OCI，`HEALTHCHECK` 在 OCI 下被忽略（docker 格式/compose 不受影响）。
 - 需要多副本时使用 `~/Projects/cloud-rag`。
 - **不做镜像体积优化**：`jlink` 定制运行时、删 `/qdrant/static`、排除 QUIC native 等一律不实施。
 - 技术栈轻量化方向（依赖面收敛 / 嵌入式向量库 / 去 Spring Boot / 合并抽象层）已讨论：嵌入式向量库以 **SQLite 可选后端**形式进入 WP4（纯 Java 余弦，无 JNI）；其余（去 Spring AI / 去 Spring Boot）仍暂不实施。
