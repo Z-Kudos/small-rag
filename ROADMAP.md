@@ -25,7 +25,7 @@ related: [docs/v0.0.5/plan.md, docs/v0.0.5/adr/0001-agent-editable-knowledge-bas
 
 - 主题：**切片图谱与编辑管理**——AGENT 可浏览 chunk 树、查看/编辑/删除 chunk、导出图 JSON；编辑回写归档并整篇重切（C1 语义）。
 - 目标（全部可验证）：
-  1. `rag_chunks` / `rag_graph` / `rag_search expand_graph`：图查询 MCP 工具可用。
+  1. `rag_chunks` / `rag_graph` / `rag_search` 的 `expandGraph` 参数：图查询 MCP 工具可用。
   2. `rag_get_chunk` / `rag_edit_chunk` / `rag_delete_chunk`：Agent 面编辑 API 可用（`expectedText` 校验 + `confirm=true`）。
   3. `rag_graph_export`：全库 JSON 可直接喂给可视化工具，不做前端。
   4. MCP 工具 13 → 19，`mvn test` 全绿（目标 ≥180）。
