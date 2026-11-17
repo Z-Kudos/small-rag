@@ -19,6 +19,8 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.6/plan.md]
 - 主题：**CI/CD 与分类打标签、向量数据有效期、内存优化**——补齐双平台流水线与镜像分类标签、文档标签过滤检索、TTL 定时/手动清理、容器与运行时内存治理；MCP 19 → 23。
 - 规划：[`docs/v0.0.6/plan.md`](docs/v0.0.6/plan.md)；ADR：[`docs/v0.0.6/adr/0001-ci-tagging-and-retention.md`](docs/v0.0.6/adr/0001-ci-tagging-and-retention.md)。
 - 状态：**v0.0.6 开发中**；`mvn clean package` 通过、206 单测全绿、YAML / shell 语法校验通过；v0.0.5 已发布并冻结（`main` + tag `v0.0.5`）。
+- 提交与推送：代码与版本切换提交 `c012524`（Conventional Commits）已推送 Gitee `origin/develop` 与 GitHub `github/develop`，两端 `refs/heads/develop` 一致；**未打 tag / Release**（本次是开始 0.0.6 开发，不是发布）。
+- 会话归档：本次开发会话在文档收尾后归档；后续接续从本文件、`docs/v0.0.6/plan.md` 与 ADR-0001 入手。
 - 文档：`README.md`（简体中文）/ `README.en.md`（English）；设计/ADR 在 `docs/v0.0.6/`（当前开发）；`docs/v0.0.5/`、`docs/v0.0.4/`、`docs/v0.0.3/` 冻结。
 - **tag v0.0.4 改写说明**：旧 tag `v0.0.4` 指向 `e5c165c`（2026-11-10 发布），2026-11-11 删除并重打至包含 WP4 的 release main；旧发布内容仍保留在主线历史中（`git log` 可查），但已 clone 仓库的 tag 指针不会自动更新。
 

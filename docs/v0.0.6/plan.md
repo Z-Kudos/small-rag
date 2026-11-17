@@ -113,4 +113,6 @@ related: [ROADMAP.md, DEV-MEMORY.md, docs/v0.0.6/adr/0001-ci-tagging-and-retenti
 - [x] 标签 / TTL / 内存优化代码与单测落地
 - [x] 文档同步（README 双语 / ROADMAP / DEV-MEMORY / AGENTS）
 - [x] 版本切换 0.0.6、docs/v0.0.6 建立、docs/v0.0.5 冻结
+- [x] 代码与版本切换已提交并推送双远程 `develop`（提交 `c012524`；未打 tag / Release）
 - [ ] 容器 / 远程 / SQLite 三形态容器 E2E 回归（待部署环境）
+- [ ] CI/CD 平台侧凭据配置后验证流水线实际运行（Registry / Token / Webhook）
