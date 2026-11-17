@@ -26,9 +26,11 @@ public final class ChunkingSignature {
      * breakpoint-percentile；父块改为独立 point 存储，子块不再携带 parent_text）
      * →0.0.2（已发布）→0.0.3（子块 point id 改为
      * {@code chunk:<docId>:<signature>:<index>} 确定性生成）→0.0.4（多形态部署，切分口径不变）
-     * →0.0.5（版本同步，切分口径不变，升级触发一次全量重切）。版本号变化时旧归档会自动重切。
+     * →0.0.5（版本同步，切分口径不变，升级触发一次全量重切）
+     * →0.0.6（新增分类 / 标签元数据、TTL 与内存优化，切分口径仍不变，版本同步触发一次全量重切）。
+     * 版本号变化时旧归档会自动重切。
      */
-    private static final String VERSION = "v0.0.5";
+    private static final String VERSION = "v0.0.6";
 
     private ChunkingSignature() {
     }

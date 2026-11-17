@@ -1,16 +1,16 @@
 ---
 title: ROADMAP
 status: done
-version: 0.0.5
-updated: 2026-11-12
+version: 0.0.6
+updated: 2026-11-17
 owners: [zjk]
-related: [docs/v0.0.5/plan.md, docs/v0.0.5/adr/0001-agent-editable-knowledge-base.md, DEV-MEMORY.md]
+related: [docs/v0.0.6/plan.md, docs/v0.0.6/adr/0001-ci-tagging-and-retention.md, DEV-MEMORY.md]
 ---
 
-# ROADMAP — v0.0.5（切片图谱与编辑管理）
+# ROADMAP — v0.0.6（CI/CD、分类打标签、有效期与内存优化）
 
-> 当前版本 `0.0.5`（已发布，`main` tag `v0.0.5`）；上一版 `v0.0.4` 已发布（2026-11-11；含 WP4 多形态部署：SQLite 可选向量库 + 四形态开关）。下一版本待确认。
-> 工作包与验收细节见 [`docs/v0.0.5/plan.md`](docs/v0.0.5/plan.md)。
+> 当前版本 `0.0.6`（开发中，2026-11-17 从 v0.0.5 切换）；上一版 `v0.0.5` 已发布（`main` tag `v0.0.5`，切片图谱与编辑管理，19 工具）。
+> 工作包与验收细节见 [`docs/v0.0.6/plan.md`](docs/v0.0.6/plan.md)。
 
 ## 1. 版本目标
 
@@ -21,7 +21,19 @@ related: [docs/v0.0.5/plan.md, docs/v0.0.5/adr/0001-agent-editable-knowledge-bas
 - 无 Spring Cloud / Gateway / Config Server / Consul / Redis / Redisson。
 - 保留 MCP、Qdrant、4 种切分、Parent-Child、目录导入、异步重建/看门狗、归档。
 
-## 1.1 v0.0.5 版本目标与验收
+## 1.0 v0.0.6 版本目标与验收（开发中）
+
+- 主题：**CI/CD 与分类打标签、向量数据有效期、内存优化**。
+- 目标（全部可验证）：
+  1. GitHub Actions 四个工作流（CI / 镜像发布 / Release / 自动打标签）与 Gitee Go 两个流水线可用；镜像按分支/标签分类打 tag；PR/Issue 自动分类打标签。
+  2. RAG 文档支持 `tags` / `category` 元数据，`rag_search` / `rag_query` 可按标签过滤；新增 `rag_set_tags` / `rag_list_tags`，MCP 工具 19 → 23。
+  3. `rag.retention.*` TTL（默认关闭）+ 定时清理，MCP `rag_cleanup_expired` / `rag_retention_status`；清理与重建 / 目录导入互斥。
+  4. 内存治理：容器 `MEM_LIMIT`、JVM 显式内存池、llama.cpp KV Cache/线程、Qdrant 配额、SQLite 页缓存、chunk 定向查询。
+  5. `mvn clean package` 通过、`mvn test` 206 全绿；README 双语、DEV-MEMORY、AGENTS、ROADMAP 同步。
+- 签名升 `v0.0.6`（版本同步，切分口径不变）：升级触发一次全量重切，归档自动兜底。
+- 红线保持：不调用 Chat/生成模型；不引入 Spring Cloud；单机单容器单端口。
+
+## 1.1 v0.0.5 版本目标与验收（已发布）
 
 - 主题：**切片图谱与编辑管理**——AGENT 可浏览 chunk 树、查看/编辑/删除 chunk、导出图 JSON；编辑回写归档并整篇重切（C1 语义）。
 - 目标（全部可验证）：
@@ -35,7 +47,7 @@ related: [docs/v0.0.5/plan.md, docs/v0.0.5/adr/0001-agent-editable-knowledge-bas
 
 详见 [`docs/v0.0.5/plan.md`](docs/v0.0.5/plan.md)。
 
-## 2. 运行形态（v0.0.4–v0.0.5 无变化）
+## 2. 运行形态（v0.0.4–v0.0.6 无变化）
 
 | 维度 | v0.0.4 |
 | --- | --- |
@@ -71,5 +83,6 @@ related: [docs/v0.0.5/plan.md, docs/v0.0.5/adr/0001-agent-editable-knowledge-bas
 
 ## 6. 后续
 
+- v0.0.6（2026-11-17）：补齐 Gitee Go / GitHub Actions CI/CD 与分类打标签、文档分类标签与过滤检索、向量数据 TTL（定时 + MCP 手动）、容器/JVM/llama.cpp/Qdrant 内存优化；MCP 工具 19 → 23。
 - 需要多副本时使用封存项目 `~/Projects/cloud-rag`。
 - 本仓库后续版本只围绕单机 RAG 质量、切分、目录导入与多形态部署（SQLite 可选、同一镜像）演进。

@@ -107,7 +107,7 @@ final class SqliteFilters {
     static boolean matches(Filter.Expression expression, Map<String, Object> metadata) {
         Filter.ExpressionType type = expression.type();
         return switch (type) {
-            case EQ -> compare(metadata, keyOf(expression.left()), rightValue(expression.right())) == 0;
+            case EQ -> equalsValue(metadata, keyOf(expression.left()), rightValue(expression.right()));
             case NE -> compare(metadata, keyOf(expression.left()), rightValue(expression.right())) != 0;
             case GT -> compare(metadata, keyOf(expression.left()), rightValue(expression.right())) > 0;
             case GTE -> compare(metadata, keyOf(expression.left()), rightValue(expression.right())) >= 0;
@@ -115,9 +115,9 @@ final class SqliteFilters {
             case LTE -> compare(metadata, keyOf(expression.left()), rightValue(expression.right())) <= 0;
             case IN, NIN -> {
                 Object raw = rightValue(expression.right());
+                String key = keyOf(expression.left());
                 boolean found = raw instanceof Collection<?> collection
-                        && collection.stream().map(String::valueOf)
-                                .anyMatch(item -> item.equals(String.valueOf(metadata.get(keyOf(expression.left())))));
+                        && collection.stream().anyMatch(item -> equalsValue(metadata, key, item));
                 yield type == Filter.ExpressionType.IN == found;
             }
             case AND -> operandValue(expression.left(), metadata) && operandValue(expression.right(), metadata);
@@ -148,6 +148,19 @@ final class SqliteFilters {
             return value.value();
         }
         throw new IllegalArgumentException("SQLite 后端过滤条件右侧必须是字面量: " + operand);
+    }
+
+    /**
+     * 等值判断：既兼容标量字段，也兼容数组字段（如 {@code tags}）——
+     * 数组字段只要包含目标值即视为相等，与 Qdrant 的 Match.Any 语义一致。
+     */
+    private static boolean equalsValue(Map<String, Object> metadata, String key, Object expected) {
+        Object actual = metadata.get(key);
+        if (actual instanceof Collection<?> collection) {
+            return collection.stream().map(String::valueOf)
+                    .anyMatch(item -> item.equals(String.valueOf(expected)));
+        }
+        return compare(metadata, key, expected) == 0;
     }
 
     private static boolean isNull(Map<String, Object> metadata, String key) {

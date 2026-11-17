@@ -78,14 +78,16 @@ RUN chmod 0755 /app/start-qdrant.sh /app/start-llama.sh /app/start-app.sh /app/e
 ENV JAVA_HOME=/opt/java/openjdk \
     PATH="/opt/java/openjdk/bin:/opt/llama:$PATH" \
     LD_LIBRARY_PATH="/opt/llama" \
-    JAVA_OPTS="-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError" \
+    # 显式限制 JVM 各内存池（无 cgroup 限额时 MaxRAMPercentage 会按宿主机计算，导致内存失控）
+    JAVA_OPTS="-Xmx1024m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m -Xss512k -XX:+ExitOnOutOfMemoryError" \
     EMBEDDING_BASE_URL="http://127.0.0.1:11434/v1" \
     EMBEDDING_API_KEY="local" \
     EMBEDDING_MODEL="qwen3-embedding-0.6b" \
     EMBEDDING_DIMENSION="1024" \
     EMBEDDING_MODEL_URL="https://modelscope.cn/models/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/master/Qwen3-Embedding-0.6B-Q8_0.gguf" \
     EMBEDDING_MODEL_PATH="/data/models/qwen3-embedding-0.6b-q8_0.gguf" \
-    EMBEDDING_CTX_SIZE="8192" \
+    # 4096 token 足够覆盖最大 chunk（800 全角字符）；相比 8192 可减半 KV Cache 占用
+    EMBEDDING_CTX_SIZE="4096" \
     SMALL_RAG_ENSURE_EMBEDDING_MODEL="true" \
     QDRANT_HOST="127.0.0.1" \
     QDRANT_PORT="6334" \

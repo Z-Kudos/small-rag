@@ -778,4 +778,44 @@ class RagServiceTest {
         assertThat(page.documents().get(0).documentId()).isEqualTo(secondId);
         assertThat(page.documents().get(0).textLength()).isEqualTo(2);
     }
+
+    @Test
+    void searchWithTagsAndCategoryBuildsCombinedFilter() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        properties.getChunking().setStrategy(ChunkingStrategy.FIXED);
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+        RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties),
+                new QdrantProperties(), () -> false, chunkingService(properties),
+                mock(DocumentArchive.class), new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
+
+        service.search("任意问题", 4, true, List.of("rag"), "技术");
+
+        ArgumentCaptor<SearchRequest> request = ArgumentCaptor.forClass(SearchRequest.class);
+        verify(vectorStore).similaritySearch(request.capture());
+        Filter.Expression filter = request.getValue().getFilterExpression();
+        assertThat(filter).isNotNull();
+        assertThat(filter.toString()).contains("tags").contains("category");
+    }
+
+    @Test
+    void ingestNormalizesTagsIntoList() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        RagProperties properties = new RagProperties();
+        properties.getChunking().setStrategy(ChunkingStrategy.FIXED);
+        RagService service = new RagService(vectorStore, properties, new QueryCircuitBreaker(properties),
+                new QdrantProperties(), () -> false, chunkingService(properties),
+                mock(DocumentArchive.class), new FakeDocumentPointsPort(), mock(EmbeddingModel.class));
+
+        service.ingest("这是一段用于测试的中文文本，内容足够长以便切分。",
+                Map.of("tags", "rag,检索", "category", "技术"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore).add(captor.capture());
+        assertThat(captor.getValue()).isNotEmpty();
+        assertThat(captor.getValue().get(0).getMetadata().get("tags"))
+                .isEqualTo(List.of("rag", "检索"));
+        assertThat(captor.getValue().get(0).getMetadata().get("category")).isEqualTo("技术");
+    }
 }

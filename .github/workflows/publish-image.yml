@@ -1,0 +1,87 @@
+name: Publish image
+
+on:
+  push:
+    branches: [develop, main, 'release/**']
+    tags: ['v*']
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    name: Build & classify image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 分类打标签：分支/标签 -> 环境 -> 镜像 tag。
+      #   develop           -> dev        : <version>-SNAPSHOT, dev-<sha>
+      #   release/*         -> staging    : <version>-rc.<run_number>
+      #   main              -> production : <version>
+      #   tag vX.Y.Z        -> production : <version>, latest, v<version>
+      #   pull request      -> (build only, no push) : pr-<number>-<sha>
+      - name: Derive image tags
+        id: tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -m1 -oP '(?<=<version>)[^<]+' pom.xml)
+          SHORT_SHA="${GITHUB_SHA::7}"
+          REF="${GITHUB_REF}"
+          TAGS=""
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            TAGS="${REGISTRY,,}/${IMAGE_NAME,,}:pr-${{ github.event.number }}-${SHORT_SHA}"
+          elif [[ "$REF" == refs/tags/v* ]]; then
+            TAGS="${REGISTRY,,}/${IMAGE_NAME,,}:${VERSION}"
+            TAGS="${TAGS},${REGISTRY,,}/${IMAGE_NAME,,}:latest"
+            TAGS="${TAGS},${REGISTRY,,}/${IMAGE_NAME,,}:v${VERSION}"
+          elif [[ "$REF" == refs/heads/main ]]; then
+            TAGS="${REGISTRY,,}/${IMAGE_NAME,,}:${VERSION}"
+          elif [[ "$REF" == refs/heads/release/* ]]; then
+            TAGS="${REGISTRY,,}/${IMAGE_NAME,,}:${VERSION}-rc.${GITHUB_RUN_NUMBER}"
+          else
+            TAGS="${REGISTRY,,}/${IMAGE_NAME,,}:${VERSION}-SNAPSHOT"
+            TAGS="${TAGS},${REGISTRY,,}/${IMAGE_NAME,,}:dev-${SHORT_SHA}"
+          fi
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "### Image tags" >> "$GITHUB_STEP_SUMMARY"
+          echo "${TAGS//,/, $'\n'}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            MAVEN_IMAGE=${{ vars.MAVEN_IMAGE || 'docker.io/library/maven:3.9-eclipse-temurin-25' }}
+            QDRANT_IMAGE=${{ vars.QDRANT_IMAGE || 'docker.io/qdrant/qdrant:latest' }}
+            JRE_IMAGE=${{ vars.JRE_IMAGE || 'docker.io/library/eclipse-temurin:25-jre' }}
+            LLAMA_CPP_TAG=${{ vars.LLAMA_CPP_TAG || 'v0.9.0' }}

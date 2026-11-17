@@ -10,6 +10,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * SQLite 实现的 {@link ChunkCatalog}：直接查询 {@code small_rag_chunks} 表。
@@ -49,6 +50,32 @@ public class SqliteChunkCatalog implements ChunkCatalog {
             throw new IllegalStateException("SQLite 枚举 chunk 失败: " + path + "，原因=" + e.getMessage(), e);
         }
         return result;
+    }
+
+    @Override
+    public Optional<ChunkSummary> findByPointId(String pointId) throws IllegalStateException {
+        if (pointId == null || pointId.isBlank()) {
+            return Optional.empty();
+        }
+        String sql = "SELECT id, content, metadata FROM small_rag_chunks WHERE id = ? LIMIT 1";
+        try (Connection connection = SqliteSupport.open(path)) {
+            SqliteSupport.ensureSchema(connection);
+            try (PreparedStatement select = connection.prepareStatement(sql)) {
+                select.setString(1, pointId);
+                try (ResultSet rows = select.executeQuery()) {
+                    if (!rows.next()) {
+                        return Optional.empty();
+                    }
+                    return Optional.of(new ChunkSummary(
+                            rows.getString("id"),
+                            rows.getString("content"),
+                            parseMetadata(rows.getString("metadata"))));
+                }
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("SQLite 按 id 读取 chunk 失败: pointId=" + pointId
+                    + "，原因=" + e.getMessage(), e);
+        }
     }
 
     @SuppressWarnings("unchecked")

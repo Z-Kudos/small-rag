@@ -1,0 +1,30 @@
+# actions/labeler v6 配置：按变更路径给 PR 自动打“分类”标签。
+# 键为 label 名（需预先在仓库 Labels 中创建），值为 changed-files 匹配规则。
+
+'area/ci':
+  - changed-files:
+      - any-glob-to-any-file: ['.github/**', '.gitee/**', 'Dockerfile', 'docker/**', 'compose*.yaml', 'Makefile']
+
+'area/docs':
+  - changed-files:
+      - any-glob-to-any-file: ['**/*.md', 'docs/**', 'ROADMAP.md', 'DEV-MEMORY.md', 'AGENTS.md']
+
+'area/rag':
+  - changed-files:
+      - any-glob-to-any-file: ['src/main/java/com/smallrag/ragmcp/rag/**']
+
+'area/mcp':
+  - changed-files:
+      - any-glob-to-any-file: ['src/main/java/com/smallrag/ragmcp/mcp/**', 'src/main/java/com/smallrag/ragmcp/config/McpServerConfig.java']
+
+'area/config':
+  - changed-files:
+      - any-glob-to-any-file: ['src/main/resources/application.yml', 'src/main/java/com/smallrag/ragmcp/config/**', '.env']
+
+'area/test':
+  - changed-files:
+      - any-glob-to-any-file: ['src/test/**']
+
+'area/build':
+  - changed-files:
+      - any-glob-to-any-file: ['pom.xml', '.mvn/**', 'maven-settings.xml']

@@ -32,7 +32,7 @@ spring:
     mcp:
       server:
         name: small-rag
-        version: 0.0.5
+        version: 0.0.6
         protocol: STREAMABLE
         instructions: |
           基于纯文本知识库的 RAG 检索服务（不调用生成模型）。
@@ -51,6 +51,9 @@ spring:
           想看跨文档结构：rag_graph（seed: doc:<id> / chunk:<pointId> / section|<docId>|<headingPath> / 裸 heading_path），
           或 rag_graph_export 导出完整图 JSON 供外部可视化。
           编辑后建议用 rag_search 验证；整篇重切会重算 chunk 的 pointId。
+          分类与标签：rag_list_tags 查看全部标签/分类；rag_set_tags(documentId, tags, category) 设置后整篇重切；
+          rag_search / rag_query 可传 tags（命中任一）与 category 做过滤。
+          向量数据有效期：RAG_RETENTION_* 配置定时清理（默认关闭）；rag_cleanup_expired 默认预演，真删需 dryRun=false 且 confirm=true；rag_retention_status 查询配置与上次清理结果。
 
 rag:
   # 原始文档归档目录：自动重切的原文来源；目录不可写时降级为只入库
@@ -73,6 +76,19 @@ rag:
     delete-orphan-roots: ${SMALL_RAG_SOURCES_DELETE_ORPHAN_ROOTS:false}
     # 留空 = <archive-dir>/.sources/state.json
     state-file: ${SMALL_RAG_SOURCES_STATE_FILE:}
+  # 向量数据有效期（TTL）：默认关闭；开启后按 ingested_at 定期清理过期向量与归档
+  retention:
+    enabled: ${RAG_RETENTION_ENABLED:false}
+    # 有效期（秒），默认 90 天；<= 0 表示永不过期
+    ttl-seconds: ${RAG_RETENTION_TTL_SECONDS:7776000}
+    # 定时清理间隔（秒），默认 24 小时
+    scan-interval-seconds: ${RAG_RETENTION_SCAN_INTERVAL_SECONDS:86400}
+    # 启动后延迟（秒）执行首次清理，避开启动重切 / 目录导入
+    startup-delay-seconds: ${RAG_RETENTION_STARTUP_DELAY_SECONDS:120}
+    # 单轮最多清理的文档数，<= 0 不限制
+    max-documents-per-run: ${RAG_RETENTION_MAX_DOCUMENTS_PER_RUN:200}
+    # 是否同时删除原文归档；false 时只删向量
+    delete-archive: ${RAG_RETENTION_DELETE_ARCHIVE:true}
   # Embedding（OpenAI 兼容）HTTP 超时：防止服务假死时重建线程被永久占用
   embedding:
     connect-timeout-ms: ${EMBEDDING_CONNECT_TIMEOUT_MS:10000}

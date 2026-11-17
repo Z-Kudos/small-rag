@@ -23,13 +23,16 @@ if [ ! -s "${MODEL_PATH}" ]; then
     echo "[small-rag] embedding model downloaded: ${MODEL_PATH}"
 fi
 
-# Qwen3-Embedding 是 last-token pooling 模型，必须显式 --pooling last
+# Qwen3-Embedding 是 last-token pooling 模型，必须显式 --pooling last。
+# KV Cache 默认 q8_0（相比 f16 减半内存），ctx-size 默认 4096（覆盖最大 chunk），threads 默认 2。
 exec /opt/llama/llama-server \
     --host "${EMBEDDING_BIND_ADDR:-127.0.0.1}" \
     --port 11434 \
     --model "${MODEL_PATH}" \
     --embeddings \
     --pooling last \
-    --ctx-size "${EMBEDDING_CTX_SIZE:-8192}" \
+    --ctx-size "${EMBEDDING_CTX_SIZE:-4096}" \
+    --cache-type-k "${EMBEDDING_CACHE_TYPE_K:-q8_0}" \
+    --cache-type-v "${EMBEDDING_CACHE_TYPE_V:-q8_0}" \
     --no-webui \
-    ${EMBEDDING_THREADS:+--threads "${EMBEDDING_THREADS}"}
+    --threads "${EMBEDDING_THREADS:-2}"

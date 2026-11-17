@@ -4,9 +4,9 @@
 
 基于 Spring AI 的**纯文本 RAG 检索** MCP 服务：只做向量入库与检索，不调用 Chat / 生成模型。通过 MCP（Streamable HTTP）暴露文档管理、`rag_search`、`rag_query`；向量库**默认 Qdrant，可切换为内嵌 SQLite**。输入为标准 Markdown / Obsidian 兼容 Markdown 的中英文纯文本，`rag_query` 返回增强上下文，回答由调用方 Agent 生成。
 
-**v0.0.5 是单机轻量 + 可编辑知识库版**：在 v0.0.4（单模块、单容器、无 Redis/Consul/Gateway）基础上，AGENT 可通过 MCP 浏览、编辑、删除知识库的 chunk。
+**v0.0.6 是单机轻量 + 可编辑知识库 + 分类标签/有效期版**：在 v0.0.5（AGENT 可浏览、编辑、删除 chunk）基础上，补齐双平台 CI/CD、文档分类标签与过滤检索、向量数据有效期（TTL）与内存优化。
 
-> **从 v0.0.4 升级**：`ChunkingSignature` 升 `v0.0.5`，升级后归档按当前签名触发一次全量重切（归档原文兜底，语料量越大重切越久）。
+> **从 v0.0.5 升级**：`ChunkingSignature` 升 `v0.0.6`，升级后归档按当前签名触发一次全量重切（归档原文兜底，语料量越大重切越久）。
 
 
 ![Java](https://img.shields.io/badge/Java-25-orange)
@@ -59,15 +59,15 @@
 
 ## 文档
 
-以下为当前版本 **v0.0.5** 的文档；`docs/v0.0.4` 已随 tag 发布并冻结，`docs/v0.0.3` 保留为已封存的分布式版本说明。
+以下为当前版本 **v0.0.6** 的文档；`docs/v0.0.5`、`docs/v0.0.4` 已随 tag 发布并冻结，`docs/v0.0.3` 保留为已封存的分布式版本说明。
 
 | 文档 | 内容 |
 | --- | --- |
 | [ROADMAP.md](ROADMAP.md) | 版本目标与验收标准 |
-| [docs/v0.0.5/plan.md](docs/v0.0.5/plan.md) | v0.0.5 切片图谱与编辑管理规划 |
-| [docs/v0.0.5/design/architecture.md](docs/v0.0.5/design/architecture.md) | 架构、包结构、关键数据流 |
-| [docs/v0.0.5/design/limitations.md](docs/v0.0.5/design/limitations.md) | 已知限制与风险 |
-| [docs/v0.0.5/adr/0001-agent-editable-knowledge-base.md](docs/v0.0.5/adr/0001-agent-editable-knowledge-base.md) | Agent 可编辑知识库决策 |
+| [docs/v0.0.6/plan.md](docs/v0.0.6/plan.md) | v0.0.6 CI/CD、分类标签、有效期与内存优化规划 |
+| [docs/v0.0.6/design/architecture.md](docs/v0.0.6/design/architecture.md) | 架构、包结构、关键数据流 |
+| [docs/v0.0.6/design/limitations.md](docs/v0.0.6/design/limitations.md) | 已知限制与风险 |
+| [docs/v0.0.6/adr/0001-ci-tagging-and-retention.md](docs/v0.0.6/adr/0001-ci-tagging-and-retention.md) | CI/CD 分类打标签与 TTL 决策 |
 | [DEV-MEMORY.md](DEV-MEMORY.md) | 当前开发状态与已知坑 |
 | [AGENTS.md](AGENTS.md) | 版本基线、构建命令、代码与文档规范 |
 
@@ -82,7 +82,7 @@ docker run -d --name qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant:latest
 
 # 3. 构建并运行
 mvn clean package -DskipTests
-java -jar target/small-rag-0.0.5.jar
+java -jar target/small-rag-0.0.6.jar
 ```
 
 MCP 端点：`http://localhost:18080/mcp`。
@@ -110,8 +110,8 @@ podman compose up -d --build
 单独构建 / 运行：
 
 ```bash
-docker build -t small-rag:0.0.5 .
-docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.5
+docker build -t small-rag:0.0.6 .
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.6
 ```
 
 国内镜像可通过 `.env` 覆盖 `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE`，llama.cpp 源码版本用 `LLAMA_CPP_TAG`（默认 `v0.9.0`）。bind mount 时需保证容器内 UID `10001` 可写。
@@ -137,10 +137,10 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
   -e EMBEDDING_BASE_URL=https://your-embedding/v1 \
   -e EMBEDDING_API_KEY=sk-... -e EMBEDDING_MODEL=qwen3-embedding-0.6b \
   -e EMBEDDING_DIMENSION=1024 -e SMALL_RAG_ENSURE_EMBEDDING_MODEL=false \
-  small-rag:0.0.5
+  small-rag:0.0.6
 
 # 形态 2：本地 Qdrant + 本地 llama（默认，等同于不加任何 -e）
-docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.5
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.6
 
 # 形态 3：SQLite + 远程 Embedding
 docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
@@ -148,12 +148,12 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
   -e EMBEDDING_BASE_URL=https://your-embedding/v1 \
   -e EMBEDDING_API_KEY=sk-... -e EMBEDDING_MODEL=qwen3-embedding-0.6b \
   -e EMBEDDING_DIMENSION=1024 -e SMALL_RAG_ENSURE_EMBEDDING_MODEL=false \
-  small-rag:0.0.5
+  small-rag:0.0.6
 
 # 形态 4：SQLite + 本地 llama
 docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
   -e VECTOR_STORE_TYPE=sqlite -e QDRANT_ENABLED=false \
-  small-rag:0.0.5
+  small-rag:0.0.6
 ```
 
 SQLite 注意事项：片段、任务状态（`reindex_state` 表）、维度元数据都落在 `SQLITE_PATH`（默认 `/data/smallrag.sqlite`，WAL 模式）；**不要让多个容器实例共享同一文件**；换 Embedding 模型时需同步改 `EMBEDDING_DIMENSION`，维度不一致会阻断启动，重建需删除该文件后重新导入。
@@ -169,7 +169,7 @@ docker run -d --name small-rag -p 18080:18080 \
   -v /host/wiki:/data/sources/wiki:ro \
   -e SMALL_RAG_SOURCES_ENABLED=true \
   -e SMALL_RAG_SOURCE_DIRS='notes=/data/sources/notes,wiki=/data/sources/wiki' \
-  small-rag:0.0.5
+  small-rag:0.0.6
 ```
 
 Compose 用户可以使用可选的 `compose.sources.yaml`：
@@ -224,6 +224,18 @@ SMALL_RAG_SOURCE_HOST=/host/knowledge make up-sources
 | `RAG_QUERY_BREAKER_ENABLED` | `true` | 检索熔断开关 |
 | `RAG_QUERY_BREAKER_FAILURE_RATE` | `50` | 打开熔断的失败率（%） |
 | `RAG_QUERY_BREAKER_OPEN_WAIT` | `30s` | 熔断打开后进入半开的等待时间 |
+| `RAG_RETENTION_ENABLED` | `false` | 是否启用向量数据有效期定时清理 |
+| `RAG_RETENTION_TTL_SECONDS` | `7776000`（90 天） | 数据有效期；`<= 0` 永不过期 |
+| `RAG_RETENTION_SCAN_INTERVAL_SECONDS` | `86400` | 定时清理间隔；`0` 表示只做启动后一次 |
+| `RAG_RETENTION_STARTUP_DELAY_SECONDS` | `120` | 启动后首次清理的延迟，避开重切 / 导入 |
+| `RAG_RETENTION_MAX_DOCUMENTS_PER_RUN` | `200` | 单轮最多清理文档数；`0` 不限制 |
+| `RAG_RETENTION_DELETE_ARCHIVE` | `true` | 清理时是否同时删除原文归档；`false` 只删向量 |
+| `MEM_LIMIT` | `4g` | compose 容器内存上限；remote-only 部署可降到 `1536m` |
+| `JAVA_OPTS` | `-Xmx1024m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m -Xss512k -XX:+ExitOnOutOfMemoryError` | JVM 内存池上限 |
+| `EMBEDDING_CTX_SIZE` | `4096` | llama.cpp 上下文大小；减小可显著降低 KV Cache 占用 |
+| `EMBEDDING_THREADS` | `2` | llama.cpp 线程数 |
+| `EMBEDDING_CACHE_TYPE_K` / `EMBEDDING_CACHE_TYPE_V` | `q8_0` | KV Cache 量化类型（相比 f16 减半内存） |
+| `QDRANT_MAX_RESIDENT_MEMORY_PERCENT` | `60` | Qdrant 常驻内存占比上限 |
 
 > 切分尺寸单位是**全宽字符当量**：CJK 计 1，拉丁 / 半角计 0.25；英文硬切回退单词边界。
 
@@ -250,6 +262,26 @@ SMALL_RAG_SOURCE_HOST=/host/knowledge make up-sources
 | `rag_get_chunk` | 读取单个 chunk 正文与元数据（编辑前必用） |
 | `rag_edit_chunk` | 替换 chunk 正文：expectedText 一致时才执行；回写归档并整篇重切 |
 | `rag_delete_chunk` | 删除 chunk 对应段：必须 confirm=true；删空则整篇删除 |
+| `rag_set_tags` | 设置文档分类与标签（逗号分隔），写入归档后整篇重切 |
+| `rag_list_tags` | 列出全部分类 / 标签及文档数 |
+| `rag_cleanup_expired` | 清理过期向量；默认预演，真删需 `dryRun=false` 且 `confirm=true` |
+| `rag_retention_status` | 查询 TTL 配置与最近一次清理结果 |
+
+> `rag_search` / `rag_query` 支持可选参数 `tags`（命中任一）与 `category` 做服务端过滤。
+
+## 分类、标签与有效期
+
+- 标签来源：`rag_ingest` / `rag_update` 元数据中的 `tags`（逗号分隔）与 `category`，Markdown frontmatter 的 `tags` 会写入 `frontmatter_tags`；两者统一合并为数组 `tags`。
+- 设置标签：`rag_set_tags(documentId, "架构,部署", "运维")`，会写回归档并按当前切分签名整篇重切，因此过滤立即生效。
+- 检索过滤：`rag_search(query, tags=["架构"], category="运维")` 或 `rag_query(..., tags=[...])`。可先用 `rag_list_tags()` 查看可用值。
+- 有效期：默认关闭。开启 `RAG_RETENTION_ENABLED=true` 后按归档更新时间判定过期，定时清理向量与（可选）归档；也可用 `rag_cleanup_expired()` 先预演，再 `rag_cleanup_expired(dryRun=false, confirm=true)` 实际删除。
+- 清理与重建 / 目录导入共用进程内活动锁，不会并发写同一批数据。
+
+## CI/CD 与镜像标签
+
+- GitHub Actions：`.github/workflows/ci.yml`（分类 + 单测 + Testcontainers E2E）、`publish-image.yml`（构建并推送 GHCR 镜像）、`release.yml`（tag 与 pom 版本一致性校验 + Release）、`auto-label.yml`（PR/Issue 自动打标签，规则见 `.github/labeler.yml`）。
+- Gitee Go：`.workflow/CIPipeline.yml`、`.workflow/LabelPipeline.yml`；JDK 25 构建在 `maven:3.9-eclipse-temurin-25` 容器内完成。PR/Issue 打标签可另部署 `scripts/gitee-webhook-labeler.py`。
+- 分类打标签：`develop` → `<version>-SNAPSHOT` / `dev-<sha>`；`release/*` → `<version>-rc.<build>`；`main` → `<version>`；tag `vX.Y.Z` → `<version>` + `latest`。生产环境请使用固定版本 tag，不要用 `latest`。
 
 ## 客户端接入
 

@@ -1,8 +1,12 @@
 package com.smallrag.ragmcp.config;
 
 import com.smallrag.ragmcp.mcp.RagMcpTools;
+import com.smallrag.ragmcp.mcp.RetentionMcpTools;
+import com.smallrag.ragmcp.mcp.TagMcpTools;
 import com.smallrag.ragmcp.rag.RagService;
 import com.smallrag.ragmcp.rag.edit.ChunkEditService;
+import com.smallrag.ragmcp.rag.metadata.TagService;
+import com.smallrag.ragmcp.rag.retention.RetentionCleanupService;
 import com.smallrag.ragmcp.rag.reindex.ReindexTaskService;
 import com.smallrag.ragmcp.rag.sources.SourceSyncService;
 import com.smallrag.ragmcp.rag.vectorstore.ChunkCatalog;
@@ -32,5 +36,15 @@ public class McpServerConfig {
             ObjectMapper objectMapper) {
         return new RagMcpTools(ragService, reindexTaskService, sourceSyncService,
                 chunkEditService, chunkCatalog, objectMapper);
+    }
+
+    @Bean
+    public TagMcpTools tagMcpTools(TagService tagService, ObjectMapper objectMapper) {
+        return new TagMcpTools(tagService, objectMapper);
+    }
+
+    @Bean
+    public RetentionMcpTools retentionMcpTools(RetentionCleanupService cleanupService, ObjectMapper objectMapper) {
+        return new RetentionMcpTools(cleanupService, objectMapper);
     }
 }

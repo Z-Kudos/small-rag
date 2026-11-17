@@ -1,0 +1,87 @@
+name: Auto label
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  # PR 分类打标签：路径标签 + Conventional Commit 类型标签。
+  pr:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label by changed paths
+        uses: actions/labeler@v6
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          sync-labels: true
+
+      - name: Label by conventional commit type
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const title = (context.payload.pull_request.title || '').toLowerCase();
+            const rules = [
+              [/^feat(\(|:|\s)/, 'type/feature'],
+              [/^fix(\(|:|\s)/, 'type/bug'],
+              [/^docs(\(|:|\s)/, 'type/documentation'],
+              [/^chore(\(|:|\s)/, 'type/chore'],
+              [/^refactor(\(|:|\s)/, 'type/refactor'],
+              [/^perf(\(|:|\s)/, 'type/performance'],
+              [/^test(\(|:|\s)/, 'type/test'],
+              [/^build(\(|:|\s)/, 'type/build'],
+              [/^ci(\(|:|\s)/, 'type/ci'],
+              [/^hotfix(\(|:|\s)/, 'type/hotfix'],
+            ];
+            const labels = rules.filter(([re]) => re.test(title)).map(([, l]) => l);
+            if (labels.length) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                labels,
+              });
+              core.info(`applied: ${labels.join(', ')}`);
+            } else {
+              core.info('no conventional-commit type matched');
+            }
+
+  # Issue 分类打标签：按标题/正文关键词。
+  issue:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label issues by keywords
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const text = `${context.payload.issue.title || ''}\n${context.payload.issue.body || ''}`.toLowerCase();
+            const rules = [
+              [/内存|memory|oom|heap|占用/, 'kind/memory'],
+              [/性能|慢|卡顿|performance|slow|fps/, 'kind/performance'],
+              [/bug|错误|异常|失败|error|exception|crash/, 'kind/bug'],
+              [/文档|README|docs|说明/, 'kind/documentation'],
+              [/rag|检索|切分|向量|qdrant|sqlite|embedding/, 'kind/rag'],
+              [/mcp|工具|tool/, 'kind/mcp'],
+              [/cicd|ci|cd|流水线|pipeline|action|gitee/, 'kind/ci'],
+              [/需求|feature|功能|希望|建议/, 'kind/enhancement'],
+            ];
+            const labels = rules.filter(([re]) => re.test(text)).map(([, l]) => l);
+            if (labels.length) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                labels,
+              });
+              core.info(`applied: ${labels.join(', ')}`);
+            }

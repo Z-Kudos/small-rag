@@ -1,0 +1,73 @@
+version: '1.0'
+name: LabelPipeline
+displayName: PR 自动分类打标签
+
+# Gitee Go 没有内置 PR/Issue 打标签插件，这里通过 Gitee Open API 实现 PR 自动打标签。
+# 需要在仓库「环境变量管理」配置：
+#   GITEE_TOKEN  -> 具备仓库写权限的个人访问令牌（PAT）
+#   GITEE_OWNER  -> 仓库拥有者（如 zjk1054860443）
+#   GITEE_REPO   -> 仓库名（如 small-rag）
+# 前置：在 Gitee 仓库「标签」中预建下列 label，否则 API 会报错：
+#   type/feature, type/bug, type/documentation, type/chore, type/refactor,
+#   type/performance, type/test, type/build, type/ci, type/hotfix,
+#   env/dev, env/staging, env/production
+# Issue 打标签见 scripts/gitee-webhook-labeler.py（Gitee Go 不支持 issue 触发器）。
+triggers:
+  pr:
+    branches:
+      precise: [develop, main]
+      prefix: [release/, hotfix/]
+
+variables:
+  GITEE_OWNER: zjk1054860443
+  GITEE_REPO: small-rag
+
+stages:
+  - stage:
+      name: label
+      displayName: 标注 PR
+      strategy: naturally
+      trigger: auto
+      steps:
+        - step: build@shell
+          name: label_pr
+          displayName: 按 Conventional Commit 与目标分支打 label
+          commands:
+            - set -euo pipefail
+            - |
+              PR_ID="${GITEE_PULL_ID:-${GITEE_PULL_REQUEST_ID:-}}"
+              if [ -z "$PR_ID" ]; then
+                echo "未检测到 PR ID，跳过"
+                exit 0
+              fi
+              TITLE=$(printf '%s' "${GITEE_COMMIT_MESSAGE:-}" | tr '[:upper:]' '[:lower:]')
+              TARGET="${GITEE_BRANCH}"
+              LABELS=""
+              add_label() { if [ -z "$LABELS" ]; then LABELS="\"$1\""; else LABELS="${LABELS},\"$1\""; fi; }
+              case "$TITLE" in
+                feat\(*|feat:*|feat\ *) add_label "type/feature" ;;
+                fix\(*|fix:*|fix\ *) add_label "type/bug" ;;
+                docs\(*|docs:*|docs\ *) add_label "type/documentation" ;;
+                chore\(*|chore:*|chore\ *) add_label "type/chore" ;;
+                refactor\(*|refactor:*|refactor\ *) add_label "type/refactor" ;;
+                perf\(*|perf:*|perf\ *) add_label "type/performance" ;;
+                test\(*|test:*|test\ *) add_label "type/test" ;;
+                build\(*|build:*|build\ *) add_label "type/build" ;;
+                ci\(*|ci:*|ci\ *) add_label "type/ci" ;;
+                hotfix\(*|hotfix:*|hotfix\ *) add_label "type/hotfix" ;;
+              esac
+              case "$TARGET" in
+                develop) add_label "env/dev" ;;
+                main) add_label "env/production" ;;
+                release/*) add_label "env/staging" ;;
+                hotfix/*) add_label "env/production" ;;
+              esac
+              if [ -z "$LABELS" ]; then
+                echo "没有匹配的标签，跳过"
+                exit 0
+              fi
+              curl -fsS -X POST \
+                "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/pulls/${PR_ID}/labels" \
+                -H "Content-Type: application/json" \
+                -d "{\"access_token\":\"${GITEE_TOKEN}\",\"labels\":[${LABELS}]}"
+              echo "已打标签: ${LABELS}"

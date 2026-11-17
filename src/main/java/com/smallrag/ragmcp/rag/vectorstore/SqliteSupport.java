@@ -48,6 +48,9 @@ public final class SqliteSupport {
                 pragma.execute("PRAGMA journal_mode=WAL");
                 pragma.execute("PRAGMA busy_timeout=5000");
                 pragma.execute("PRAGMA foreign_keys=ON");
+                // 内存优化：限制页面缓存约 4MB，禁用 mmap，避免 native 内存随数据规模膨胀
+                pragma.execute("PRAGMA cache_size=-4000");
+                pragma.execute("PRAGMA mmap_size=0");
             }
             return connection;
         } catch (Exception e) {

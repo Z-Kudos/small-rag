@@ -1,0 +1,100 @@
+version: '1.0'
+name: CIPipeline
+displayName: small-rag CI / 镜像分类发布
+
+# Gitee Go 内置：GITEE_BRANCH（PR 时为“目标分支”）、GITEE_SHORT_COMMIT、
+# GITEE_PULL_ID、GITEE_COMMIT_MESSAGE、GITEE_PIPELINE_BUILD_NUMBER。
+# 仓库级环境变量（在项目设置中配置）：REGISTRY、IMAGE、DOCKER_USER、DOCKER_PASS、
+# MAVEN_IMAGE、QDRANT_IMAGE、JRE_IMAGE、LLAMA_CPP_TAG。
+# 说明：Gitee Go 的 build@maven 插件最高只支持 JDK 17，本项目锁定 JDK 25，
+# 因此构建/测试统一在 maven:3.9-eclipse-temurin-25 容器内执行（与 Dockerfile 构建阶段一致）。
+triggers:
+  push:
+    branches:
+      precise: [develop, main]
+      prefix: [release/, hotfix/]
+    tags:
+      include: ['^v[0-9]+\.[0-9]+\.[0-9]+$']
+  pr:
+    branches:
+      precise: [develop, main]
+
+variables:
+  # 在 Gitee「环境变量管理」中覆盖这些值；此处仅为回退默认值。
+  REGISTRY: registry.example.com
+  IMAGE: small-rag
+  MAVEN_IMAGE: docker.io/library/maven:3.9-eclipse-temurin-25
+  QDRANT_IMAGE: docker.io/qdrant/qdrant:latest
+  JRE_IMAGE: docker.io/library/eclipse-temurin:25-jre
+  LLAMA_CPP_TAG: v0.9.0
+
+stages:
+  - stage:
+      name: build-and-publish
+      displayName: 构建 / 测试 / 镜像分类打标签
+      strategy: naturally
+      trigger: auto
+      steps:
+        - step: build@shell
+          name: build
+          displayName: Maven verify + Docker build/push
+          commands:
+            - set -euo pipefail
+            - VERSION=$(grep -m1 -oP '(?<=<version>)[^<]+' pom.xml)
+            - SHORT="${GITEE_SHORT_COMMIT}"
+            - REF_BRANCH="${GITEE_BRANCH}"
+            - IS_PR="no"
+            - |
+              if [ -n "${GITEE_PULL_ID:-}" ]; then IS_PR="yes"; fi
+            - |
+              # 分类打标签：分支/标签 -> 环境 -> 镜像 tag（与 .github/workflows 对齐）
+              if [ "$IS_PR" = "yes" ]; then
+                ENVIRONMENT=dev
+                IMAGE_TAG="pr-${GITEE_PULL_ID}-${SHORT}"
+              elif echo "$REF_BRANCH" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+                ENVIRONMENT=production
+                IMAGE_TAG="${VERSION}"
+                EXTRA_TAG="latest"
+              elif [ "$REF_BRANCH" = "main" ]; then
+                ENVIRONMENT=production
+                IMAGE_TAG="${VERSION}"
+              elif echo "$REF_BRANCH" | grep -q '^release/'; then
+                ENVIRONMENT=staging
+                IMAGE_TAG="${VERSION}-rc.${GITEE_PIPELINE_BUILD_NUMBER}"
+              else
+                ENVIRONMENT=dev
+                IMAGE_TAG="${VERSION}-SNAPSHOT"
+                EXTRA_TAG="dev-${SHORT}"
+              fi
+            - echo "version=${VERSION} environment=${ENVIRONMENT} imageTag=${IMAGE_TAG}"
+            - |
+              # 单测（JDK 25 容器，无外部依赖）
+              docker run --rm -v "$PWD":/workspace -w /workspace \
+                -v "$HOME/.m2":/root/.m2 \
+                "$MAVEN_IMAGE" mvn -B -s /workspace/docker/maven-settings.xml clean verify
+            - |
+              # 镜像构建；tag 由上面的分类结果决定
+              TAGS="-t ${REGISTRY}/${IMAGE}:${IMAGE_TAG}"
+              if [ -n "${EXTRA_TAG:-}" ]; then
+                TAGS="${TAGS} -t ${REGISTRY}/${IMAGE}:${EXTRA_TAG}"
+              fi
+              if [ "$IS_PR" = "yes" ]; then
+                docker build $TAGS \
+                  --build-arg MAVEN_IMAGE="$MAVEN_IMAGE" \
+                  --build-arg QDRANT_IMAGE="$QDRANT_IMAGE" \
+                  --build-arg JRE_IMAGE="$JRE_IMAGE" \
+                  --build-arg LLAMA_CPP_TAG="$LLAMA_CPP_TAG" .
+              else
+                echo "$DOCKER_PASS" | docker login "$REGISTRY" -u "$DOCKER_USER" --password-stdin
+                docker build $TAGS \
+                  --build-arg MAVEN_IMAGE="$MAVEN_IMAGE" \
+                  --build-arg QDRANT_IMAGE="$QDRANT_IMAGE" \
+                  --build-arg JRE_IMAGE="$JRE_IMAGE" \
+                  --build-arg LLAMA_CPP_TAG="$LLAMA_CPP_TAG" .
+                docker push "${REGISTRY}/${IMAGE}:${IMAGE_TAG}"
+                if [ -n "${EXTRA_TAG:-}" ]; then
+                  docker push "${REGISTRY}/${IMAGE}:${EXTRA_TAG}"
+                fi
+              fi
+          caches:
+            - ~/.m2

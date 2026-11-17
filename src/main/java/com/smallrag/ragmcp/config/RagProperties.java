@@ -109,6 +109,11 @@ public class RagProperties {
     private Sources sources = new Sources();
 
     /**
+     * 向量数据有效期（TTL）与到期清理。默认关闭，需显式开启。
+     */
+    private Retention retention = new Retention();
+
+    /**
      * 切分配置。
      */
     @Data
@@ -516,6 +521,46 @@ public class RagProperties {
                     .distinct()
                     .toList();
         }
+    }
+
+    /**
+     * 向量数据有效期配置（rag.retention.*）。
+     *
+     * <p>到期判定使用文档元数据 {@code ingested_at} / 归档 {@code updatedAt}；
+     * 清理会删除向量片段与（可选）原文归档，并保持单实例互斥，避免与重建 / 目录导入并发。
+     */
+    @Data
+    public static class Retention {
+
+        /**
+         * 是否启用定时清理；关闭后只保留 MCP 手动清理入口。
+         */
+        private boolean enabled = false;
+
+        /**
+         * 数据有效期（秒）；过期阈值 = now - ttlSeconds。默认 90 天；{@code <= 0} 表示永不过期。
+         */
+        private long ttlSeconds = 90L * 24 * 60 * 60;
+
+        /**
+         * 定时清理间隔（秒）；{@code <= 0} 时只做启动后的一次清理。
+         */
+        private long scanIntervalSeconds = 24L * 60 * 60;
+
+        /**
+         * 应用就绪后延迟多少秒执行首次清理，避免与启动重切 / 目录导入争抢资源。
+         */
+        private long startupDelaySeconds = 120;
+
+        /**
+         * 单次最多清理多少篇归档文档；{@code <= 0} 不限制。
+         */
+        private int maxDocumentsPerRun = 200;
+
+        /**
+         * 清理向量时是否同时删除原文归档；关闭时只删向量，保留归档便于恢复。
+         */
+        private boolean deleteArchive = true;
     }
 
     /**

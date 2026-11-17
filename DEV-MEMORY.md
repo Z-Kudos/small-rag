@@ -1,10 +1,10 @@
 ---
 title: DEV-MEMORY
 status: done
-version: 0.0.5
-updated: 2026-11-12
+version: 0.0.6
+updated: 2026-11-17
 owners: [zjk]
-related: [AGENTS.md, ROADMAP.md, docs/v0.0.5/plan.md]
+related: [AGENTS.md, ROADMAP.md, docs/v0.0.6/plan.md]
 ---
 
 # DEV-MEMORY — 当前开发状态
@@ -14,19 +14,18 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.5/plan.md]
 
 ## 1. 当前阶段
 
-- 版本：`0.0.5`（已发布，`main` tag `v0.0.5`；`ChunkingSignature = v0.0.5`，升级触发一次全量重切）。
-- 上一版：`v0.0.4`（已发布 2026-11-11，含 WP4 多形态部署：SQLite 可选向量库 + 四形态开关）；`v0.0.3`（已封存，`cloud-rag`）。
-- 主题：**切片图谱与编辑管理**——让 AGENT 通过 MCP 操作和编辑 chunk。
-- 规划：[`docs/v0.0.5/plan.md`](docs/v0.0.5/plan.md)；ADR：[`docs/v0.0.5/adr/0001-agent-editable-knowledge-base.md`](docs/v0.0.5/adr/0001-agent-editable-knowledge-base.md)。
-- 状态：**v0.0.5 已发布**（WP0–WP5 完成；Qdrant Testcontainers E2E 与容器构建/四形态冒烟待恢复）；`main` + tag `v0.0.5`；本机 JVM 冒烟通过（sqlite + ollama Qwen3-Embedding-0.6B）。
-- 文档：`README.md`（简体中文）/ `README.en.md`（English）；设计/ADR 在 `docs/v0.0.5/`（已冻结）；`docs/v0.0.4/`、`docs/v0.0.3/` 冻结。
-- **不切换版本**：下一次版本变更需人工确认。
+- 版本：`0.0.6`（**开发中**，2026-11-17 从 v0.0.5 切换；`ChunkingSignature = v0.0.6`，版本同步触发一次全量重切，切分口径不变）。
+- 上一版：`v0.0.5`（已发布 2026-11-12，`main` tag `v0.0.5`，切片图谱与编辑管理，MCP 19 工具）；`v0.0.4`（多形态部署）；`v0.0.3`（已封存，`cloud-rag`）。
+- 主题：**CI/CD 与分类打标签、向量数据有效期、内存优化**——补齐双平台流水线与镜像分类标签、文档标签过滤检索、TTL 定时/手动清理、容器与运行时内存治理；MCP 19 → 23。
+- 规划：[`docs/v0.0.6/plan.md`](docs/v0.0.6/plan.md)；ADR：[`docs/v0.0.6/adr/0001-ci-tagging-and-retention.md`](docs/v0.0.6/adr/0001-ci-tagging-and-retention.md)。
+- 状态：**v0.0.6 开发中**；`mvn clean package` 通过、206 单测全绿、YAML / shell 语法校验通过；v0.0.5 已发布并冻结（`main` + tag `v0.0.5`）。
+- 文档：`README.md`（简体中文）/ `README.en.md`（English）；设计/ADR 在 `docs/v0.0.6/`（当前开发）；`docs/v0.0.5/`、`docs/v0.0.4/`、`docs/v0.0.3/` 冻结。
 - **tag v0.0.4 改写说明**：旧 tag `v0.0.4` 指向 `e5c165c`（2026-11-10 发布），2026-11-11 删除并重打至包含 WP4 的 release main；旧发布内容仍保留在主线历史中（`git log` 可查），但已 clone 仓库的 tag 指针不会自动更新。
 
 ## 2. 构建与验证
 
-- JDK 25；`mvn clean package` 单模块产出 `target/small-rag-0.0.5.jar`。
-- 单测：`mvn test`，**190** 个测试全绿，不依赖外部服务。
+- JDK 25；`mvn clean package` 单模块产出 `target/small-rag-0.0.6.jar`。
+- 单测：`mvn test`，**206** 个测试全绿，不依赖外部服务。MCP 启动时注册 **23** 个工具（原 19 + 标签 2 + 有效期 2）。
 - 容器 E2E：`mvn verify -Pcontainer-it`，Qdrant Testcontainers **3** 个测试全绿。
 - 本机 Docker Hub 受限时可用 `-Dsmallrag.qdrant.image=docker.1ms.run/qdrant/qdrant:latest` 覆盖镜像。
 
@@ -52,7 +51,26 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.5/plan.md]
 - payload 正文键 `RagService.CONTENT_FIELD="content"`。
 - `Document` id 必须是 UUID，业务 id 放 metadata 的 `doc_id`；空库用 `KnowledgeBaseProbe` 短路。
 - 归档：`DocumentArchive` 按 `doc_id` 存原文；`.archive/index.json` 摘要索引；目录不可写时降级关闭自动重切。
-- 包结构：`mcp/`、`config/`、`rag/`、`rag/archive/`、`rag/chunking/`、`rag/reindex/`、`rag/sources/`。
+- 包结构：`mcp/`、`config/`、`rag/`、`rag/archive/`、`rag/chunking/`、`rag/reindex/`、`rag/sources/`、`rag/metadata/`、`rag/retention/`、`rag/vectorstore/`、`rag/edit/`、`rag/graph/`。
+
+### 4.6 文档分类 / 标签（v0.0.6 增量）
+
+- 元数据字段：`tags`（数组）、`category`（单值）；来源为业务 `tags`、`category` 与 Markdown frontmatter 的 `frontmatter_tags`（逗号字符串），在 `RagService.baseMetadata` 经 `DocumentTags.normalize` 统一为数组。
+- 检索过滤：`rag_search` / `rag_query` 新增 `tags`（命中任一）与 `category` 参数，在 `RagService.searchInternal` 与 `chunk_type=child` 用 `AND` 组合为服务端过滤；SQLite 后端扩展 `SqliteFilters` 支持数组字段的 `IN` 语义。
+- MCP：`rag_set_tags(documentId,tags,category)`、`rag_list_tags()`（新增 `TagMcpTools` + `TagService`），由 `McpServerConfig` 显式注册。
+
+### 4.7 向量数据有效期 TTL（v0.0.6 增量）
+
+- 配置 `rag.retention.*`（env `RAG_RETENTION_*`）：`enabled`（默认 false）、`ttl-seconds`（默认 90 天）、`scan-interval-seconds`、`startup-delay-seconds`、`max-documents-per-run`、`delete-archive`。
+- 判定依据：归档摘要 `updatedAt`（与向量 `ingested_at` 同步刷新）。清理按 `doc_id` 删除向量 + 可选归档 + 目录导入墓碑，通过 `IndexActivityGuard.RETENTION` 与重建 / 目录导入互斥。
+- `RetentionCleanupService` 自带 daemon 定时线程（参照 `SourceSyncService` 模式），MCP `rag_cleanup_expired`（默认 dryRun，真删需 `confirm=true`）+ `rag_retention_status`。
+
+### 4.8 CI/CD 与内存优化（v0.0.6 增量）
+
+- GitHub Actions：`.github/workflows/ci.yml`（版本/环境/镜像标签分类 + 单测 + Testcontainers E2E）、`publish-image.yml`（GHCR 分类打标签）、`release.yml`（tag 校验 + GitHub Release）、`auto-label.yml`（PR 路径 + Conventional Commit / Issue 关键词打标签，配置 `.github/labeler.yml`）。
+- Gitee Go：`.workflow/CIPipeline.yml`、`.workflow/LabelPipeline.yml`（Gitee 路径是 `.workflow/` 而非 `.gitee/workflows/`；JDK 25 通过 `maven:3.9-eclipse-temurin-25` 容器构建，因 Gitee build@maven 最高 JDK 17）。PR/Issue 打标签另见 `scripts/gitee-webhook-labeler.py`。
+- 镜像分类：develop→`*-SNAPSHOT` / `dev-<sha>`，release/*→`*-rc.<build>`，main→`<version>`，tag `vX.Y.Z`→`<version>`+`latest`。
+- 内存优化：容器 `MEM_LIMIT=4g`；JVM 显式 `-Xmx1024m` + metaspace/direct/stack 上限（替代 `MaxRAMPercentage=75`）；llama.cpp ctx 8192→4096 + q8 KV Cache + 2 线程；Qdrant 常驻内存 60% 与各线程数上限；SQLite `cache_size=-4000` / `mmap_size=0`；`ChunkCatalog.findByPointId` 定向查询替代全库扫描；snippet 先截断再归一化。
 
 ### 4.3 重建任务与单机互斥
 
@@ -86,15 +104,15 @@ related: [AGENTS.md, ROADMAP.md, docs/v0.0.5/plan.md]
 - **状态集合隔离**：`<collection>_reindex_state` 不并入主集合，否则污染空库探活、检索与 `rag_rebuild` 清理。
 - **MCP**：`McpSyncServerCustomizer` 已被 WebMVC 自动配置占用，不要自定义；instructions 走 `spring.ai.mcp.server.*`。
 - **Dockerfile** 无 `# syntax=`；`docker/*.sh` 必须 LF；`.env` 只放模板值。
-- **切分签名**：`ChunkingSignature` 版本与项目版本同步（当前 `v0.0.4`）；只改算法不升版本，旧索引不会自动重切。
+- **切分签名**：`ChunkingSignature` 版本与项目版本同步（当前 `v0.0.6`）；只改算法不升版本，旧索引不会自动重切。
 - **Embedding 超时**：`EMBEDDING_CONNECT_TIMEOUT_MS=10000`、`EMBEDDING_READ_TIMEOUT_MS=120000`；`spring.http.client.*` 不生效。
 - **归档摘要索引**：内容陈旧但 id 集合一致时可能保留旧签名。
 - **目录导入**：watcher 受 inotify 限制；label 变化生成新 id；`lastRun` 不持久化。
 
 ## 6. 待办
 
+- v0.0.6（开发中）：CI/CD（Gitee Go `.workflow/` + GitHub Actions 四工作流）、文档标签与过滤、TTL 定时/手动清理、内存优化；206 单测全绿，`mvn clean package` 通过；`ChunkingSignature=v0.0.6` 升级触发一次全量重切（归档兜底）。
 - v0.0.5：已发布（2026-11-12）；WP0–WP5 完成，190 单测 + 本机 JVM 冒烟；Qdrant Testcontainers E2E 3 全绿；容器冒烟（Qdrant+llama 本地 all-in-one 默认形态）**通过**（镜像 `small-rag:0.0.5`，首启 GGUF 下载后 health=200，ingest/search/query/delete 全通）；容器冒烟其余三形态推迟（内存）。
-- v0.0.5 升 `ChunkingSignature=v0.0.5`：所有用户升级触发一次全量重切（归档自动兜底）；README 迁移说明待补。
 - 镜像默认 `EMBEDDING_DIMENSION=1024`（与默认 Qwen3-Embedding-0.6B 输出一致）；之前裸 `podman run` 会错配 1536 → 入库报 `expected dim: 1536, got 1024`，已改。podman 最小镜像格式是 OCI，`HEALTHCHECK` 在 OCI 下被忽略（docker 格式/compose 不受影响）。
 - 需要多副本时使用 `~/Projects/cloud-rag`。
 - **不做镜像体积优化**：`jlink` 定制运行时、删 `/qdrant/static`、排除 QUIC native 等一律不实施。

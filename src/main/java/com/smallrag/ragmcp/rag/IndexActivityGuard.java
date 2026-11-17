@@ -25,6 +25,11 @@ public class IndexActivityGuard {
      */
     public static final String SOURCES = "sources";
 
+    /**
+     * 向量数据有效期清理活动标识。
+     */
+    public static final String RETENTION = "retention";
+
     private final AtomicReference<String> owner = new AtomicReference<>();
 
     /**

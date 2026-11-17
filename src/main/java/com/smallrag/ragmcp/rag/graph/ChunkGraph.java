@@ -270,11 +270,10 @@ public final class ChunkGraph {
         if (text == null) {
             return "";
         }
-        String stripped = text.strip().replaceAll("\\s+", " ");
-        if (stripped.length() <= MAX_LABEL) {
-            return stripped;
-        }
-        return stripped.substring(0, MAX_LABEL) + "…";
+        // 图构建会遍历全库 chunk：先截取前缀再归一化，避免为每个 chunk 复制整段正文
+        String head = text.length() <= MAX_LABEL * 2 ? text : text.substring(0, MAX_LABEL * 2);
+        String cleaned = head.replaceAll("\\s+", " ").strip();
+        return cleaned.length() <= MAX_LABEL ? cleaned : cleaned.substring(0, MAX_LABEL) + "…";
     }
 
     static String stringField(Map<String, Object> metadata, String key) {

@@ -169,9 +169,7 @@ public class ChunkEditService {
         if (pointId == null || pointId.isBlank()) {
             return Optional.empty();
         }
-        return catalog.listChunks(null).stream()
-                .filter(chunk -> pointId.equals(chunk.pointId()))
-                .findFirst();
+        return catalog.findByPointId(pointId);
     }
 
     /**
@@ -298,7 +296,11 @@ public class ChunkEditService {
     }
 
     private static String snippet(String text) {
-        String stripped = text == null ? "" : text.strip().replaceAll("\\s+", " ");
-        return stripped.length() <= 120 ? stripped : stripped.substring(0, 120) + "…";
+        if (text == null) {
+            return "";
+        }
+        String head = text.length() <= 240 ? text : text.substring(0, 240);
+        String cleaned = head.replaceAll("\\s+", " ").strip();
+        return cleaned.length() <= 120 ? cleaned : cleaned.substring(0, 120) + "…";
     }
 }

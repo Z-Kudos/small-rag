@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -80,6 +81,27 @@ public class QdrantChunkCatalog implements ChunkCatalog {
                     + "，原因=" + e.getMessage(), e);
         }
         return result;
+    }
+
+    @Override
+    public Optional<ChunkSummary> findByPointId(String pointId) throws IllegalStateException {
+        if (pointId == null || pointId.isBlank()) {
+            return Optional.empty();
+        }
+        long timeout = Math.max(1L, properties.getRequestTimeoutMs());
+        try {
+            List<RetrievedPoint> points = client.retrieveAsync(
+                    properties.getCollectionName(),
+                    List.of(PointId.newBuilder().setUuid(pointId).build()),
+                    true, false, null).get(timeout, TimeUnit.MILLISECONDS);
+            if (points == null || points.isEmpty()) {
+                return Optional.empty();
+            }
+            return Optional.ofNullable(toSummary(points.get(0)));
+        } catch (Exception e) {
+            throw new IllegalStateException("Qdrant 按 id 读取 chunk 失败: pointId=" + pointId
+                    + "，原因=" + e.getMessage(), e);
+        }
     }
 
     private ChunkSummary toSummary(RetrievedPoint point) {

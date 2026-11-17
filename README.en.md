@@ -4,9 +4,9 @@
 
 A **pure-text RAG retrieval** MCP service built on Spring AI: it only performs vector ingestion and retrieval, never calls a chat/generation model. Document management, `rag_search`, and `rag_query` are exposed over MCP (Streamable HTTP); the vector store is **Qdrant by default, switchable to an embedded SQLite store**. Input is Markdown / Obsidian-compatible Markdown in Chinese or English; `rag_query` returns augmented context and the caller's agent generates the answer.
 
-**v0.0.5 is the single-node lightweight, agent-editable edition**: on top of v0.0.4 (one module, one container, no Redis/Consul/Gateway), agents can browse, edit, and delete knowledge-base chunks over MCP.
+**v0.0.6 is the single-node lightweight, agent-editable, tag-aware edition**: on top of v0.0.5 (agents can browse, edit, and delete chunks), it adds dual-platform CI/CD, document tags with filtered retrieval, vector-data retention (TTL), and memory optimization.
 
-> **Upgrading from v0.0.4**: the chunking signature bumps to `v0.0.5`; on first start archives under the current signature trigger a one-time full reindex (originals archived safely; longer for bigger corpora).
+> **Upgrading from v0.0.5**: the chunking signature bumps to `v0.0.6`; on first start archives under the current signature trigger a one-time full reindex (originals archived safely; longer for bigger corpora).
 
 
 ![Java](https://img.shields.io/badge/Java-25-orange)
@@ -59,15 +59,15 @@ A **pure-text RAG retrieval** MCP service built on Spring AI: it only performs v
 
 ## Documentation
 
-The documents below belong to **v0.0.5**; `docs/v0.0.4` is frozen as of its tag release; `docs/v0.0.3` is preserved for the archived distributed edition.
+The documents below belong to **v0.0.6**; `docs/v0.0.5` and `docs/v0.0.4` are frozen as of their tag releases; `docs/v0.0.3` is preserved for the archived distributed edition.
 
 | Document | Contents |
 | --- | --- |
 | [ROADMAP.md](ROADMAP.md) | Version goals and acceptance criteria |
-| [docs/v0.0.5/plan.md](docs/v0.0.5/plan.md) | v0.0.5 chunk-graph & edit management plan |
-| [docs/v0.0.5/design/architecture.md](docs/v0.0.5/design/architecture.md) | Architecture, packages, key data flows |
-| [docs/v0.0.5/design/limitations.md](docs/v0.0.5/design/limitations.md) | Known limitations and risks |
-| [docs/v0.0.5/adr/0001-agent-editable-knowledge-base.md](docs/v0.0.5/adr/0001-agent-editable-knowledge-base.md) | Agent-editable knowledge base decision |
+| [docs/v0.0.6/plan.md](docs/v0.0.6/plan.md) | v0.0.6 CI/CD, tags, retention and memory plan |
+| [docs/v0.0.6/design/architecture.md](docs/v0.0.6/design/architecture.md) | Architecture, packages, key data flows |
+| [docs/v0.0.6/design/limitations.md](docs/v0.0.6/design/limitations.md) | Known limitations and risks |
+| [docs/v0.0.6/adr/0001-ci-tagging-and-retention.md](docs/v0.0.6/adr/0001-ci-tagging-and-retention.md) | CI/CD tag classification and TTL decision |
 | [DEV-MEMORY.md](DEV-MEMORY.md) | Current development state and pitfalls |
 | [AGENTS.md](AGENTS.md) | Version baseline, build commands, code and documentation rules |
 
@@ -82,7 +82,7 @@ docker run -d --name qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant:latest
 
 # 3. Build and run
 mvn clean package -DskipTests
-java -jar target/small-rag-0.0.5.jar
+java -jar target/small-rag-0.0.6.jar
 ```
 
 MCP endpoint: `http://localhost:18080/mcp`.
@@ -110,8 +110,8 @@ On first start `start-llama.sh` downloads the default model from ModelScope (abo
 Build / run directly:
 
 ```bash
-docker build -t small-rag:0.0.5 .
-docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.5
+docker build -t small-rag:0.0.6 .
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.6
 ```
 
 Use `.env` to override `MAVEN_IMAGE` / `QDRANT_IMAGE` / `JRE_IMAGE` for regional mirrors; `LLAMA_CPP_TAG` defaults to `v0.9.0`. Bind-mounted directories must be writable by container UID `10001`.
@@ -137,10 +137,10 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
   -e EMBEDDING_BASE_URL=https://your-embedding/v1 \
   -e EMBEDDING_API_KEY=sk-... -e EMBEDDING_MODEL=qwen3-embedding-0.6b \
   -e EMBEDDING_DIMENSION=1024 -e SMALL_RAG_ENSURE_EMBEDDING_MODEL=false \
-  small-rag:0.0.5
+  small-rag:0.0.6
 
 # Shape 2: local Qdrant + local llama (default, equivalent to no -e flags)
-docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.5
+docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data small-rag:0.0.6
 
 # Shape 3: SQLite + remote Embedding
 docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
@@ -148,12 +148,12 @@ docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
   -e EMBEDDING_BASE_URL=https://your-embedding/v1 \
   -e EMBEDDING_API_KEY=sk-... -e EMBEDDING_MODEL=qwen3-embedding-0.6b \
   -e EMBEDDING_DIMENSION=1024 -e SMALL_RAG_ENSURE_EMBEDDING_MODEL=false \
-  small-rag:0.0.5
+  small-rag:0.0.6
 
 # Shape 4: SQLite + local llama
 docker run -d --name small-rag -p 18080:18080 -v small_rag_data:/data \
   -e VECTOR_STORE_TYPE=sqlite -e QDRANT_ENABLED=false \
-  small-rag:0.0.5
+  small-rag:0.0.6
 ```
 
 SQLite notes: chunks, reindex task state (the `reindex_state` table), and the dimension marker all live in `SQLITE_PATH` (default `/data/smallrag.sqlite`, WAL mode); **never share this file across multiple container instances**; when changing embedding models, update `EMBEDDING_DIMENSION` to match — a mismatch blocks startup, and switching models requires deleting the file and re-ingesting.
@@ -169,7 +169,7 @@ docker run -d --name small-rag -p 18080:18080 \
   -v /host/wiki:/data/sources/wiki:ro \
   -e SMALL_RAG_SOURCES_ENABLED=true \
   -e SMALL_RAG_SOURCE_DIRS='notes=/data/sources/notes,wiki=/data/sources/wiki' \
-  small-rag:0.0.5
+  small-rag:0.0.6
 ```
 
 Compose users can use the optional `compose.sources.yaml`:
@@ -224,6 +224,18 @@ SMALL_RAG_SOURCE_HOST=/host/knowledge make up-sources
 | `RAG_QUERY_BREAKER_ENABLED` | `true` | Retrieval circuit breaker |
 | `RAG_QUERY_BREAKER_FAILURE_RATE` | `50` | Failure rate (%) that opens the circuit |
 | `RAG_QUERY_BREAKER_OPEN_WAIT` | `30s` | Wait before half-open |
+| `RAG_RETENTION_ENABLED` | `false` | Enable scheduled TTL cleanup of vector data |
+| `RAG_RETENTION_TTL_SECONDS` | `7776000` (90 days) | Data TTL; `<= 0` means never expire |
+| `RAG_RETENTION_SCAN_INTERVAL_SECONDS` | `86400` | Cleanup interval; `0` means one run after startup only |
+| `RAG_RETENTION_STARTUP_DELAY_SECONDS` | `120` | Delay before the first cleanup, avoiding re-chunk/import |
+| `RAG_RETENTION_MAX_DOCUMENTS_PER_RUN` | `200` | Max documents cleaned per run; `0` unbounded |
+| `RAG_RETENTION_DELETE_ARCHIVE` | `true` | Delete the original archive too; `false` deletes vectors only |
+| `MEM_LIMIT` | `4g` | Compose container memory limit; remote-only deployments can use `1536m` |
+| `JAVA_OPTS` | `-Xmx1024m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m -Xss512k -XX:+ExitOnOutOfMemoryError` | JVM memory pool limits |
+| `EMBEDDING_CTX_SIZE` | `4096` | llama.cpp context size; lowering it greatly reduces KV-cache memory |
+| `EMBEDDING_THREADS` | `2` | llama.cpp thread count |
+| `EMBEDDING_CACHE_TYPE_K` / `EMBEDDING_CACHE_TYPE_V` | `q8_0` | KV-cache quantization (half the memory of f16) |
+| `QDRANT_MAX_RESIDENT_MEMORY_PERCENT` | `60` | Qdrant resident-memory cap |
 
 > Chunk sizes use **full-width character equivalents**: CJK counts as 1 and Latin / half-width as 0.25; English hard splits fall back to word boundaries.
 
@@ -250,6 +262,26 @@ SMALL_RAG_SOURCE_HOST=/host/knowledge make up-sources
 | `rag_get_chunk` | Read one chunk's text and metadata (required before editing) |
 | `rag_edit_chunk` | Replace a chunk's text; requires matching expectedText; archive + re-chunk |
 | `rag_delete_chunk` | Delete a chunk's segment; requires confirm=true; if it empties the doc, the whole document is removed |
+| `rag_set_tags` | Set a document's category and comma-separated tags; writes the archive then re-chunks |
+| `rag_list_tags` | List all categories / tags with document counts |
+| `rag_cleanup_expired` | Clean expired vectors; dry-run by default, real deletion needs `dryRun=false` + `confirm=true` |
+| `rag_retention_status` | Query TTL configuration and the last cleanup result |
+
+> `rag_search` / `rag_query` accept optional `tags` (match any) and `category` parameters for server-side filtering.
+
+## Classification, tags and retention
+
+- Tag sources: `tags` (comma-separated) and `category` in `rag_ingest` / `rag_update` metadata, plus Markdown frontmatter `tags` stored as `frontmatter_tags`; all are merged into one array field `tags`.
+- Set tags: `rag_set_tags(documentId, "Architecture,Deployment", "Operations")`. It writes back to the archive and re-chunks with the current signature, so filters take effect immediately.
+- Filter retrieval: `rag_search(query, tags=["Architecture"], category="Operations")` or `rag_query(..., tags=[...])`. Use `rag_list_tags()` to discover available values.
+- Retention: disabled by default. With `RAG_RETENTION_ENABLED=true`, expired documents are determined from archive update time and cleaned on a schedule. Use `rag_cleanup_expired()` for a dry run, then `rag_cleanup_expired(dryRun=false, confirm=true)` to actually delete.
+- Cleanup shares the in-process activity lock with reindex and directory import, so they never write the same data concurrently.
+
+## CI/CD and image tags
+
+- GitHub Actions: `.github/workflows/ci.yml` (classification + unit tests + Testcontainers E2E), `publish-image.yml` (build and push to GHCR), `release.yml` (tag/pom version check + GitHub Release), `auto-label.yml` (PR/Issue auto-labeling; rules in `.github/labeler.yml`).
+- Gitee Go: `.workflow/CIPipeline.yml` and `.workflow/LabelPipeline.yml`; JDK 25 builds run inside `maven:3.9-eclipse-temurin-25`. PR/Issue labeling can also run `scripts/gitee-webhook-labeler.py`.
+- Tag classification: `develop` → `<version>-SNAPSHOT` / `dev-<sha>`; `release/*` → `<version>-rc.<build>`; `main` → `<version>`; tag `vX.Y.Z` → `<version>` + `latest`. Production should pin a version tag, not `latest`.
 
 ## Client access
 

@@ -45,35 +45,44 @@ public class RagMcpTools {
     /**
      * 检索知识库并返回增强上下文（不调用生成模型）。
      *
-     * @param query 自然语言查询
-     * @param topK  返回的参考片段数量，缺省使用服务端默认值
+     * @param query    自然语言查询
+     * @param topK     返回的参考片段数量，缺省使用服务端默认值
+     * @param tags     标签过滤（命中任一）；可用 rag_list_tags 查看可用标签
+     * @param category 分类过滤（单值）
      * @return 带编号、来源与相似度的上下文；知识库为空时返回“未检索到相关内容”
      */
-    @McpTool(name = "rag_query", description = "检索知识库并返回带来源的增强上下文；不调用生成模型，空库返回未检索到相关内容")
+    @McpTool(name = "rag_query", description = "检索知识库并返回带来源的增强上下文；支持 tags/category 过滤；不调用生成模型，空库返回未检索到相关内容")
     public String ragQuery(
             @McpToolParam(description = "自然语言查询", required = true) String query,
-            @McpToolParam(description = "返回的参考片段数量，缺省为 4", required = false) Integer topK) {
-        log.debug("MCP rag_query 调用，query={}, topK={}", query, topK);
-        return ragService.query(query, topK);
+            @McpToolParam(description = "返回的参考片段数量，缺省为 4", required = false) Integer topK,
+            @McpToolParam(description = "标签列表，命中任一即保留；可用 rag_list_tags 查看可用标签", required = false) List<String> tags,
+            @McpToolParam(description = "分类过滤（单值），可用 rag_list_tags 查看", required = false) String category) {
+        log.debug("MCP rag_query 调用，query={}, topK={}, tags={}, category={}", query, topK, tags, category);
+        return ragService.query(query, topK, tags, category);
     }
 
     /**
      * 仅做向量检索，返回命中分块及其相似度，供需要自行控制 prompt 的 Agent 使用。
      *
-     * @param query  自然语言查询
-     * @param topK   返回片段数量，缺省使用服务端默认值
-     * @param expand Parent-Child 策略下是否展开为去重后的父块结果
+     * @param query    自然语言查询
+     * @param topK     返回片段数量，缺省使用服务端默认值
+     * @param expand   Parent-Child 策略下是否展开为去重后的父块结果
+     * @param tags     标签过滤（命中任一）
+     * @param category 分类过滤（单值）
      * @return 包含 query、hitCount、hits 的 JSON
      */
-    @McpTool(name = "rag_search", description = "对知识库做语义检索，返回命中分块（含相似度、来源元数据）；Parent-Child 策略下默认按父块去重返回")
+    @McpTool(name = "rag_search", description = "对知识库做语义检索，返回命中分块（含相似度、来源元数据）；支持 tags/category 过滤；Parent-Child 策略下默认按父块去重返回")
     public String ragSearch(
             @McpToolParam(description = "自然语言查询", required = true) String query,
             @McpToolParam(description = "返回片段数量，缺省为 4", required = false) Integer topK,
             @McpToolParam(description = "Parent-Child 策略下是否展开为去重后的父块，缺省 true；传 false 返回原始子块命中", required = false) Boolean expand,
-            @McpToolParam(description = "true 时附加命中片段的结构（节点/边 JSON）：含文档、章节与命中 chunk；用于 Agent 理解上下文", required = false) Boolean expandGraph) {
-        log.debug("MCP rag_search 调用，query={}, topK={}, expand={}, expandGraph={}", query, topK, expand, expandGraph);
+            @McpToolParam(description = "true 时附加命中片段的结构（节点/边 JSON）：含文档、章节与命中 chunk；用于 Agent 理解上下文", required = false) Boolean expandGraph,
+            @McpToolParam(description = "标签列表，命中任一即保留；可用 rag_list_tags 查看", required = false) List<String> tags,
+            @McpToolParam(description = "分类过滤（单值），可用 rag_list_tags 查看", required = false) String category) {
+        log.debug("MCP rag_search 调用，query={}, topK={}, expand={}, expandGraph={}, tags={}, category={}",
+                query, topK, expand, expandGraph, tags, category);
         try {
-            List<Document> documents = ragService.search(query, topK, !Boolean.FALSE.equals(expand));
+            List<Document> documents = ragService.search(query, topK, !Boolean.FALSE.equals(expand), tags, category);
             List<Map<String, Object>> hits = new ArrayList<>(documents.size());
             for (Document document : documents) {
                 Map<String, Object> hit = new LinkedHashMap<>();
@@ -591,8 +600,10 @@ public class RagMcpTools {
         if (text == null) {
             return "";
         }
-        String stripped = text.strip().replaceAll("\s+", " ");
-        return stripped.length() <= maxChars ? stripped : stripped.substring(0, maxChars) + "…";
+        // 先截断再归一化，避免为长文本创建整段副本；同时修正 \s 被 Java 当作空格转义的问题
+        String head = text.length() <= maxChars * 2 ? text : text.substring(0, maxChars * 2);
+        String cleaned = head.replaceAll("\\s+", " ").strip();
+        return cleaned.length() <= maxChars ? cleaned : cleaned.substring(0, maxChars) + "…";
     }
 
     private String error(String message) {

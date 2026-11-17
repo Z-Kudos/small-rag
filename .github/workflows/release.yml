@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify tag matches pom version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -m1 -oP '(?<=<version>)[^<]+' pom.xml)
+          TAG="${GITHUB_REF#refs/tags/v}"
+          if [[ "$VERSION" != "$TAG" ]]; then
+            echo "::error::tag v${TAG} 与 pom 版本 ${VERSION} 不一致"
+            exit 1
+          fi
+      - name: Generate changelog
+        id: changelog
+        run: |
+          set -euo pipefail
+          PREVIOUS=$(git describe --tags --abbrev=0 "${GITHUB_REF}^" 2>/dev/null || echo "")
+          if [[ -n "$PREVIOUS" ]]; then
+            git log --pretty=format:'- %s (%h)' "${PREVIOUS}..${GITHUB_REF}" > CHANGELOG.md
+          else
+            git log --pretty=format:'- %s (%h)' "${GITHUB_REF}" > CHANGELOG.md
+          fi
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          generate_release_notes: true
+          draft: false
+          prerelease: false

@@ -2,8 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [develop, main, 'release/**', 'hotfix/**']
+    tags: ['v*']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,9 +15,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 提取项目版本与分支分类，供后续 job 与镜像打标签复用。
+  # 分类规则（与 AGENTS.md 的 Git Flow 对齐）：
+  #   develop            -> dev        (+ -SNAPSHOT)
+  #   release/**         -> staging    (+ -rc.<run_number>)
+  #   main / tag vX.Y.Z  -> production (+ vX.Y.Z)
+  metadata:
+    name: Version & classification
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      environment: ${{ steps.meta.outputs.environment }}
+      image_tags: ${{ steps.meta.outputs.image_tags }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        name: Derive version / environment / image tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -m1 -oP '(?<=<version>)[^<]+' pom.xml)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          REF="${GITHUB_REF}"
+          if [[ "$REF" == refs/tags/v* ]]; then
+            ENVIRONMENT=production
+            TAGS="${VERSION},latest"
+          elif [[ "$REF" == refs/heads/main ]]; then
+            ENVIRONMENT=production
+            TAGS="${VERSION}"
+          elif [[ "$REF" == refs/heads/release/* ]]; then
+            ENVIRONMENT=staging
+            TAGS="${VERSION}-rc.${GITHUB_RUN_NUMBER}"
+          else
+            ENVIRONMENT=dev
+            TAGS="${VERSION}-SNAPSHOT"
+          fi
+          echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+          echo "image_tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "### Classification" >> "$GITHUB_STEP_SUMMARY"
+          echo "- version: ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- environment: ${ENVIRONMENT}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- image tags: ${TAGS}" >> "$GITHUB_STEP_SUMMARY"
+
   unit:
     name: Unit tests
     runs-on: ubuntu-latest
+    needs: metadata
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -29,7 +74,7 @@ jobs:
   container-it:
     name: Qdrant container E2E
     runs-on: ubuntu-latest
-    needs: unit
+    needs: [metadata, unit]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4

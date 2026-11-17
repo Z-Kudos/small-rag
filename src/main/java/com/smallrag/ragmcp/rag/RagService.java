@@ -15,6 +15,7 @@ import com.smallrag.ragmcp.rag.chunking.MarkdownChunker;
 import com.smallrag.ragmcp.rag.chunking.SemanticTextChunker;
 import com.smallrag.ragmcp.rag.chunking.TextChunk;
 import com.smallrag.ragmcp.rag.chunking.TextWeights;
+import com.smallrag.ragmcp.rag.metadata.DocumentTags;
 import com.smallrag.ragmcp.rag.vectorstore.IndexNamespaces;
 import com.smallrag.ragmcp.rag.vectorstore.CleanupResult;
 import com.smallrag.ragmcp.rag.vectorstore.DocumentPointsPort;
@@ -94,13 +95,26 @@ public class RagService {
      * @return 带编号、来源与相似度的上下文；空知识库/无命中时返回固定提示
      */
     public String query(String query, Integer topK) {
+        return query(query, topK, null, null);
+    }
+
+    /**
+     * 带分类 / 标签过滤的检索（不调用生成模型）。
+     *
+     * @param query    自然语言查询
+     * @param topK     检索片段数量，null 或非正数时使用默认值
+     * @param tags     标签列表，命中任一标签即保留；null 或空表示不过滤
+     * @param category 分类（单值，大小写不敏感）；null 或空表示不过滤
+     * @return 带编号、来源与相似度的上下文；空知识库/无命中时返回固定提示
+     */
+    public String query(String query, Integer topK, List<String> tags, String category) {
         if (query == null || query.isBlank()) {
             return "查询内容不能为空。";
         }
 
         List<Document> documents;
         try {
-            documents = search(query, topK);
+            documents = search(query, topK, true, tags, category);
         } catch (Exception e) {
             log.warn("知识库检索失败: query={}, 原因={}", query, e.toString());
             return "知识库检索失败，请确认 Qdrant 与 Embedding 模型可用：" + rootMessage(e);
@@ -119,7 +133,28 @@ public class RagService {
      * <p>Parent-Child 策略下默认按父块去重后返回父块级结果。
      */
     public List<Document> search(String query, Integer topK) {
-        return search(query, topK, true);
+        return search(query, topK, true, null, null);
+    }
+
+    /**
+     * 带分类 / 标签过滤的向量检索。
+     *
+     * @param query         自然语言查询
+     * @param topK          返回片段数，null 或非正数时使用默认值
+     * @param expandParents Parent-Child 策略下是否展开为父块
+     * @param tags          标签列表（命中任一）；null 或空表示不过滤
+     * @param category      分类（单值）；null 或空表示不过滤
+     * @return 按相似度降序排列的分块
+     */
+    public List<Document> search(String query, Integer topK, boolean expandParents,
+            List<String> tags, String category) {
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        if (knowledgeBaseProbe.isEmpty()) {
+            return List.of();
+        }
+        return queryBreaker.execute(() -> searchInternal(query, topK, expandParents, tags, category));
     }
 
     /**
@@ -136,24 +171,18 @@ public class RagService {
      * @return 按相似度降序排列的分块
      */
     public List<Document> search(String query, Integer topK, boolean expandParents) {
-        if (query == null || query.isBlank()) {
-            return List.of();
-        }
-        // QdrantVectorStore 会先调用 Embedding 再查库；空库先短路，避免无意义的模型调用
-        if (knowledgeBaseProbe.isEmpty()) {
-            return List.of();
-        }
-
-        // 只保护检索路径：Embedding/Qdrant 连续失败时快速失败，入库与重建不受影响
-        return queryBreaker.execute(() -> searchInternal(query, topK, expandParents));
+        return search(query, topK, expandParents, null, null);
     }
 
-    private List<Document> searchInternal(String query, Integer topK, boolean expandParents) {
+    private List<Document> searchInternal(String query, Integer topK, boolean expandParents,
+            List<String> tags, String category) {
         boolean parentChild = chunkingService.strategy() == ChunkingStrategy.PARENT_CHILD;
         int requestedTopK = resolveTopK(topK);
         boolean expand = parentChild && expandParents;
         boolean mmr = mmrEnabled();
-        int fetchTopK = expand || mmr
+        List<String> effectiveTags = DocumentTags.copyOf(tags);
+        // 过滤条件会缩小候选集，按与 MMR / 父块展开相同的倍数放大召回
+        int fetchTopK = expand || mmr || !effectiveTags.isEmpty() || (category != null && !category.isBlank())
                 ? Math.min(requestedTopK * CANDIDATE_MULTIPLIER, MAX_FETCH_TOPK)
                 : requestedTopK;
 
@@ -163,10 +192,21 @@ public class RagService {
                 .similarityThreshold(properties.getMinScore());
 
         // Parent-Child 只把子块写入向量库；过滤条件防止混入父块与其它类型的记录
+        FilterExpressionBuilder builder = new FilterExpressionBuilder();
+        FilterExpressionBuilder.Op filter = null;
         if (parentChild) {
-            request.filterExpression(new FilterExpressionBuilder()
-                    .eq(ChunkingService.FIELD_CHUNK_TYPE, ChunkingService.CHUNK_TYPE_CHILD)
-                    .build());
+            filter = builder.eq(ChunkingService.FIELD_CHUNK_TYPE, ChunkingService.CHUNK_TYPE_CHILD);
+        }
+        if (category != null && !category.isBlank()) {
+            FilterExpressionBuilder.Op categoryFilter = builder.eq(DocumentTags.FIELD_CATEGORY, category.trim());
+            filter = filter == null ? categoryFilter : builder.and(filter, categoryFilter);
+        }
+        if (!effectiveTags.isEmpty()) {
+            FilterExpressionBuilder.Op tagFilter = builder.in(DocumentTags.FIELD_TAGS, effectiveTags.toArray());
+            filter = filter == null ? tagFilter : builder.and(filter, tagFilter);
+        }
+        if (filter != null) {
+            request.filterExpression(filter.build());
         }
 
         List<Document> documents = vectorStore.similaritySearch(request.build());
@@ -629,6 +669,9 @@ public class RagService {
         result.put("doc_id", documentId);
         result.put("chunk_strategy", ChunkingService.strategyName(chunkingService.strategy()));
         result.put("ingested_at", ingestedAt);
+        // 统一标签 / 分类的表示形态：frontmatter_tags（逗号字符串）与业务 tags 合并为数组，
+        // 便于在 Qdrant 与 SQLite 两端使用同一套 in / eq 过滤表达式。
+        DocumentTags.normalize(result);
         return result;
     }
 
